@@ -1,0 +1,60 @@
+{
+  "title": "AIOps V3 戰情室",
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "JVM 記憶體使用率 (%)",
+      "datasource": "Prometheus",
+      "targets": [{"expr": "system_memory_usage_pct"}],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "spanNulls": true
+          }
+        }
+      },
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 0}
+    },
+    {
+      "type": "timeseries",
+      "title": "Core-DB 查詢延遲 (ms)",
+      "datasource": "Prometheus",
+      "targets": [{"expr": "api_p95_latency_ms"}],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "spanNulls": true
+          }
+        }
+      },
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 0}
+    },
+    {
+      "type": "timeseries",
+      "title": "API 呼叫頻率 (QPS)",
+      "datasource": "Prometheus",
+      "targets": [{"expr": "api_requests_per_sec"}],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "spanNulls": true
+          }
+        }
+      },
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 0}
+    },
+    {
+      "type": "logs",
+      "title": "即時事件日誌 (Loki)",
+      "datasource": "Loki",
+      "targets": [{"expr": "{job=\"aiops-logs\"}"}],
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 8}
+    }
+  ],
+  "schemaVersion": 39,
+  "refresh": "5s",
+  "time": {
+    "from": "now-5m",
+    "to": "now"
+  }
+}

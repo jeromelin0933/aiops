@@ -1,0 +1,22 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  # 記錄讀取進度，避免重啟時重複發送日誌
+  filename: /tmp/positions.yaml
+
+clients:
+  # 將收集到的日誌推送到 Loki 的位址
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: aiops-json-logs
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          # 在 Grafana 查詢時，可以使用 {job="aiops-logs"} 來過濾
+          job: aiops-logs
+          # 指定要抓取的檔案路徑
+          __path__: /var/log/aiops/*.log
