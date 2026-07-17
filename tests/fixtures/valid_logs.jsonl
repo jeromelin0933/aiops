@@ -1,0 +1,4 @@
+{"timestamp":"2026-07-14T10:00:00.123Z","level":"INFO","service_name":"auth-service","status_code":200,"duration_ms":42}
+{"timestamp":"2026-07-14T10:00:01Z","level":"ERROR","service_name":"auth-service","status_code":"401","duration_ms":"18","source_ip":"192.0.2.10","error_type":"AuthenticationFailed"}
+{"timestamp":"2026-07-14T10:00:02+00:00","level":"ERROR","service_name":"notification-service","status_code":429,"duration_ms":75,"target_service":"sms-gateway","rate_limit_quota":"100","error_type":"RateLimitExceeded"}
+{"timestamp":"2026-07-14T10:00:03Z","level":"ERROR","service_name":"payment-service","status_code":503,"duration_ms":3500,"downstream_service":"core-db","external_service":"bank-api","transaction_id":"txn-001","memory_usage_pct":"98.5","error_type":"OutOfMemoryError","trace_id":"trace-001"}
