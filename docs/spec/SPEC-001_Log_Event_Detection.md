@@ -119,6 +119,72 @@ logs/aiops.json.log
 2. 未知異常 Event：`general_log_anomaly`。
 
 任何被 Isolation Forest 判定為異常、但無法被 Rule-based Classifier 歸類為 S1–S6 的 Window，不得被丟棄，必須輸出 `general_log_anomaly`。
+
+### 0.4 Implementation Phases
+
+本 SPEC 採分階段實作，避免一次同時修改偵測模組、測試資料與既有 Generator。
+
+#### Phase 1：基礎資料處理層
+
+本階段只實作：
+
+- `src/event_detection/model/schema.py`
+- `src/event_detection/log/reader.py`
+- `src/event_detection/log/parser.py`
+- `src/event_detection/log/features.py`
+- `src/event_detection/log/encoder.py`
+- 對應單元測試
+- 必要的 `tests/fixtures/` 測試資料
+
+本階段不得實作：
+
+- `trainer.py`
+- `predictor.py`
+- `EventBuilder`
+- `EventStore`
+- `runner.py`
+- `scripts/train_log_model.py`
+- `scripts/validate_log_detection.py`
+
+本階段不得修改：
+
+- `src/log_generator/`
+- `src/metrics_generator/`
+- `docker/`
+- `docker-compose.yml`
+- `README.md`
+- `docs/`
+
+#### Phase 2：Window-level Model Pipeline
+
+本階段實作：
+
+- `WindowFeatureVector`
+- Window Feature Aggregator
+- `trainer.py`
+- `predictor.py`
+- model save / load
+- Window-level anomaly detection 測試
+
+#### Phase 3：Event Classification and Runtime
+
+本階段實作：
+
+- `EventBuilder`
+- `EventStore`
+- `runner.py`
+- `scripts/validate_log_detection.py`
+- `general_log_anomaly` fallback
+- S1–S6 fixture-based 驗收
+
+#### Phase 4：Scenario Generator Validation
+
+本階段才回頭檢查並補強既有 Generator。
+
+目標是讓 `src/log_generator/` 與 `src/metrics_generator/` 產生的資料，也能符合 PRD-002 第 4 章的 S1–S6 驗收條件。
+
+Phase 4 不應影響 Phase 1–3 的模組設計。  
+若 Generator 產出的資料格式與 fixtures 不一致，應優先讓 Generator 對齊 PRD-002 與 SPEC-001，而不是回頭改動已完成的偵測模組。
 ---
 
 ## 1. 檔案結構
