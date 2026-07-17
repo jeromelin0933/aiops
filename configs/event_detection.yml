@@ -1,0 +1,17 @@
+window:
+  window_seconds: 60
+  min_log_count: 5
+
+isolation_forest:
+  contamination: 0.05
+  n_estimators: 200
+  random_state: 42
+  max_samples: auto
+
+anomaly:
+  score_threshold: -0.05
+  confidence_high_threshold: -0.3
+  confidence_medium_threshold: -0.1
+
+output:
+  model_path: models/log_isolation_forest.pkl

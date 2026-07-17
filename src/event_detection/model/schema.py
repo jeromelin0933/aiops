@@ -85,3 +85,51 @@ class EncodedFeatureVector:
             "is_warn", "is_5xx", "is_4xx", "is_401", "is_429",
             "is_oom",
         ]
+
+
+@dataclass
+class WindowFeatureVector:
+    """Fixed-order, 23-dimensional summary of one log event-time window."""
+
+    total_log_count: float = 0.0
+    error_count: float = 0.0
+    warn_count: float = 0.0
+    error_rate: float = 0.0
+    warn_rate: float = 0.0
+    status_4xx_count: float = 0.0
+    status_5xx_count: float = 0.0
+    status_401_count: float = 0.0
+    status_429_count: float = 0.0
+    unique_service_count: float = 0.0
+    unique_trace_id_count: float = 0.0
+    unique_source_ip_count: float = 0.0
+    unique_downstream_count: float = 0.0
+    unique_external_service_count: float = 0.0
+    unique_target_service_count: float = 0.0
+    max_same_source_ip_count: float = 0.0
+    max_same_downstream_count: float = 0.0
+    max_same_target_service_count: float = 0.0
+    max_duration_ms: float = 0.0
+    mean_duration_ms: float = 0.0
+    max_memory_pct: float = 0.0
+    mean_memory_pct: float = 0.0
+    oom_count: float = 0.0
+
+    def to_list(self) -> list:
+        """Return values in the stable training/inference order."""
+        return [getattr(self, name) for name in self.feature_names()]
+
+    @staticmethod
+    def feature_names() -> list:
+        """Return names corresponding exactly to :meth:`to_list`."""
+        return [
+            "total_log_count", "error_count", "warn_count", "error_rate",
+            "warn_rate", "status_4xx_count", "status_5xx_count",
+            "status_401_count", "status_429_count", "unique_service_count",
+            "unique_trace_id_count", "unique_source_ip_count",
+            "unique_downstream_count", "unique_external_service_count",
+            "unique_target_service_count", "max_same_source_ip_count",
+            "max_same_downstream_count", "max_same_target_service_count",
+            "max_duration_ms", "mean_duration_ms", "max_memory_pct",
+            "mean_memory_pct", "oom_count",
+        ]
