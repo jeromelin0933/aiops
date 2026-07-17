@@ -1,0 +1,25 @@
+window:
+  window_seconds: 60
+  min_log_count: 5
+
+log_reader:
+  log_file_path: logs/aiops.json.log
+  poll_interval_seconds: 5
+
+event:
+  cooldown_seconds: 60
+
+isolation_forest:
+  contamination: 0.05
+  n_estimators: 200
+  random_state: 42
+  max_samples: auto
+
+anomaly:
+  score_threshold: -0.05
+  confidence_high_threshold: -0.3
+  confidence_medium_threshold: -0.1
+
+output:
+  model_path: models/log_isolation_forest.pkl
+  event_store_path: events/event_store.jsonl
