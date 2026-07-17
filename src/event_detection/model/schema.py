@@ -1,6 +1,6 @@
 """Data structures shared by the Phase 1 log processing pipeline."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 
@@ -133,3 +133,26 @@ class WindowFeatureVector:
             "max_duration_ms", "mean_duration_ms", "max_memory_pct",
             "mean_memory_pct", "oom_count",
         ]
+
+
+@dataclass
+class WindowSummary:
+    """Window metadata used for event classification, not model inference."""
+
+    window_start: str = ""
+    window_end: str = ""
+    total_log_count: int = 0
+    error_count: int = 0
+    warn_count: int = 0
+    unique_services: list = field(default_factory=list)
+    top_error_types: list = field(default_factory=list)
+    max_duration_ms: float = 0.0
+    mean_duration_ms: float = 0.0
+    max_memory_pct: float = 0.0
+    source_ip_401_counts: dict = field(default_factory=dict)
+    trace_error_services: dict = field(default_factory=dict)
+    trace_downstreams: dict = field(default_factory=dict)
+    downstream_error_services: dict = field(default_factory=dict)
+    target_429_counts: dict = field(default_factory=dict)
+    external_failure_logs: list = field(default_factory=list)
+    raw_log_sample: list = field(default_factory=list)

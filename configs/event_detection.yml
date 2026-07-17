@@ -2,6 +2,13 @@ window:
   window_seconds: 60
   min_log_count: 5
 
+log_reader:
+  log_file_path: logs/aiops.json.log
+  poll_interval_seconds: 5
+
+event:
+  cooldown_seconds: 60
+
 isolation_forest:
   contamination: 0.05
   n_estimators: 200
@@ -15,3 +22,4 @@ anomaly:
 
 output:
   model_path: models/log_isolation_forest.pkl
+  event_store_path: events/event_store.jsonl
