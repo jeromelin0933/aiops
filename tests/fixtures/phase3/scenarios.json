@@ -1,0 +1,8 @@
+{
+  "S1": {"source_ip_401_counts": {"192.0.2.1": 10}},
+  "S2": {"trace_error_services": {"trace-1": ["api", "payment"]}, "trace_downstreams": {"trace-1": "core-db"}},
+  "S3": {"top_error_types": ["OutOfMemoryError"], "max_memory_pct": 99},
+  "S4": {"external_failure_logs": [{"external_service": "bank-api", "status_code": 503}]},
+  "S5": {"downstream_error_services": {"core-db": ["a", "b", "c", "d", "e"]}},
+  "S6": {"target_429_counts": {"sms-gateway": 20}}
+}

@@ -26,3 +26,6 @@ logs/*.txt
 # ==========================
 .DS_Store
 Thumbs.db
+.venv/
+/.venv/
+events/
