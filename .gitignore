@@ -25,4 +25,5 @@ logs/*.txt
 # OS
 # ==========================
 .DS_Store
-Thumbs.db
+Thumbs.db.venv/
+/.venv/
