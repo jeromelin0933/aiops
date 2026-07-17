@@ -335,21 +335,24 @@ Logs ─────────────────┐
 
 ### 7.1 Event Schema（異常偵測輸出）
 
-```json
-{
-  "event_id":        "EVT-1720000001",
-  "created_at":      "2026-07-11T10:00:01Z",
-  "source":          "log_event_detection",
-  "event_type":      "error_rate_spike",
-  "service_name":    "payment-service",
-  "trace_id":        "abc123def456",
-  "downstream_service": "core-db",
-  "source_ip":       null,
-  "status_code":     500,
-  "anomaly_score":   -0.42,
-  "raw_log_sample":  []
-}
-```
+Event Schema 是 Event Detection、Event Runner、Alert Correlation Engine 與 Incident Manager 之間的共用資料契約。
+
+為避免不同文件維護多份 Schema 造成欄位不一致，本專案規定：
+
+> **Event Schema 的唯一正式定義以 `PRD-002：Event Detection` 第 5 章為準。**
+
+PRD-001 僅描述 Event 在整體系統中的角色，不重複定義完整欄位。
+
+所有後續 SPEC 文件，包括：
+
+- SPEC-001 Log Event Detection
+- SPEC-002 Metrics Threshold Detection
+- SPEC-003 Metrics Isolation Forest Detection
+- SPEC-004 Event Runner
+
+皆必須遵守 PRD-002 第 5 章定義的 Event Schema。
+
+任何模組不得自行新增、刪除或重新命名 Event Schema 欄位。若需調整 Schema，必須先更新 PRD-002，並經 PM 確認後，才可修改對應 SPEC 與程式碼。
 
 ### 7.2 Incident Schema（收斂輸出）
 

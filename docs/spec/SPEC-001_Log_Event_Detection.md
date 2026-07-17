@@ -1,5 +1,5 @@
 # SPEC-001：Log Event Detection
-## Software Design Specification v2.0（ML Pipeline 版）
+## Software Design Specification v2.1（Hybrid Pipeline 版）
 
 ---
 
@@ -7,8 +7,8 @@
 
 | 欄位 | 內容 |
 |---|---|
-| Document ID | SPEC-001 v2.0 |
-| Document Name | Log Event Detection — ML Pipeline |
+| Document ID | SPEC-001 v2.1 |
+| Document Name | Log Event Detection — Hybrid Pipeline |
 | Status | Ready for Implementation |
 | Date | 2026-07-14 |
 | Related PRD | PRD-001、PRD-002 |
@@ -22,49 +22,101 @@
 
 ### 0.1 與上一版的本質差異
 
-上一版（v1.0）把六個 Scenario 直接硬編碼為六條 Detection Rule，屬於 Rule-Based System。
+上一版將 Log Event Detection 描述為純 ML Pipeline，容易造成誤解：彷彿 Isolation Forest 需要同時完成「異常偵測」與「事件類型分類」。
 
-**本版（v2.0）改為 Machine Learning Pipeline。**
+本版修正為 **Hybrid Log Event Detection Pipeline**。
 
-六個 Scenario 的角色完全改變：
+本模組採用兩層式設計：
 
-| | v1.0 | v2.0 |
+| 層級 | 職責 | 技術 |
 |---|---|---|
-| S1–S6 | 偵測規則，寫死在程式裡 | 驗證資料集（Validation Dataset） |
-| 偵測方式 | Pattern matching | Isolation Forest 學習正常分佈 |
-| 新異常類型 | 需要改程式新增 Rule | 只需重訓模型 |
-| 統計依據 | 無（人工設定閾值） | 有（模型學習到的正常基準） |
+| 第一層：泛化異常偵測 | 判斷某個 60 秒 Log Window 是否偏離正常行為 | Isolation Forest |
+| 第二層：已知情境分類 | 將異常 Window 對應至 S1–S6 的可解釋 Event Type | Rule-based Classifier |
+
+Isolation Forest 不負責直接判斷「這是 S1 或 S5」。  
+Isolation Forest 只回答：
+
+> 這個時間視窗是否異常？
+
+當某個 Window 被判定為異常後，Rule-based Classifier 再根據該 Window 的統計特徵與原始 Log Metadata 判斷其較符合哪一個已知劇本。
+
+若異常 Window 無法對應至 S1–S6 任一劇本，系統仍須產生 fallback Event：
+
+```text
+general_log_anomaly
+因此，六大劇本是本 Prototype 的 Demo Validation Set，不是系統能力上限。
+
+本模組的設計目標是：
+
+對未知異常具備基本偵測能力。
+對已知 Demo Scenario 提供可解釋的 Event Type。
+避免系統退化成六個 hardcoded if-else rule detector。
+| | v1.0 | v2.1 |
+|---|---|---|
+| S1–S6 | 偵測規則，寫死在程式裡 | 已知情境分類規則 + Demo Validation Set |
+| 異常偵測 | Pattern matching | Isolation Forest 判斷 Window 是否異常 |
+| Event Type 判斷 | Rule-based | Rule-based Classifier |
+| 未知異常 | 無法處理 | 輸出 `general_log_anomaly` |
+| 模型輸入 | 無 | Window-level statistical features |
+| 系統定位 | 六條規則偵測器 | Hybrid AIOps Log Event Detection |
 
 ### 0.2 整體 Pipeline
 
-```
+```text
 logs/aiops.json.log
         │
         ▼
-  [ Log Reader ]        tail 模式，持續讀取新行
+  [ Log Reader ]              tail 模式，持續讀取新行
         │
         ▼
-  [ Log Parser ]        JSON 解析 + Schema 驗證 + Timestamp 標準化
+  [ Log Parser ]              JSON 解析 + Schema 驗證 + Timestamp 標準化
         │
         ▼
-[ Feature Extractor ]   每筆 Log → RawFeatures dataclass
+[ Feature Extractor ]         每筆 Log → RawFeatures dataclass
         │
         ▼
-[ Feature Encoder ]     類別/布林特徵數值化 → EncodedFeatureVector（19 維）
+[ Feature Encoder ]           類別/布林特徵數值化 → EncodedFeatureVector
         │
         ▼
- [ Window Buffer ]      累積視窗內所有 EncodedFeatureVector + 原始 Log
-        │ （每 poll 週期）
-        ▼
-[ Anomaly Predictor ]   Isolation Forest predict() + decision_function()
+ [ Window Buffer ]            累積 60 秒內 Log、特徵向量與原始 Metadata
         │
         ▼
- [ Event Builder ]      組裝 PRD-002 Event Schema
+[ Window Feature Aggregator ]  將 Window 轉換為可供模型判斷的統計特徵
         │
         ▼
-  [ Event Store ]       寫入 events/event_store.jsonl
+[ Anomaly Predictor ]         Isolation Forest 判斷此 Window 是否異常
+        │
+        ▼
+[ Event Classifier ]          Rule-based Classifier 將異常 Window 分類為 S1–S6
+        │                       若無法分類 → general_log_anomaly
+        ▼
+ [ Event Builder ]            組裝 PRD-002 Event Schema
+        │
+        ▼
+  [ Event Store ]             寫入 events/event_store.jsonl
 ```
 
+本 Pipeline 的核心原則是：
+
+- Isolation Forest 負責「是否異常」。
+- Event Classifier 負責「異常屬於哪一類」。
+- 若異常無法分類，仍輸出 `general_log_anomaly`。
+- Event Schema 必須完全遵守 PRD-002 第 5 章。
+
+### 0.3 設計邊界
+
+本模組負責 Log Event Detection，不負責 Metrics Detection、Alert Correlation、Incident Manager、LLM RCA、Dashboard 或 Email。
+
+本模組不修改 Log Generator。若現有 Log Generator 尚未完整產生 S1–S6 所需資料，短期以 `tests/fixtures/` 補足驗收資料，後續再由 DDS-001 Patch 或 Scenario Generator Validation 任務補強 Generator。
+
+本模組的 Event Type 分類以 Demo 可解釋性為目的，不應取代 Isolation Forest 的泛化異常偵測能力。
+
+本模組允許輸出以下兩類 Event：
+
+1. 已知劇本 Event：對應 S1–S6。
+2. 未知異常 Event：`general_log_anomaly`。
+
+任何被 Isolation Forest 判定為異常、但無法被 Rule-based Classifier 歸類為 S1–S6 的 Window，不得被丟棄，必須輸出 `general_log_anomaly`。
 ---
 
 ## 1. 檔案結構
@@ -181,6 +233,7 @@ anomaly:
   # Confidence 分級邊界（詳見 predictor.py）
   confidence_high_threshold: -0.3
   confidence_medium_threshold: -0.1
+  fallback_event_type: "general_log_anomaly"
 
 event:
   cooldown_seconds: 60     # 同 event_type 在 N 秒內不重複觸發
@@ -327,6 +380,109 @@ class EncodedFeatureVector:
             "is_4xx", "is_401", "is_429", "is_oom",
         ]
 
+@dataclass
+class WindowFeatureVector:
+    """
+    60 秒 Window 的統計特徵向量。
+    Isolation Forest 的主要推論單位是 Window，而不是單一 Log。
+
+    此結構由 Window Feature Aggregator 產生，
+    用來代表某段時間內 Log 行為是否偏離正常模式。
+
+    設計目的：
+      - 支援 S1：同 source_ip 大量 401
+      - 支援 S5：多個 service 指向同一 downstream_service
+      - 支援 S6：同 target_service 大量 429
+      - 支援未知異常：整體 ERROR / WARN / duration / service 分布異常
+    """
+
+    total_log_count: float = 0.0
+    error_count: float = 0.0
+    warn_count: float = 0.0
+    error_rate: float = 0.0
+    warn_rate: float = 0.0
+
+    status_4xx_count: float = 0.0
+    status_5xx_count: float = 0.0
+    status_401_count: float = 0.0
+    status_429_count: float = 0.0
+
+    unique_service_count: float = 0.0
+    unique_trace_id_count: float = 0.0
+    unique_source_ip_count: float = 0.0
+    unique_downstream_count: float = 0.0
+    unique_external_service_count: float = 0.0
+    unique_target_service_count: float = 0.0
+
+    max_same_source_ip_count: float = 0.0
+    max_same_downstream_count: float = 0.0
+    max_same_target_service_count: float = 0.0
+
+    max_duration_ms: float = 0.0
+    mean_duration_ms: float = 0.0
+    max_memory_pct: float = 0.0
+    mean_memory_pct: float = 0.0
+
+    oom_count: float = 0.0
+
+    def to_list(self) -> list:
+        """
+        以固定順序回傳 Window-level feature list。
+        訓練與推論必須完全一致。
+        """
+        return [
+            self.total_log_count,
+            self.error_count,
+            self.warn_count,
+            self.error_rate,
+            self.warn_rate,
+            self.status_4xx_count,
+            self.status_5xx_count,
+            self.status_401_count,
+            self.status_429_count,
+            self.unique_service_count,
+            self.unique_trace_id_count,
+            self.unique_source_ip_count,
+            self.unique_downstream_count,
+            self.unique_external_service_count,
+            self.unique_target_service_count,
+            self.max_same_source_ip_count,
+            self.max_same_downstream_count,
+            self.max_same_target_service_count,
+            self.max_duration_ms,
+            self.mean_duration_ms,
+            self.max_memory_pct,
+            self.mean_memory_pct,
+            self.oom_count,
+        ]
+
+    @staticmethod
+    def feature_names() -> list:
+        return [
+            "total_log_count",
+            "error_count",
+            "warn_count",
+            "error_rate",
+            "warn_rate",
+            "status_4xx_count",
+            "status_5xx_count",
+            "status_401_count",
+            "status_429_count",
+            "unique_service_count",
+            "unique_trace_id_count",
+            "unique_source_ip_count",
+            "unique_downstream_count",
+            "unique_external_service_count",
+            "unique_target_service_count",
+            "max_same_source_ip_count",
+            "max_same_downstream_count",
+            "max_same_target_service_count",
+            "max_duration_ms",
+            "mean_duration_ms",
+            "max_memory_pct",
+            "mean_memory_pct",
+            "oom_count",
+        ]
 
 @dataclass
 class WindowSummary:
@@ -851,11 +1007,14 @@ class FeatureEncoder:
 
 ## 8. model/trainer.py — ModelTrainer
 
+> v2.1 設計修正：本版 Isolation Forest 不直接使用單筆 `EncodedFeatureVector` 作為訓練資料，而是使用 60 秒 Window 聚合後的 `WindowFeatureVector`。  
+> 單筆 `EncodedFeatureVector` 仍然保留，供 Window Feature Aggregator 計算統計特徵使用。
+
 ```python
 # src/event_detection/model/trainer.py
 #
 # 職責：
-#   接收一批 EncodedFeatureVector（正常流量期間收集），
+#   接收一批 WindowFeatureVector（正常流量期間收集的 60 秒 Window 統計特徵），
 #   訓練 Isolation Forest，儲存模型到 models/log_isolation_forest.pkl。
 #   此模組只在 scripts/train_log_model.py 中呼叫，不在推論 Pipeline 中執行。
 #
@@ -868,23 +1027,30 @@ import joblib
 from pathlib import Path
 from sklearn.ensemble import IsolationForest
 
-from src.event_detection.model.schema import EncodedFeatureVector
+from src.event_detection.model.schema import WindowFeatureVector
 
 
 class ModelTrainer:
     """
     Isolation Forest 訓練器。
 
+    v2.1 設計重點：
+      - Isolation Forest 的訓練單位是 60 秒 Window，而不是單一 Log。
+      - 每個訓練樣本是一個 WindowFeatureVector。
+      - WindowFeatureVector 由 Window Feature Aggregator 根據多筆 Log 統計而來。
+      - 此設計可支援 S1、S5、S6 等群聚型異常，也可偵測未知異常。
+
     訓練資料要求：
-      - 必須是「純正常流量」的 Log，不能混入 Scenario 異常資料
-      - 至少 100 筆，建議 500–2000 筆（取決於 Log Generator 運行時長）
-      - 訓練腳本（train_log_model.py）需等 Log Generator 正常運行 10 分鐘後才執行
+      - 必須是「純正常流量」的 Log Window，不能混入 Scenario 異常資料
+      - 至少 50 個 Window，建議 100–500 個 Window 以上
+      - 訓練腳本（train_log_model.py）需先將正常 Log 聚合為 WindowFeatureVector
+      - 不得直接以單筆 EncodedFeatureVector 訓練模型
 
     超參數說明：
       contamination:
         Isolation Forest 假設訓練資料中有多少比例是異常。
-        由於訓練資料是純正常流量，設為 0.05（5%）是保守估計。
-        此值影響 decision_function 的 threshold，過高會導致正常資料被誤判。
+        由於訓練資料應以正常 Window 為主，設為 0.05（5%）是保守估計。
+        此值影響 decision_function 的 threshold，過高會導致正常 Window 被誤判。
 
       n_estimators:
         決策樹數量，200 棵在效能與準確度間取得平衡。
@@ -914,7 +1080,7 @@ class ModelTrainer:
         訓練 Isolation Forest 並儲存至 model_path。
 
         Args:
-            vectors: list[EncodedFeatureVector]，純正常流量，至少 100 筆
+            vectors: list[WindowFeatureVector]，純正常流量 Window，至少 50 個 Window
 
         Returns:
             訓練好的 IsolationForest instance
@@ -923,14 +1089,18 @@ class ModelTrainer:
             ValueError: vectors 數量 < 50 時
 
         訓練後會印出：
-          - 樣本數
+          - Window 樣本數
           - 訓練集的 decision_function 分數分佈（mean / min / max）
           - 模型儲存路徑
+
+        注意：
+          本方法不接受單筆 Log 的 EncodedFeatureVector 作為訓練資料。
+          呼叫端必須先完成 Window Aggregation，產生 WindowFeatureVector 後再呼叫 train()。
         """
         if len(vectors) < 50:
             raise ValueError(
-                f"訓練資料不足（{len(vectors)} 筆）。"
-                f"至少需要 50 筆，建議 500 筆以上。"
+                f"訓練 Window 數不足（{len(vectors)} 個）。"
+                f"至少需要 50 個 Window，建議 100 個以上。"
             )
 
         X = np.array([v.to_list() for v in vectors])
@@ -948,8 +1118,8 @@ class ModelTrainer:
         joblib.dump(model, self.model_path)
 
         scores = model.decision_function(X)
-        print(f"[ModelTrainer] 訓練完成 | 樣本數：{len(X)}")
-        print(f"  decision_function 分數分佈：")
+        print(f"[ModelTrainer] 訓練完成 | Window 樣本數：{len(X)}")
+        print("  decision_function 分數分佈：")
         print(f"    mean={scores.mean():.4f}, min={scores.min():.4f}, max={scores.max():.4f}")
         print(f"  模型儲存至：{self.model_path}")
         return model
@@ -959,20 +1129,24 @@ class ModelTrainer:
 
 ## 9. model/predictor.py — AnomalyPredictor
 
+> v2.1 設計修正：本版 Isolation Forest 的推論單位是 `WindowFeatureVector`，不是單筆 `EncodedFeatureVector`。  
+> `AnomalyPredictor` 只判斷「此 Window 是否異常」，不負責判斷該異常屬於 S1–S6 哪一種 Event Type。  
+> Event Type 分類由後續 `EventClassifier` / `EventBuilder` 負責。
+
 ```python
 # src/event_detection/model/predictor.py
 #
 # 職責：
 #   載入已訓練的 Isolation Forest，
-#   對 EncodedFeatureVector 進行推論，
+#   對 WindowFeatureVector 進行推論，
 #   回傳 anomaly_score 與 confidence。
 #
 # 每個 function 的職責：
-#   AnomalyPredictor.__init__()         從 config 讀取 threshold 與路徑
-#   AnomalyPredictor.load()             從 pkl 載入模型
-#   AnomalyPredictor.predict_one()      單筆推論，回傳 PredictionResult
-#   AnomalyPredictor.predict_batch()    批次推論（供驗收腳本）
-#   AnomalyPredictor._score_to_confidence() 分數轉 confidence
+#   AnomalyPredictor.__init__()              從 config 讀取 threshold 與路徑
+#   AnomalyPredictor.load()                  從 pkl 載入模型
+#   AnomalyPredictor.predict_one()           單一 Window 推論，回傳 PredictionResult
+#   AnomalyPredictor.predict_batch()         批次 Window 推論（供驗收腳本）
+#   AnomalyPredictor._score_to_confidence()  分數轉 confidence
 
 import numpy as np
 import joblib
@@ -981,16 +1155,21 @@ from dataclasses import dataclass
 from typing import Optional
 from sklearn.ensemble import IsolationForest
 
-from src.event_detection.model.schema import EncodedFeatureVector
+from src.event_detection.model.schema import WindowFeatureVector
 
 
 @dataclass
 class PredictionResult:
     """
-    單次推論結果。
-    由 AnomalyPredictor.predict_one() 回傳，傳給 EventBuilder。
+    單次 Window-level 推論結果。
+    由 AnomalyPredictor.predict_one() 回傳，傳給 EventClassifier / EventBuilder。
+
+    注意：
+      PredictionResult 只代表「此 Window 是否異常」。
+      它不包含 event_type。
+      event_type 由 Rule-based Classifier 在異常 Window 上進一步判斷。
     """
-    is_anomaly:    bool    # True = Isolation Forest 判定為異常且分數低於 threshold
+    is_anomaly:    bool    # True = Isolation Forest 判定此 Window 異常且分數低於 threshold
     anomaly_score: float   # decision_function() 原始值，越負越異常，正常約 > 0
     confidence:    float   # 0.0–1.0，越高越確信是異常
     label:         int     # -1 = 異常，1 = 正常（predict() 原始回傳值）
@@ -998,19 +1177,27 @@ class PredictionResult:
 
 class AnomalyPredictor:
     """
-    Isolation Forest 推論器。
+    Isolation Forest Window-level 推論器。
+
+    v2.1 設計重點：
+      - 輸入為 WindowFeatureVector。
+      - 每個 WindowFeatureVector 代表 60 秒內 Log 行為的統計特徵。
+      - 本類別只判斷 Window 是否異常。
+      - 本類別不負責將異常分類為 S1–S6。
+      - 若 Window 異常但無法分類，後續 EventBuilder 應輸出 general_log_anomaly。
 
     decision_function() 回傳值說明：
-      > 0.0           離決策邊界遠，偏正常
-      ≈ 0.0           邊界附近，不確定
-      < 0.0           偏異常
-      < -0.1（預設值） 中等異常，confidence = medium
-      < -0.3（預設值） 高確信異常，confidence = high
+      > 0.0              離決策邊界遠，偏正常
+      ≈ 0.0              邊界附近，不確定
+      < 0.0              偏異常
+      < -0.1（預設值）   中等異常，confidence = medium
+      < -0.3（預設值）   高確信異常，confidence = high
 
     is_anomaly 的判定條件（兩者同時成立）：
       1. predict() 回傳 -1
       2. decision_function() 分數 < score_threshold（預設 -0.05）
-      第 2 個條件是額外保護，防止 predict() 邊界誤判。
+
+    第 2 個條件是額外保護，避免模型在邊界附近造成過度誤報。
     """
 
     def __init__(self, config: dict):
@@ -1020,14 +1207,14 @@ class AnomalyPredictor:
         """
         self.model_path       = Path(config["output"]["model_path"])
         anomaly_cfg           = config["anomaly"]
-        self.score_threshold  = anomaly_cfg.get("score_threshold",          -0.05)
-        self.conf_high        = anomaly_cfg.get("confidence_high_threshold", -0.3)
+        self.score_threshold  = anomaly_cfg.get("score_threshold",           -0.05)
+        self.conf_high        = anomaly_cfg.get("confidence_high_threshold",  -0.3)
         self.conf_medium      = anomaly_cfg.get("confidence_medium_threshold",-0.1)
         self._model: Optional[IsolationForest] = None
 
     def load(self) -> None:
         """
-        從 model_path 載入已訓練的模型。
+        從 model_path 載入已訓練的 Window-level Isolation Forest 模型。
 
         Raises:
             FileNotFoundError: pkl 不存在，需先執行 train_log_model.py
@@ -1040,9 +1227,9 @@ class AnomalyPredictor:
         self._model = joblib.load(self.model_path)
         print(f"[AnomalyPredictor] 模型載入：{self.model_path}")
 
-    def predict_one(self, vector: EncodedFeatureVector) -> PredictionResult:
+    def predict_one(self, vector: WindowFeatureVector) -> PredictionResult:
         """
-        對單一 EncodedFeatureVector 進行推論。
+        對單一 WindowFeatureVector 進行推論。
 
         推論步驟：
           1. 呼叫 model.decision_function(X) → 取得 score
@@ -1051,7 +1238,7 @@ class AnomalyPredictor:
           4. _score_to_confidence(score)     → 取得 confidence
 
         Args:
-            vector: FeatureEncoder.encode() 回傳的 EncodedFeatureVector
+            vector: Window Feature Aggregator 回傳的 WindowFeatureVector
 
         Returns:
             PredictionResult
@@ -1078,16 +1265,21 @@ class AnomalyPredictor:
         批次推論（供 validate_log_detection.py 使用）。
 
         Args:
-            vectors: list[EncodedFeatureVector]
+            vectors: list[WindowFeatureVector]
 
         Returns:
             list[PredictionResult]，與輸入順序對應
+
+        注意：
+            若尚未呼叫 load()，應回傳空 list 或由呼叫端先處理。
         """
         if not vectors or self._model is None:
             return []
+
         X      = np.array([v.to_list() for v in vectors])
         scores = self._model.decision_function(X)
         labels = self._model.predict(X)
+
         return [
             PredictionResult(
                 is_anomaly    = (int(l) == -1 and float(s) < self.score_threshold),
@@ -1103,10 +1295,10 @@ class AnomalyPredictor:
         將 decision_function 原始分數轉換為 confidence（0.0–1.0）。
 
         映射規則（分段線性）：
-          score >= 0.0                 → 0.0（明顯正常）
-          conf_medium <= score < 0.0  → 0.0–0.3（低確信）
-          conf_high <= score < conf_medium → 0.3–0.8（中等確信）
-          score < conf_high           → 0.8–1.0（高確信，夾在 -1.0）
+          score >= 0.0                         → 0.0（明顯正常）
+          conf_medium <= score < 0.0           → 0.0–0.3（低確信）
+          conf_high <= score < conf_medium     → 0.3–0.8（中等確信）
+          score < conf_high                    → 0.8–1.0（高確信，夾在 -1.0）
 
         Args:
             score: decision_function() 回傳值
@@ -1116,13 +1308,16 @@ class AnomalyPredictor:
         """
         if score >= 0.0:
             return 0.0
-        if score >= self.conf_medium:              # -0.1 ~ 0.0
+
+        if score >= self.conf_medium:           # -0.1 ~ 0.0
             t = score / self.conf_medium
             return round(0.3 * t, 3)
-        if score >= self.conf_high:                # -0.3 ~ -0.1
+
+        if score >= self.conf_high:             # -0.3 ~ -0.1
             t = (score - self.conf_medium) / (self.conf_high - self.conf_medium)
             return round(0.3 + 0.5 * t, 3)
-        clamped = max(score, -1.0)                 # < -0.3
+
+        clamped = max(score, -1.0)              # < -0.3
         t = (clamped - self.conf_high) / (-1.0 - self.conf_high)
         return round(min(0.8 + 0.2 * t, 1.0), 3)
 ```
@@ -1162,7 +1357,7 @@ SEVERITY_MAP = {
     "brute_force_detected":         "CRITICAL",
     "rate_limit_storm":             "HIGH",
     "cross_service_failure":        "HIGH",
-    "anomaly_detected":             "MEDIUM",
+    "general_log_anomaly":          "MEDIUM",
 }
 
 
@@ -1177,7 +1372,7 @@ class EventBuilder:
       4. brute_force_detected        top_source_ip_count >= 10
       5. rate_limit_storm            raw_log_sample 有 429 + target_service 不為 null
       6. cross_service_failure       cross_service_trace_ids 不為空
-      7. anomaly_detected            以上皆不符合（Fallback）
+      7. general_log_anomaly         以上皆不符合（Fallback）
     """
 
     def build(
@@ -1257,7 +1452,7 @@ class EventBuilder:
         if s.cross_service_trace_ids:
             return "cross_service_failure"
 
-        return "anomaly_detected"
+        return "general_log_anomaly"
 
     def _pick_service(self, s: WindowSummary, event_type: str) -> str:
         if event_type == "downstream_cascade_failure":
@@ -1406,16 +1601,31 @@ class EventStore:
 #
 # 職責：
 #   整合所有模組，執行完整的 Log Event Detection Pipeline。
-#   維護 WindowBuffer（滑動視窗），
-#   每個 poll 週期計算 WindowSummary 並執行 Isolation Forest 推論。
+#
+# v2.1 設計重點：
+#   本版 Runner 不得以單筆 Log 作為 Isolation Forest 的主要推論單位。
+#   Runner 必須先累積 60 秒 Window，再將 Window 轉換為 WindowFeatureVector，
+#   最後才交給 AnomalyPredictor 進行 Window-level anomaly detection。
+#
+# Pipeline：
+#   LogReader
+#     → LogParser
+#     → FeatureExtractor
+#     → FeatureEncoder
+#     → WindowBuffer
+#     → WindowFeatureVector
+#     → AnomalyPredictor
+#     → EventBuilder
+#     → EventStore
 #
 # 每個 class / function 的職責：
-#   WindowBuffer.add()             加入 Log + 清理過期 Log
-#   WindowBuffer.has_enough()      判斷視窗資料是否足夠推論
-#   WindowBuffer.to_list()         回傳當前視窗所有 Log
-#   WindowBuffer.compute_summary() 計算 WindowSummary（供 EventBuilder）
-#   LogEventDetectionRunner.__init__()  初始化所有模組
-#   LogEventDetectionRunner.start()     啟動推論迴圈（blocking）
+#   WindowBuffer.add()                     加入 Log + RawFeatures + EncodedFeatureVector，並清理過期資料
+#   WindowBuffer.has_enough()              判斷視窗資料是否足夠推論
+#   WindowBuffer.to_logs()                 回傳當前視窗所有 Log
+#   WindowBuffer.compute_summary()         計算 WindowSummary（供 EventBuilder）
+#   WindowBuffer.compute_window_features() 計算 WindowFeatureVector（供 Isolation Forest）
+#   LogEventDetectionRunner.__init__()     初始化所有模組
+#   LogEventDetectionRunner.start()        啟動推論迴圈（blocking）
 
 import time
 import yaml
@@ -1424,18 +1634,23 @@ from collections import deque, Counter
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-from src.event_detection.log.reader    import LogReader
-from src.event_detection.log.parser    import LogParser
-from src.event_detection.log.features  import FeatureExtractor
-from src.event_detection.log.encoder   import FeatureEncoder
+from src.event_detection.log.reader import LogReader
+from src.event_detection.log.parser import LogParser
+from src.event_detection.log.features import FeatureExtractor
+from src.event_detection.log.encoder import FeatureEncoder
 from src.event_detection.model.predictor import AnomalyPredictor
-from src.event_detection.model.schema  import WindowSummary
+from src.event_detection.model.schema import (
+    RawFeatures,
+    EncodedFeatureVector,
+    WindowFeatureVector,
+    WindowSummary,
+)
 from src.event_detection.event.builder import EventBuilder
 from src.event_detection.store.event_store import EventStore
 
 logging.basicConfig(
-    level  = logging.INFO,
-    format = "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("Runner")
 
@@ -1449,33 +1664,208 @@ class WindowBuffer:
     """
     滑動視窗緩衝區。
 
-    儲存過去 window_seconds 秒的已解析 Log dict。
-    同時提供 compute_summary() 計算視窗的彙總統計。
+    儲存過去 window_seconds 秒內的：
+      - parsed log entry
+      - RawFeatures
+      - EncodedFeatureVector
+
+    v2.1 設計重點：
+      - EncodedFeatureVector 不直接送進 Isolation Forest。
+      - WindowBuffer 會將目前 Window 內的資料聚合成 WindowFeatureVector。
+      - Isolation Forest 的主要推論單位是 WindowFeatureVector。
     """
 
     def __init__(self, window_seconds: int = 60, min_log_count: int = 5):
         self.window_seconds = window_seconds
-        self.min_log_count  = min_log_count
-        self._buf: deque    = deque()
+        self.min_log_count = min_log_count
+        self._buf: deque = deque()
 
-    def add(self, log_entry: dict) -> None:
-        """加入一筆 Log 並清除超過視窗的舊資料。"""
-        self._buf.append(log_entry)
+    def add(
+        self,
+        log_entry: dict,
+        raw_features: RawFeatures,
+        encoded_vector: EncodedFeatureVector,
+    ) -> None:
+        """
+        加入一筆 Log 及其特徵，並清除超過視窗的舊資料。
+
+        Args:
+            log_entry: LogParser.parse() 回傳的 dict
+            raw_features: FeatureExtractor.extract_one() 回傳的 RawFeatures
+            encoded_vector: FeatureEncoder.encode() 回傳的 EncodedFeatureVector
+        """
+        self._buf.append(
+            {
+                "log": log_entry,
+                "raw_features": raw_features,
+                "encoded_vector": encoded_vector,
+            }
+        )
+
         cutoff = datetime.now(timezone.utc) - timedelta(seconds=self.window_seconds)
-        while self._buf and self._buf[0].get("_parsed_timestamp", cutoff) < cutoff:
+
+        while self._buf:
+            ts = self._buf[0]["log"].get("_parsed_timestamp", cutoff)
+            if ts >= cutoff:
+                break
             self._buf.popleft()
 
     def has_enough(self) -> bool:
-        """視窗內 Log 數量 >= min_log_count 才回傳 True。"""
+        """
+        視窗內 Log 數量 >= min_log_count 才回傳 True。
+        """
         return len(self._buf) >= self.min_log_count
 
-    def to_list(self) -> list:
-        return list(self._buf)
+    def to_logs(self) -> list:
+        """
+        回傳目前 Window 內所有 parsed log entry。
+        """
+        return [item["log"] for item in self._buf]
+
+    def to_raw_features(self) -> list:
+        """
+        回傳目前 Window 內所有 RawFeatures。
+        """
+        return [item["raw_features"] for item in self._buf]
+
+    def to_encoded_vectors(self) -> list:
+        """
+        回傳目前 Window 內所有 EncodedFeatureVector。
+
+        注意：
+          此 list 不直接作為 Isolation Forest 的推論輸入。
+          它主要供 Window Feature Aggregator 計算統計特徵使用。
+        """
+        return [item["encoded_vector"] for item in self._buf]
+
+    def compute_window_features(self) -> WindowFeatureVector:
+        """
+        將目前 Window 聚合為 WindowFeatureVector。
+
+        此結果是 Isolation Forest 的主要推論輸入。
+
+        聚合項目包含：
+          - total_log_count
+          - error_count / warn_count / error_rate / warn_rate
+          - 4xx / 5xx / 401 / 429 數量
+          - unique service / trace / source_ip / downstream / external / target 數量
+          - 同 source_ip / downstream / target_service 的最大集中度
+          - duration 與 memory 的 max / mean
+          - oom_count
+
+        設計目的：
+          - 支援 S1：同 source_ip 大量 401
+          - 支援 S5：多個 service 指向同一 downstream_service
+          - 支援 S6：同 target_service 大量 429
+          - 支援未知異常：整體 ERROR / WARN / duration / service 分布異常
+        """
+        logs = self.to_logs()
+        if not logs:
+            return WindowFeatureVector()
+
+        total = len(logs)
+
+        error_logs = [l for l in logs if l.get("level") == "ERROR"]
+        warn_logs = [l for l in logs if l.get("level") == "WARN"]
+
+        status_codes = [
+            int(l.get("status_code"))
+            for l in logs
+            if l.get("status_code") is not None
+        ]
+
+        durations = [
+            float(l.get("duration_ms", 0.0))
+            for l in logs
+            if l.get("duration_ms") is not None
+        ]
+
+        memory_vals = [
+            float(l.get("memory_usage_pct", 0.0))
+            for l in logs
+            if l.get("memory_usage_pct") is not None
+        ]
+
+        services = [l.get("service_name") for l in logs if l.get("service_name")]
+        trace_ids = [l.get("trace_id") for l in logs if l.get("trace_id")]
+        source_ips = [l.get("source_ip") for l in logs if l.get("source_ip")]
+        downstreams = [
+            l.get("downstream_service")
+            for l in logs
+            if l.get("downstream_service")
+        ]
+        external_services = [
+            l.get("external_service")
+            for l in logs
+            if l.get("external_service")
+        ]
+        target_services = [
+            l.get("target_service")
+            for l in logs
+            if l.get("target_service")
+        ]
+
+        source_ip_ctr = Counter(source_ips)
+        downstream_ctr = Counter(downstreams)
+        target_service_ctr = Counter(target_services)
+
+        error_types = [
+            str(l.get("error_type"))
+            for l in logs
+            if l.get("error_type")
+        ]
+
+        oom_count = sum(
+            1
+            for error_type in error_types
+            if "OutOfMemory" in error_type or "OOM" in error_type
+        )
+
+        return WindowFeatureVector(
+            total_log_count=float(total),
+            error_count=float(len(error_logs)),
+            warn_count=float(len(warn_logs)),
+            error_rate=float(len(error_logs) / total) if total else 0.0,
+            warn_rate=float(len(warn_logs) / total) if total else 0.0,
+
+            status_4xx_count=float(sum(1 for s in status_codes if 400 <= s < 500)),
+            status_5xx_count=float(sum(1 for s in status_codes if 500 <= s < 600)),
+            status_401_count=float(sum(1 for s in status_codes if s == 401)),
+            status_429_count=float(sum(1 for s in status_codes if s == 429)),
+
+            unique_service_count=float(len(set(services))),
+            unique_trace_id_count=float(len(set(trace_ids))),
+            unique_source_ip_count=float(len(set(source_ips))),
+            unique_downstream_count=float(len(set(downstreams))),
+            unique_external_service_count=float(len(set(external_services))),
+            unique_target_service_count=float(len(set(target_services))),
+
+            max_same_source_ip_count=float(
+                source_ip_ctr.most_common(1)[0][1] if source_ip_ctr else 0
+            ),
+            max_same_downstream_count=float(
+                downstream_ctr.most_common(1)[0][1] if downstream_ctr else 0
+            ),
+            max_same_target_service_count=float(
+                target_service_ctr.most_common(1)[0][1] if target_service_ctr else 0
+            ),
+
+            max_duration_ms=float(max(durations)) if durations else 0.0,
+            mean_duration_ms=float(sum(durations) / len(durations)) if durations else 0.0,
+            max_memory_pct=float(max(memory_vals)) if memory_vals else 0.0,
+            mean_memory_pct=float(sum(memory_vals) / len(memory_vals)) if memory_vals else 0.0,
+
+            oom_count=float(oom_count),
+        )
 
     def compute_summary(self) -> WindowSummary:
         """
         計算當前視窗的彙總統計。
         此結果傳給 EventBuilder 組裝 triggered_features 與 raw_log_sample。
+
+        注意：
+          WindowSummary 主要供 EventBuilder / EventClassifier 使用。
+          WindowFeatureVector 才是 Isolation Forest 的推論輸入。
 
         計算項目：
           - error_count / warn_count
@@ -1490,27 +1880,49 @@ class WindowBuffer:
               同一 trace_id 跨越 >= 2 個 service_name 的 trace_id 清單
           - raw_log_sample：前 3 筆 ERROR Log（無 ERROR 則取前 3 筆任意 Log）
         """
-        logs = self.to_list()
+        logs = self.to_logs()
         if not logs:
             return WindowSummary()
 
-        error_logs  = [l for l in logs if l.get("level") == "ERROR"]
-        warn_logs   = [l for l in logs if l.get("level") == "WARN"]
-        durations   = [l.get("duration_ms", 0) for l in logs]
-        error_types = [l["error_type"] for l in logs if l.get("error_type")]
-        memory_vals = [l["memory_usage_pct"] for l in logs if l.get("memory_usage_pct")]
+        error_logs = [l for l in logs if l.get("level") == "ERROR"]
+        warn_logs = [l for l in logs if l.get("level") == "WARN"]
+
+        durations = [
+            float(l.get("duration_ms", 0.0))
+            for l in logs
+            if l.get("duration_ms") is not None
+        ]
+
+        error_types = [
+            l["error_type"]
+            for l in logs
+            if l.get("error_type")
+        ]
+
+        memory_vals = [
+            float(l.get("memory_usage_pct", 0.0))
+            for l in logs
+            if l.get("memory_usage_pct") is not None
+        ]
 
         ip_ctr = Counter(l["source_ip"] for l in logs if l.get("source_ip"))
         top_ip, top_ip_cnt = ip_ctr.most_common(1)[0] if ip_ctr else (None, 0)
 
         ds_errs = [l for l in error_logs if l.get("downstream_service")]
-        ds_ctr  = Counter(l["downstream_service"] for l in ds_errs)
+        ds_ctr = Counter(l["downstream_service"] for l in ds_errs)
         top_ds, top_ds_cnt = ds_ctr.most_common(1)[0] if ds_ctr else (None, 0)
 
-        affected_for_ds = list(set(
-            l["service_name"] for l in ds_errs
-            if l.get("downstream_service") == top_ds
-        )) if top_ds else []
+        affected_for_ds = (
+            list(
+                set(
+                    l["service_name"]
+                    for l in ds_errs
+                    if l.get("downstream_service") == top_ds
+                )
+            )
+            if top_ds
+            else []
+        )
 
         trace_svc: dict = {}
         for l in logs:
@@ -1518,31 +1930,39 @@ class WindowBuffer:
             svc = l.get("service_name")
             if tid and svc:
                 trace_svc.setdefault(tid, set()).add(svc)
-        cross_tids = [tid for tid, svcs in trace_svc.items() if len(svcs) >= 2]
+
+        cross_tids = [
+            tid
+            for tid, svcs in trace_svc.items()
+            if len(svcs) >= 2
+        ]
 
         sample = error_logs[:3] if error_logs else logs[:3]
 
         ts_now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
         return WindowSummary(
-            window_start                    = logs[0].get("timestamp", ""),
-            window_end                      = ts_now,
-            total_log_count                 = len(logs),
-            error_count                     = len(error_logs),
-            warn_count                      = len(warn_logs),
-            unique_services                 = list(set(l.get("service_name","") for l in logs)),
-            unique_trace_ids                = list(set(l.get("trace_id","") for l in logs if l.get("trace_id"))),
-            top_error_types                 = [t for t,_ in Counter(error_types).most_common(5)],
-            max_duration_ms                 = float(max(durations)) if durations else 0.0,
-            mean_duration_ms                = float(sum(durations)/len(durations)) if durations else 0.0,
-            max_memory_pct                  = float(max(memory_vals)) if memory_vals else 0.0,
-            top_source_ip                   = top_ip,
-            top_source_ip_count             = top_ip_cnt,
-            top_downstream                  = top_ds,
-            top_downstream_count            = top_ds_cnt,
-            affected_services_for_downstream= affected_for_ds,
-            cross_service_trace_ids         = cross_tids,
-            raw_log_sample                  = [{k:v for k,v in s.items() if not k.startswith("_")} for s in sample],
+            window_start=logs[0].get("timestamp", ""),
+            window_end=ts_now,
+            total_log_count=len(logs),
+            error_count=len(error_logs),
+            warn_count=len(warn_logs),
+            unique_services=list(set(l.get("service_name", "") for l in logs)),
+            unique_trace_ids=list(set(l.get("trace_id", "") for l in logs if l.get("trace_id"))),
+            top_error_types=[t for t, _ in Counter(error_types).most_common(5)],
+            max_duration_ms=float(max(durations)) if durations else 0.0,
+            mean_duration_ms=float(sum(durations) / len(durations)) if durations else 0.0,
+            max_memory_pct=float(max(memory_vals)) if memory_vals else 0.0,
+            top_source_ip=top_ip,
+            top_source_ip_count=top_ip_cnt,
+            top_downstream=top_ds,
+            top_downstream_count=top_ds_cnt,
+            affected_services_for_downstream=affected_for_ds,
+            cross_service_trace_ids=cross_tids,
+            raw_log_sample=[
+                {k: v for k, v in s.items() if not k.startswith("_")}
+                for s in sample
+            ],
         )
 
 
@@ -1550,25 +1970,39 @@ class LogEventDetectionRunner:
     """
     Log Event Detection 主執行器。
 
+    v2.1 設計重點：
+      - Runner 不直接對單筆 EncodedFeatureVector 執行 Isolation Forest 推論。
+      - Runner 必須先透過 WindowBuffer 累積資料。
+      - WindowBuffer 產生 WindowFeatureVector 後，才交給 AnomalyPredictor。
+      - AnomalyPredictor 只判斷 Window 是否異常。
+      - EventBuilder / EventClassifier 負責將異常 Window 分類為 S1–S6 或 general_log_anomaly。
+
     冷卻期機制：
       _last_fired[event_type] 記錄上次觸發時間。
       同 event_type 在 cooldown_seconds 內不重複建立 Event。
     """
 
     def __init__(self, config_path: str = "configs/event_detection.yml"):
-        cfg            = load_config(config_path)
-        self.config    = cfg
-        self.reader    = LogReader(cfg["log_reader"]["log_file_path"],
-                                    cfg["log_reader"]["poll_interval_seconds"])
-        self.parser    = LogParser()
+        cfg = load_config(config_path)
+        self.config = cfg
+
+        self.reader = LogReader(
+            cfg["log_reader"]["log_file_path"],
+            cfg["log_reader"]["poll_interval_seconds"],
+        )
+        self.parser = LogParser()
         self.extractor = FeatureExtractor()
-        self.encoder   = FeatureEncoder(cfg["feature_extraction"])
+        self.encoder = FeatureEncoder(cfg["feature_extraction"])
         self.predictor = AnomalyPredictor(cfg)
-        self.window    = WindowBuffer(cfg["window"]["window_seconds"],
-                                       cfg["window"]["min_log_count"])
-        self.builder   = EventBuilder()
-        self.store     = EventStore(cfg["output"]["event_store_path"])
-        self.cooldown  = cfg["event"]["cooldown_seconds"]
+
+        self.window = WindowBuffer(
+            cfg["window"]["window_seconds"],
+            cfg["window"]["min_log_count"],
+        )
+
+        self.builder = EventBuilder()
+        self.store = EventStore(cfg["output"]["event_store_path"])
+        self.cooldown = cfg["event"]["cooldown_seconds"]
         self._last_fired: dict = {}
 
     def start(self) -> None:
@@ -1577,15 +2011,22 @@ class LogEventDetectionRunner:
 
         每收到一行新 Log：
           1. parse → 解析失敗則跳過
-          2. extract + encode → 取得 EncodedFeatureVector
+          2. extract + encode → 取得 RawFeatures 與 EncodedFeatureVector
           3. 加入 WindowBuffer
           4. 視窗不足 min_log_count → 跳過推論
-          5. predictor.predict_one() → 取得 PredictionResult
-          6. is_anomaly=False → 跳過
-          7. compute_summary() → 取得 WindowSummary
-          8. builder.build() → 取得 Event dict
-          9. 冷卻期檢查 → 在冷卻期內則跳過
-          10. store.write() → 寫入 event_store.jsonl
+          5. compute_window_features() → 取得 WindowFeatureVector
+          6. predictor.predict_one(window_vector) → 取得 PredictionResult
+          7. is_anomaly=False → 跳過
+          8. compute_summary() → 取得 WindowSummary
+          9. builder.build() → 取得 Event dict
+             - 若符合 S1–S6 → 輸出具名 Event Type
+             - 若無法分類 → 輸出 general_log_anomaly
+          10. 冷卻期檢查 → 在冷卻期內則跳過
+          11. store.write() → 寫入 event_store.jsonl
+
+        重要限制：
+          Runner 不得將單筆 EncodedFeatureVector 直接交給 AnomalyPredictor。
+          Isolation Forest 的主要推論單位必須是 WindowFeatureVector。
         """
         logger.info("Log Event Detection 啟動")
         self.predictor.load()
@@ -1595,35 +2036,50 @@ class LogEventDetectionRunner:
             if entry is None:
                 continue
 
-            raw  = self.extractor.extract_one(entry)
-            enc  = self.encoder.encode(raw)
-            self.window.add(entry)
+            raw = self.extractor.extract_one(entry)
+            enc = self.encoder.encode(raw)
+
+            self.window.add(
+                log_entry=entry,
+                raw_features=raw,
+                encoded_vector=enc,
+            )
 
             if not self.window.has_enough():
                 continue
 
-            result = self.predictor.predict_one(enc)
+            window_vector = self.window.compute_window_features()
+            result = self.predictor.predict_one(window_vector)
+
             if not result.is_anomaly:
                 continue
 
             summary = self.window.compute_summary()
-            event   = self.builder.build(result, summary)
+            event = self.builder.build(result, summary)
+
             if event is None:
                 continue
 
-            et  = event["event_type"]
+            event_type = event["event_type"]
             now = datetime.now(timezone.utc)
-            if et in self._last_fired:
-                elapsed = (now - self._last_fired[et]).total_seconds()
+
+            if event_type in self._last_fired:
+                elapsed = (now - self._last_fired[event_type]).total_seconds()
                 if elapsed < self.cooldown:
                     continue
 
             self.store.write(event)
-            self._last_fired[et] = now
+            self._last_fired[event_type] = now
+
             logger.warning(
-                f"✅ EVENT | {et} | severity={event['severity']} "
+                f"✅ EVENT | {event_type} | severity={event['severity']} "
                 f"| confidence={event['confidence']} | id={event['event_id']}"
             )
+
+
+if __name__ == "__main__":
+    runner = LogEventDetectionRunner()
+    runner.start()
 ```
 
 ---
@@ -1706,6 +2162,22 @@ if __name__ == "__main__":
 | S4 外部 API 斷線 | has_external_service=1.0，is_5xx=1.0 | `external_dependency_failure` |
 | S5 DB 瞬斷 | has_downstream_service=1.0，多服務同 downstream | `downstream_cascade_failure` |
 | S6 Rate Limit | is_429=1.0，has_target_service=1.0 | `rate_limit_storm` |
+
+### Window-level Detection 驗收
+
+本模組必須證明 Isolation Forest 的主要推論單位為 60 秒 Window，而非單筆 Log。
+
+驗收項目：
+
+| 項目 | 預期 |
+|---|---|
+| 正常 Log Window | 不產生 Event |
+| 大量 401 Window | 產生 `brute_force_detected` |
+| 多服務共同 downstream failure Window | 產生 `downstream_cascade_failure` |
+| 大量 429 Window | 產生 `rate_limit_storm` |
+| 無法分類但明顯異常 Window | 產生 `general_log_anomaly` |
+
+若現有 Log Generator 無法完整產生上述資料，允許使用 `tests/fixtures/` 中的人工測試資料進行驗收。
 
 ### 14.2 驗收腳本
 

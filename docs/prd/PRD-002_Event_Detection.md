@@ -199,10 +199,35 @@ Metrics Detection：
 | Event Type | `request_spike_detected` |
 | Detection Method | Isolation Forest |
 
+### 4.7 未知 Log 異常 fallback
+
+六大劇本是本 Prototype 的 Demo Validation Set，並非系統能力上限。
+
+Log Event Detection 不應只依賴 S1–S6 的固定規則進行偵測，而應具備泛化異常偵測能力。
+
+當 Log Event Detection 判定某個時間視窗明顯偏離正常行為，但該異常視窗無法被分類為 S1–S6 任一已知劇本時，系統仍須建立 Event。
+
+| 項目 | 規格 |
+|---|---|
+| 觸發條件 | Log Detection 判定某一時間視窗為異常，但無法對應至 S1–S6 |
+| Event Type | `general_log_anomaly` |
+| Severity | MEDIUM 或 HIGH，由異常分數與特徵決定 |
+| Detection Method | `isolation_forest` |
+| 預期行為 | 不丟棄未知異常，仍建立 Event 供下游 Alert Correlation 與 LLM RCA 使用 |
+
+此設計確保本系統不是只能辨識六大固定劇本，而是能先偵測未知異常，再對已知劇本提供更具可解釋性的分類。
 ---
 
 ## 5. Event Schema（各模組共用契約）
+### 5.0 Schema Ownership
 
+本章為本專案 Event Schema 的唯一正式定義。
+
+所有 Event Detection 相關模組，包括 Log Event Detection、Metrics Threshold Detection、Metrics Isolation Forest Detection 與 Event Runner，皆必須輸出或處理符合本章定義的 Event 物件。
+
+PRD-001 僅引用本章，不另行維護 Event Schema。
+
+任何 SPEC、程式碼或測試案例不得自行新增、刪除或重新命名本章定義的欄位。若未來需要調整 Event Schema，必須先更新本章，並同步修正所有受影響的 SPEC 文件。
 > ⚠️ 此 Schema 為所有模組的共用契約。一旦確定，任何修改都必須先與 PM 討論並更新本文件後，才能異動程式碼。
 
 ```json
@@ -235,7 +260,7 @@ Metrics Detection：
 |---|---|---|
 | `event_id` | string | `EVT-{timestamp}-{random4}` 格式 |
 | `detected_at` | string | ISO8601 UTC，偵測到異常的時間 |
-| `event_source` | string | `log_event_detection` 或 `metrics_event_detection` |
+| `event_source` | string | Event 來源模組。允許值：`log_event_detection`、`metrics_threshold_detection`、`metrics_iforest_detection` |
 | `event_type` | string | 對應第 4 章各劇本的 Event Type |
 | `detection_method` | string | `rule_based`、`threshold`、`isolation_forest` |
 | `severity` | string | `CRITICAL`、`HIGH`、`MEDIUM`、`LOW` |
@@ -286,65 +311,204 @@ Metrics Detection：
 
 ### 8.1 Branch 與負責範圍
 
-| 子模組 | Git Branch | 可修改目錄 |
-|---|---|---|
-| Log Event Detection | `feature/event-detection` | `src/event_detection/log/`、`configs/`、`tests/` |
-| Metrics Threshold Detection | `feature/event-detection` | `src/event_detection/metrics/threshold/`、`configs/`、`tests/` |
-| Metrics Isolation Forest | `feature/event-detection` | `src/event_detection/metrics/isolation_forest/`、`configs/`、`tests/` |
-| Event Store 寫入 | `feature/event-detection` | `src/event_detection/store/`、`events/` |
+Event Detection 階段拆分為多個可獨立開發的 Feature Branch。  
+本階段不再使用單一 `feature/event-detection` branch。
 
-> 本階段統一使用現有的 `feature/event-detection` branch，不另開新 branch，避免整合複雜度。
+各子模組皆使用 PM 已建立好的 Feature Branch 進行開發，完成後由 PM 統一 review、測試與整合回 `develop`。
 
-### 8.2 允許 / 不允許修改的範圍
+| 子模組 | Git Branch | 負責人 | 主要修改範圍 |
+|---|---|---|---|
+| Log Event Detection | `feature/log-event-detection` | 林子豪 | `src/event_detection/log/`、`src/event_detection/model/`、`src/event_detection/event/`、`src/event_detection/store/`、`configs/event_detection.yml`、`tests/` |
+| Metrics Threshold Detection | `feature/metrics-threshold` | 富裕 | `src/event_detection/metrics_threshold.py`、`configs/thresholds.yaml`、`tests/` |
+| Metrics Isolation Forest Detection | `feature/metrics-iforest` | Tako | `src/event_detection/metrics_iforest.py`、相關模型設定、`tests/` |
+| Event Runner | `feature/event-runner` | 待定 | 整合 Log / Metrics Detection 輸出，統一事件執行流程 |
 
-**可以自由修改：**
-- `src/event_detection/`（新目錄，本階段建立）
-- `configs/`（新增設定檔）
-- `tests/`（新增測試）
-- `events/`（新目錄，存放 event_store.jsonl）
-
-**需先與 PM 討論才能動：**
-- Event Schema（本文件第 5 章）
-- 共用設定檔名稱或格式
-
-**不得自行修改：**
-- `docker/`、`docker-compose.yml`
-- `src/log_generator/`、`src/metrics_generator/`（DDS-001 已完成，不動）
-- `docker/grafana/dashboard.json`
-- `docker/prometheus/prometheus.yml`
-- `docker/promtail/promtail-config.yml`
-- ADR、SDD、PRD 文件
-
-### 8.3 資料夾結構（本階段新增部分）
-
-```
-src/
-└── event_detection/          ← 本階段新建
-    ├── __init__.py
-    ├── log/
-    │   ├── __init__.py
-    │   └── log_detector.py   ← Log 異常偵測邏輯
-    ├── metrics/
-    │   ├── __init__.py
-    │   ├── threshold/
-    │   │   ├── __init__.py
-    │   │   └── threshold_detector.py
-    │   └── isolation_forest/
-    │       ├── __init__.py
-    │       └── if_detector.py
-    ├── store/
-    │   ├── __init__.py
-    │   └── event_store.py    ← Event 寫入 events/event_store.jsonl
-    └── runner.py             ← 主執行入口，整合兩條 Pipeline
-
-events/                       ← 本階段新建
-└── event_store.jsonl         ← 所有 Event 寫入這裡（加入 .gitignore）
-
-configs/
-└── event_detection.yml       ← 偵測參數設定（Threshold 值、偵測間隔等）
-```
+> `feature/event-detection` 不再作為本階段開發分支使用。  
+> Event Detection 是階段名稱，不是單一功能分支。
 
 ---
+
+### 8.2 組員切換至指定分支
+
+PM 已預先建立本階段所需的 Feature Branch。  
+組員開始實作前，不需要自行建立新分支，只需切換到自己負責的分支。
+
+第一次取得遠端分支時，請先執行：
+
+```bash
+git fetch origin
+接著依照自己的負責項目切換分支。
+
+富裕負責 Metrics Threshold Detection：
+
+git checkout feature/metrics-threshold
+
+Tako 負責 Metrics Isolation Forest Detection：
+
+git checkout feature/metrics-iforest
+
+林子豪負責 Log Event Detection：
+
+git checkout feature/log-event-detection
+
+若本機尚未建立該分支，Git 可能需要使用以下格式從遠端分支建立本機追蹤分支：
+
+git checkout -b feature/<branch-name> origin/feature/<branch-name>
+
+例如：
+
+git checkout -b feature/metrics-threshold origin/feature/metrics-threshold
+
+切換完成後，請確認目前所在分支：
+
+git branch
+
+或：
+
+git status
+
+確認畫面顯示目前位於自己的 Feature Branch 後，才可以開始實作。
+
+8.3 組員完成後流程
+
+組員完成實作後，只需要將自己的 Feature Branch commit 並 push 至 GitHub。
+組員不需要自行 merge 到 develop，也不需要自行處理 develop 的整合。
+
+基本流程如下：
+
+git status
+git add <changed-files>
+git commit -m "feat: implement <module-name>"
+git push origin feature/<branch-name>
+
+例如富裕完成 Metrics Threshold Detection 後：
+
+git status
+git add src/event_detection/metrics_threshold.py configs/thresholds.yaml tests/
+git commit -m "feat: implement metrics threshold detection"
+git push origin feature/metrics-threshold
+
+完成 push 後，請通知 PM 進行 review。
+
+PM 會負責：
+
+拉取組員的 feature branch
+檢查修改範圍
+執行測試
+必要時同步 develop
+解決 merge conflict
+將通過驗收的功能合併回 develop
+8.4 PM 整合規則
+
+develop 分支由 PM 統一維護。
+組員不得自行將 Feature Branch merge 到 develop。
+
+在任何 Feature Branch 合併回 develop 前，PM 會負責執行以下檢查：
+
+確認該分支只修改允許範圍內的檔案。
+確認 Event Schema 符合本文件第 5 章。
+確認測試可通過。
+同步 develop 最新內容。
+解決可能發生的 merge conflict。
+確認合併後 develop 可正常執行。
+
+組員只需確保自己的分支能正常執行並成功 push。
+
+8.5 允許 / 不允許修改的範圍
+
+可以修改：
+
+自己負責模組對應的 src/event_detection/ 子檔案
+自己模組需要的 configs/ 設定檔
+自己模組對應的 tests/ 測試檔
+
+需先與 PM 討論才能動：
+
+Event Schema（本文件第 5 章）
+共用設定檔名稱或格式
+共用工具類別
+events/event_store.jsonl 的寫入格式
+其他組員負責的模組
+
+不得自行修改：
+
+docker/
+docker-compose.yml
+src/log_generator/
+src/metrics_generator/
+docker/grafana/dashboard.json
+docker/prometheus/prometheus.yml
+docker/promtail/promtail-config.yml
+ADR、SDD、PRD 文件
+README.md
+Event Schema
+
+Event Schema 為所有模組共用契約，唯一正式定義位於本文件第 5 章。
+任何模組不得自行新增、刪除或重新命名 Event Schema 欄位。
+
+8.6 資料夾結構（本階段新增部分）
+
+本階段預期新增 src/event_detection/ 作為 Event Detection Layer 的主要程式目錄。
+src/
+└── event_detection/
+    ├── __init__.py
+    │
+    ├── log/
+    │   ├── __init__.py
+    │   ├── reader.py
+    │   ├── parser.py
+    │   ├── features.py
+    │   └── encoder.py
+    │
+    ├── model/
+    │   ├── __init__.py
+    │   ├── schema.py
+    │   ├── trainer.py
+    │   └── predictor.py
+    │
+    ├── event/
+    │   ├── __init__.py
+    │   └── builder.py
+    │
+    ├── store/
+    │   ├── __init__.py
+    │   └── event_store.py
+    │
+    ├── metrics_threshold.py
+    ├── metrics_iforest.py
+    └── runner.py
+
+events/
+└── event_store.jsonl
+
+configs/
+├── event_detection.yml
+└── thresholds.yaml
+| 路徑                                         | 說明                                         |
+| ------------------------------------------ | ------------------------------------------ |
+| `src/event_detection/log/`                 | Log 讀取、解析、特徵抽取與編碼                          |
+| `src/event_detection/model/`               | Log Detection 使用的模型 schema、訓練與推論           |
+| `src/event_detection/event/`               | Event 組裝與分類                                |
+| `src/event_detection/store/`               | EventStore，負責寫入 `events/event_store.jsonl` |
+| `src/event_detection/metrics_threshold.py` | Metrics Threshold Detection                |
+| `src/event_detection/metrics_iforest.py`   | Metrics Isolation Forest Detection         |
+| `src/event_detection/runner.py`            | 後續 Event Runner 或整合入口                      |
+| `configs/event_detection.yml`              | Log Event Detection 設定                     |
+| `configs/thresholds.yaml`                  | Metrics Threshold Detection 設定             |
+
+8.7 Git 操作注意事項
+
+組員實作期間不得執行以下操作：
+git merge develop
+git merge main
+git push origin develop
+git push origin main
+git rebase
+git reset --hard
+git branch -D
+若遇到 Git 衝突、pull 失敗、push 失敗或分支狀態不確定，請先停止操作並通知 PM。
+
+本專案採用 PM 統一整合策略，避免多人同時處理 develop 造成版本混亂。
 
 ## 9. 成功標準（驗收條件）
 
