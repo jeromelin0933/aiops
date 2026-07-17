@@ -87,6 +87,13 @@ Event Detection 是 Incident 誕生前的最後一道關口，其輸出品質直
 - **不得直接輸出 Alert 或觸發 Email**
 - **不得依賴 LLM 判斷**
 - 輸出格式必須符合本文件第 5 章定義的 Event Schema
+本階段 Metrics Event Detection 拆分為兩條互補 pipeline：
+
+- Metrics Threshold Detection：處理 PRD-002 明確定義的靜態閾值事件，例如 `high_latency_detected`、`high_memory_detected`。
+- Metrics Isolation Forest Detection：處理動態基準與未知 Metrics 異常，例如 `request_spike_detected`。
+
+兩者皆屬於 Metrics Event Detection，但應以不同 `event_source` 輸出：
+`metrics_threshold_detection` 與 `metrics_iforest_detection`。
 
 ### FR-03 兩條 Pipeline 互相獨立
 
@@ -559,6 +566,7 @@ git branch -D
 |---|---|
 | AC-01 | 觸發 S1（50 筆 401），`event_store.jsonl` 中出現且僅出現 1 筆 `brute_force_detected` Event |
 | AC-02 | 觸發 S2（同 trace_id 三層 Log），出現 1 筆 `cross_service_failure` Event，含正確 trace_id |
+| AC-02b | 觸發 S2 Metrics 補強時，`api_p95_latency_ms >= 3000ms` 產生 1 筆 `high_latency_detected` Event |
 | AC-03 | 觸發 S3（OOM），出現 `oom_crash_detected` Event；Metrics 超過 90% 時出現 `high_memory_detected` Event |
 | AC-04 | 觸發 S4（外部 API 逾時），出現 1 筆 `external_dependency_failure` Event，含 external_service 資訊 |
 | AC-05 | 觸發 S5（50 筆跨服務 Log），出現 1 筆 `downstream_cascade_failure` Event，`triggered_features.common_downstream=core-db` |
