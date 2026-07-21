@@ -1,0 +1,5 @@
+﻿joblib
+numpy
+prometheus-client
+PyYAML
+scikit-learn
