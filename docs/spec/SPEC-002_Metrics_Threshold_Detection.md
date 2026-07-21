@@ -263,14 +263,33 @@ tests/fixtures/metrics_threshold/prometheus_nan_result.json
 | S2 DB 慢查詢補強 | `api_p95_latency_ms` | `>= 3000.0` | `high_latency_detected` | `threshold` | HIGH |
 | S3 OOM 補強 | `system_memory_usage_pct` | `>= 90.0` | `high_memory_detected` | `threshold` | HIGH |
 
-### 5.1 不在本 SPEC 正式輸出範圍的 Metrics
+### 5.1 Threshold Comparison Rule
+
+所有啟用且 `threshold_type` 為 `upper` 的 Threshold Rule，統一使用大於或等於比較：
+
+```python
+current_value >= threshold
+邊界行為定義如下：
+
+current_value < threshold：不觸發 Event。
+current_value == threshold：觸發 Event。
+current_value > threshold：觸發 Event。
+
+因此：
+
+system_memory_usage_pct == 90.0 時，必須觸發 high_memory_detected。
+api_p95_latency_ms == 3000.0 時，必須觸發 high_latency_detected。
+
+實作者不得將比較條件改為單純的 current_value > threshold。
+```
+### 5.2 不在本 SPEC 正式輸出範圍的 Metrics
 
 | Metric | 原因 | 處理方式 |
 |---|---|---|
 | `api_requests_per_sec` | PRD-002 將 `request_spike_detected` 定義為 Isolation Forest | 留給 SPEC-003 |
 | `db_pool_active_connections` | PRD-002 尚未定義正式 Threshold event_type | 預設 disabled；若需正式輸出，先更新 PRD-002 |
 
-### 5.2 六大情境與非六情境資料處理精神
+### 5.3 六大情境與非六情境資料處理精神
 
 六大情境是本階段 Demo Validation Set，不代表 Prometheus 只能存在六大情境相關 Metrics。
 
@@ -1014,6 +1033,7 @@ python -c "from src.event_detection.metrics_threshold import MetricsThresholdDet
 8. 使用 EventStore 寫入 Event，但測試必須使用 tmp_path。
 9. 單元測試不得依賴 Docker 或真實 Prometheus。
 10. python -m pytest -q 必須通過。
+11. 所有 upper threshold 比較必須使用 `current_value >= threshold`；數值等於 threshold 時必須觸發 Event，並加入等於門檻值的邊界測試。
 
 完成後請回報：
 - 新增或修改檔案
@@ -1097,4 +1117,5 @@ PM review 時檢查：
 - [ ] 測試是否使用 mock Prometheus？
 - [ ] EventStore 測試是否使用 `tmp_path`？
 - [ ] 是否沒有修改 Docker / Generator / README / docs / runner？
-
+- [ ] Threshold 比較是否使用 `current_value >= threshold`？
+- [ ] Memory 90.0 與 Latency 3000.0 是否都會觸發 Event？
