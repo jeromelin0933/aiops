@@ -1,0 +1,35 @@
+prometheus:
+  base_url: "http://localhost:9090"
+  query_timeout_seconds: 5
+
+polling:
+  interval_seconds: 15
+
+cooldown:
+  seconds: 60
+
+output:
+  event_store_path: "events/event_store.jsonl"
+
+metrics:
+  system_memory_usage_pct:
+    enabled: true
+    threshold_type: "upper"
+    threshold: 90.0
+    event_type: "high_memory_detected"
+    severity: "HIGH"
+
+  api_p95_latency_ms:
+    enabled: true
+    threshold_type: "upper"
+    threshold: 3000.0
+    event_type: "high_latency_detected"
+    severity: "HIGH"
+
+  api_requests_per_sec:
+    enabled: false
+    note: "request_spike_detected belongs to SPEC-003 Metrics IForest, not SPEC-002 threshold detection."
+
+  db_pool_active_connections:
+    enabled: false
+    note: "No formal PRD-002 threshold event_type yet. Enable only after PRD-002 update."
