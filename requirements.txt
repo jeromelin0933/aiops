@@ -3,3 +3,4 @@ numpy
 prometheus-client
 PyYAML
 scikit-learn
+requests
