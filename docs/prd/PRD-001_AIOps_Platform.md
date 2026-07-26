@@ -1,10 +1,13 @@
 # AIOps 智慧維運平台
-## 產品需求文件（PRD）v3.0
+## 產品需求文件（PRD）v3.1
 
 > **文件狀態**：執行中
 > **最後更新**：2026-07-11
 > **適用對象**：東吳大學資管系專題四人組
 > **對應文件**：SDD v0.1、ADR-001
+| Version | Date | Change |
+|---|---|---|
+| 3.1 | 2026-07-26 | 釐清 Metrics Threshold 與 Isolation Forest 雙軌分工；SPEC-003 v1.0 限定 QPS；新增未知 QPS Event 說明；DB Pool 定義為僅觀測與未來擴充。 |
 
 ---
 
@@ -153,6 +156,12 @@ Logs ─────────────────┐
 | 外部服務標記 | `external_service` 欄位標記外部依賴（劇本四使用） |
 | 劇本觸發介面 | 提供簡單的觸發方式（命令列參數或 API）可切換不同劇本 |
 
+> `db_pool_active_connections` 雖由 Metrics Generator 產生，
+> 並可由 Prometheus 收集及於 Grafana 顯示，
+> 但本階段僅作為觀測與未來擴充指標，
+> 不納入 Metrics Threshold Detection 或
+> Metrics Isolation Forest Detection v1.0 的正式 Event Detection 範圍。
+
 **Log Schema 必要欄位：**
 
 ```json
@@ -189,11 +198,16 @@ Logs ─────────────────┐
 
 | 項目 | 說明 |
 |---|---|
-| Log 異常偵測 | 基於 Log 特徵（error rate、status_code 分布）做 Isolation Forest |
-| Metrics 異常偵測 | Threshold + Isolation Forest 雙軌機制，任一觸發即產生 Event |
-| 特徵輸入 | p95 Latency、Error Rate、Memory Usage、DB Pool、Log ERROR 比率 |
-| 偵測週期 | 每 15 秒執行一次 |
-| 輸出格式 | 寫入 Event Queue |
+| Log 異常偵測 | 以 Isolation Forest 判斷 Log Window 是否異常，再由 Rule Classifier 分類已知情境；無法分類時輸出 `general_log_anomaly`。 |
+| Metrics 雙軌原則 | Metrics Threshold Detection 與 Metrics Isolation Forest Detection 為互補且彼此獨立的雙軌機制；任一 Pipeline 判定異常，即可各自產生標準化 Event。 |
+| Metrics Threshold Detection | 對 `api_p95_latency_ms` 與 `system_memory_usage_pct` 執行靜態門檻判斷。 |
+| Metrics Isolation Forest Detection | SPEC-003 v1.0 對 `api_requests_per_sec` 建立 QPS 動態基準，輸出 `request_spike_detected` 或 `general_metrics_anomaly`。 |
+| DB Pool | `db_pool_active_connections` 本階段僅收集與視覺化，不納入正式 Event Detection。 |
+| 偵測週期 | Event Runner 整合後，由各 Detection Pipeline 依設定週期執行。 |
+| 輸出格式 | 所有 Detection Pipeline 輸出符合 PRD-002 第 5 章的 Event。 |
+> Threshold 與 Isolation Forest 不互相取代或排斥。
+> 同一事故可能同時產生不同來源的 Metrics Event，
+> 後續再由 Event Runner 與 Alert Correlation Engine 進行整理與收斂。
 
 ### G4 告警收斂層
 
