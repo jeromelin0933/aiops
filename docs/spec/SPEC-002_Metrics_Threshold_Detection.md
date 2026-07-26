@@ -10,9 +10,9 @@
 |---|---|
 | Document ID | SPEC-002 |
 | Document Name | Metrics Threshold Detection |
-| Version | 1.2 |
-| Status | Ready for Review |
-| Date | 2026-07-17 |
+| Version | 1.3 |
+| Status | Implemented |
+| Date | 2026-07-26 |
 | Author | 林子豪（PM） |
 | Assignee | 富裕 |
 | Branch | `feature/metrics-threshold` |
@@ -20,6 +20,9 @@
 | Related DDS | DDS-001 |
 | Related SPEC | SPEC-001（Log Event Detection）、SPEC-003（Metrics Isolation Forest Detection）、SPEC-004（Event Runner） |
 
+| Version | Date | Change |
+|---|---|---|
+| 1.3 | 2026-07-26 | 文件對齊 PRD-001／PRD-002；明確限定 SPEC-003 v1.0 的未知 Metrics 異常為 QPS Window；將 DB Pool 定義為僅收集與視覺化；移除 Git 操作、Agent Prompt 與 Implementation Notes。無程式碼變更。 |
 ---
 
 ## 0. 文件目的與設計原則
@@ -28,7 +31,11 @@
 
 本模組負責從 DDS-001 已建立的 Prometheus HTTP API 讀取 Metrics，透過靜態閾值判斷是否發生 Metrics 異常，並輸出符合 **PRD-002 第 5 章 Event Schema** 的標準化 Event。
 
-本文件是工程規格，不是概念說明。實作者應以本文件定義的檔案範圍、資料結構、測試案例與 Git 流程為準。
+本文件是工程規格，不是概念說明。實作者應以本文件定義的
+檔案範圍、資料結構、介面、測試案例與驗收標準為準。
+
+Git 操作與 AI Coding Agent Prompt工作指示不屬於本 SPEC，
+統一由 PM 透過獨立工作文件提供。
 
 ### 0.1 核心設計原則
 
@@ -41,12 +48,23 @@
 3. **SPEC-001 已完成 Log Event Detection 基礎模組**  
    本 SPEC 可重用 `EventStore`，但不得直接重用 Log 專用的 `EventBuilder`。
 
-4. **Threshold Detection 只負責靜態閾值**  
-   `api_requests_per_sec` 的短時間暴增與未知 Metrics 異常，屬於 SPEC-003 Metrics Isolation Forest Detection，不屬於本 SPEC 的正式輸出範圍。
+4. **Threshold Detection 只負責靜態閾值**
+
+   `api_requests_per_sec` 的動態基準、Request Spike 與未知 QPS Window 異常，
+   屬於 SPEC-003 Metrics Isolation Forest Detection。
+
+   SPEC-003 v1.0 的未知 Metrics 異常能力僅限於
+   `api_requests_per_sec`，不代表所有 Prometheus Metrics
+   均具備未知異常偵測能力。
 
 5. **六大情境是 Demo Validation Set，不是資料輸入上限**  
    本模組可讀取 Prometheus 中任何 config 啟用的 Metric，但正式輸出的 `event_type` 必須已被 PRD-002 定義。若要新增正式 `event_type`，必須先更新 PRD-002。
 
+6. **DB Pool 本階段僅收集與視覺化**
+
+   `db_pool_active_connections` 可由 Metrics Generator 產生、
+   Prometheus 收集並於 Grafana 顯示，但不納入 SPEC-002 或
+   SPEC-003 v1.0 的正式 Event Detection 範圍。
 ---
 
 ## 1. 前置條件（Prerequisites）
@@ -174,10 +192,10 @@ DDS-001 目前定義以下 Metrics：
 
 | Metric | 說明 | 本 SPEC 處理方式 |
 |---|---|---|
-| `system_memory_usage_pct` | Memory 使用率 | 正式 Threshold Event |
-| `api_p95_latency_ms` | API p95 Latency | 正式 Threshold Event |
-| `api_requests_per_sec` | QPS | 不輸出 Threshold Event，交由 SPEC-003 IForest |
-| `db_pool_active_connections` | DB Pool | 預設不輸出 Event，僅保留 config 擴充可能 |
+| `system_memory_usage_pct` | Memory 使用率 | 正式 Threshold Event：`high_memory_detected` |
+| `api_p95_latency_ms` | API p95 Latency | 正式 Threshold Event：`high_latency_detected` |
+| `api_requests_per_sec` | QPS | 不輸出 Threshold Event；交由 SPEC-003 處理 Request Spike 與未知 QPS Window 異常 |
+| `db_pool_active_connections` | DB Pool Active Connections | 僅收集與視覺化；不納入 SPEC-002 或 SPEC-003正式 Event Detection |
 
 ### 4.3 Prometheus Instant Query 格式
 
@@ -284,10 +302,12 @@ api_p95_latency_ms == 3000.0 時，必須觸發 high_latency_detected。
 ```
 ### 5.2 不在本 SPEC 正式輸出範圍的 Metrics
 
+### 5.2 不在本 SPEC 正式輸出範圍的 Metrics
+
 | Metric | 原因 | 處理方式 |
 |---|---|---|
-| `api_requests_per_sec` | PRD-002 將 `request_spike_detected` 定義為 Isolation Forest | 留給 SPEC-003 |
-| `db_pool_active_connections` | PRD-002 尚未定義正式 Threshold event_type | 預設 disabled；若需正式輸出，先更新 PRD-002 |
+| `api_requests_per_sec` | 屬於動態基準與 QPS Window 異常偵測 | 交由 SPEC-003 v1.0；可輸出 `request_spike_detected` 或 `general_metrics_anomaly` |
+| `db_pool_active_connections` | PRD-002 v1.1 定義為本階段僅收集與視覺化 | 維持 disabled；不由 SPEC-002 或 SPEC-003 v1.0 輸出正式 Event |
 
 ### 5.3 六大情境與非六情境資料處理精神
 
@@ -295,7 +315,21 @@ api_p95_latency_ms == 3000.0 時，必須觸發 high_latency_detected。
 
 本模組可以接受 config 中啟用的非六情境 Metrics，也可以在未來擴充更多 metric query。
 
-然而，由於本 SPEC 是靜態閾值偵測，正式輸出的 `event_type` 必須已被 PRD-002 定義。若觀察到新的 Metrics 異常型態，不得在未更新 PRD-002 的情況下自行新增正式 `event_type`。
+然而，由於本 SPEC 是靜態閾值偵測，
+正式輸出的 `event_type` 必須已被 PRD-002 定義。
+不得在未更新 PRD-002 的情況下自行新增正式 Event Type。
+
+不同類型異常的處理方式如下：
+
+1. 已定義 Memory／Latency Threshold：由 SPEC-002 輸出正式 Event。
+2. QPS 動態異常：由 SPEC-003 v1.0 處理。
+3. 未知 QPS Window 異常：由 SPEC-003 v1.0 輸出 `general_metrics_anomaly`。
+4. DB Pool：本階段僅收集與視覺化，不輸出 Event。
+5. 其他未定義 Metrics：可記錄 Debug Log 或提出 PRD 更新需求，
+   但不得直接輸出未定義的正式 Event。
+
+`general_metrics_anomaly` 僅適用於 `api_requests_per_sec`，
+不得作為所有未知 Metrics 的通用 fallback。
 
 未知或非正式 Metrics 異常的處理方式：
 
@@ -433,12 +467,12 @@ metrics:
     severity: "HIGH"
 
   api_requests_per_sec:
-    enabled: false
-    note: "request_spike_detected belongs to SPEC-003 Metrics IForest, not SPEC-002 threshold detection."
+  enabled: false
+  note: "QPS dynamic baseline, request_spike_detected, and general_metrics_anomaly belong to SPEC-003 v1.0."
 
-  db_pool_active_connections:
-    enabled: false
-    note: "No formal PRD-002 threshold event_type yet. Enable only after PRD-002 update."
+db_pool_active_connections:
+  enabled: false
+  note: "Observation and visualization only in v1.0. No formal Event Detection output."
 ```
 
 ### 7.3 Config 驗證規則
@@ -914,8 +948,10 @@ python -m pytest tests/test_metrics_threshold.py -q
 5. 只輸出 PRD-002 允許的 Threshold event_type：
    - `high_memory_detected`
    - `high_latency_detected`
-6. `api_requests_per_sec` 不輸出 Threshold Event。
-7. `db_pool_active_connections` 預設 disabled，不輸出 Event。
+6. `api_requests_per_sec` 不輸出 Threshold Event，
+   其動態異常由 SPEC-003 負責。
+7. `db_pool_active_connections` 僅作為收集與視覺化指標，
+   必須維持 disabled，且不得由 SPEC-002 輸出 Threshold Event。
 8. 測試不依賴真實 Prometheus。
 9. EventStore 測試使用 `tmp_path`。
 10. 無 `.venv/`、`events/event_store.jsonl`、`.pkl`、Docker、Dashboard 修改被 commit。
@@ -1109,7 +1145,9 @@ PM review 時檢查：
 - [ ] `python -m pytest -q` 是否通過？
 - [ ] `configs/thresholds.yaml` 是否只啟用 memory / latency？
 - [ ] `api_requests_per_sec` 是否 disabled？
-- [ ] `db_pool_active_connections` 是否 disabled？
+- [ ] `api_requests_per_sec` 是否 disabled，且沒有輸出 Threshold Event？
+- [ ] `db_pool_active_connections` 是否維持 disabled，並明確定位為僅收集與視覺化？
+- [ ] 是否沒有將 `general_metrics_anomaly` 實作在 SPEC-002？
 - [ ] 是否沒有新增 PRD-002 未定義 event_type？
 - [ ] Event Schema 是否剛好 15 個 top-level fields？
 - [ ] `event_source` 是否為 `metrics_threshold_detection`？

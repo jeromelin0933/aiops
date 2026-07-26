@@ -8,12 +8,15 @@
 |---|---|
 | Document ID | PRD-002 |
 | Document Name | Event Detection |
-| Version | 1.0 |
+| Version | 1.1 |
 | Status | Draft |
-| Date | 2026-07-13 |
+| Date | 2026-07-26 |
 | Author | 林子豪（PM） |
 | Related Documents | ADR-001、PRD-001、DDS-001 |
 
+| Version | Date | Change |
+|---|---|---|
+| 1.1 | 2026-07-26 | 明確定義 Metrics Threshold 與 Metrics Isolation Forest 雙軌分工；SPEC-003 v1.0 限定 QPS；新增 `general_metrics_anomaly`；定義 DB Pool 為僅觀測指標；補充 S6 Metrics 驗收條件。 |
 ---
 
 ## 1. 文件目的
@@ -83,24 +86,59 @@ Event Detection 是 Incident 誕生前的最後一道關口，其輸出品質直
 
 系統須能自動從 Prometheus（`http://localhost:9090`）定期撈取 Metrics，並在偵測到異常時建立 **Metrics Event**。
 
-- 必須能感知六大劇本對應的 Metrics 異常（詳見第 4 章）
+- 必須能感知六大劇本所需的 Metrics 異常（詳見第 4 章）
 - **不得直接輸出 Alert 或觸發 Email**
 - **不得依賴 LLM 判斷**
 - 輸出格式必須符合本文件第 5 章定義的 Event Schema
-本階段 Metrics Event Detection 拆分為兩條互補 pipeline：
 
-- Metrics Threshold Detection：處理 PRD-002 明確定義的靜態閾值事件，例如 `high_latency_detected`、`high_memory_detected`。
-- Metrics Isolation Forest Detection：處理動態基準與未知 Metrics 異常，例如 `request_spike_detected`。
+本階段 Metrics Event Detection 拆分為兩條互補且彼此獨立的 Pipeline：
 
-兩者皆屬於 Metrics Event Detection，但應以不同 `event_source` 輸出：
-`metrics_threshold_detection` 與 `metrics_iforest_detection`。
+#### Metrics Threshold Detection
 
-### FR-03 兩條 Pipeline 互相獨立
+負責具有明確營運門檻的靜態異常：
 
-Log Event Detection 與 Metrics Event Detection 必須是兩個**彼此獨立的偵測流程**。
+- `api_p95_latency_ms` → `high_latency_detected`
+- `system_memory_usage_pct` → `high_memory_detected`
 
-- 單一偵測流程發生錯誤，不得影響另一條流程的運作
-- 兩者可以各自先完成、各自測試，最後再整合
+#### Metrics Isolation Forest Detection
+
+SPEC-003 v1.0 僅針對：
+
+```text
+api_requests_per_sec
+建立 QPS 時間視窗與動態基準，並輸出：
+
+已知 Request Spike：request_spike_detected
+未知 QPS Window 異常：general_metrics_anomaly
+
+general_metrics_anomaly 的適用範圍僅限 api_requests_per_sec，
+不得解讀為系統已涵蓋所有 Prometheus Metrics 的未知異常。
+
+兩條 Metrics Pipeline 應使用不同的 event_source：
+
+metrics_threshold_detection
+metrics_iforest_detection
+
+任一 Pipeline 獨立判定異常時，均可建立標準化 Event。
+同一事故也可能同時產生不同來源的 Event，後續再交由 Event Runner
+與 Alert Correlation Engine 處理，不得在 Event Detection 階段互相排斥或覆蓋。
+```
+
+### FR-03 各 Event Detection Pipeline 互相獨立
+
+本階段包含三條彼此獨立的 Event Detection Pipeline：
+
+1. Log Event Detection
+2. Metrics Threshold Detection
+3. Metrics Isolation Forest Detection
+
+各 Pipeline 必須符合：
+
+- 單一 Pipeline 發生錯誤，不得影響其他 Pipeline 運作
+- 各 Pipeline 可獨立開發、啟動與測試
+- 各 Pipeline 可獨立建立符合第 5 章的 Event
+- 不得要求其中一條 Pipeline 成功觸發後，另一條才可輸出
+- 最後由 SPEC-004 Event Runner 統一執行與整合
 
 ### FR-04 Event 標準化輸出
 
@@ -198,13 +236,22 @@ Metrics Detection：
 | 關鍵欄位 | `target_service`、`rate_limit_quota` |
 | 預期行為 | 55 筆 429 → 建立 1 個 Event（冷卻期機制） |
 
-同時需要 Metrics Detection 補強：
-
+同時需要 Metrics Isolation Forest Detection 補強：
 | 項目 | 規格 |
 |---|---|
-| 觸發條件 | `api_requests_per_sec` 短時間內暴增超過基準值 3 倍 |
+| 適用 Metric | `api_requests_per_sec` |
+| 觸發條件 | Isolation Forest 判定 QPS Window 異常，且當前 QPS 達近期基準至少 3.0 倍 |
 | Event Type | `request_spike_detected` |
-| Detection Method | Isolation Forest |
+| Event Source | `metrics_iforest_detection` |
+| Detection Method | `isolation_forest` |
+| Severity | HIGH |
+| 預期行為 | 建立 1 筆 `request_spike_detected` Event，並保留 QPS 基準、當前值、Spike Ratio、Window Features 與 Anomaly Score |
+
+Isolation Forest 負責判斷 QPS Window 是否異常；
+Rule Classifier 負責將已判定異常且 Spike Ratio 達 3.0 的行為
+分類為 `request_spike_detected`。
+
+Rule Classifier 不得在 Isolation Forest 判定正常時單獨建立正式 Event。
 
 ### 4.7 未知 Log 異常 fallback
 
@@ -223,6 +270,62 @@ Log Event Detection 不應只依賴 S1–S6 的固定規則進行偵測，而應
 | 預期行為 | 不丟棄未知異常，仍建立 Event 供下游 Alert Correlation 與 LLM RCA 使用 |
 
 此設計確保本系統不是只能辨識六大固定劇本，而是能先偵測未知異常，再對已知劇本提供更具可解釋性的分類。
+
+### 4.8 未知 Metrics 異常 fallback
+
+六大劇本是本 Prototype 的 Demo Validation Set，並非系統能力上限。
+
+Metrics Isolation Forest Detection v1.0 不應只辨識已知的 S6 Request Spike。
+當 `api_requests_per_sec` 的時間視窗明顯偏離已學習的正常 QPS 行為，
+但無法分類為 `request_spike_detected` 時，系統仍須建立 Event。
+
+| 項目 | 規格 |
+|---|---|
+| 適用 Metric | `api_requests_per_sec` |
+| 觸發條件 | Isolation Forest 判定 QPS Window 異常，但不符合已知 Request Spike 分類條件 |
+| Event Type | `general_metrics_anomaly` |
+| Event Source | `metrics_iforest_detection` |
+| Detection Method | `isolation_forest` |
+| Severity | MEDIUM 或 HIGH，由異常分數與特徵決定 |
+| 預期行為 | 不丟棄未知 QPS 異常，仍建立 Event 供下游 Alert Correlation 與 Incident Management 使用 |
+
+本功能的未知 Metrics 異常範圍僅限 QPS Window。
+
+本功能不代表以下指標均已具備未知異常偵測能力：
+
+- `api_p95_latency_ms`
+- `system_memory_usage_pct`
+- `db_pool_active_connections`
+
+若 Isolation Forest 判定 Window 正常，即使單一分類規則成立，
+也不得輸出 `general_metrics_anomaly` 或 `request_spike_detected`。
+
+### 4.9 DB Pool 指標範圍
+
+`db_pool_active_connections` 目前僅作為觀測與未來擴充指標。
+
+本階段可由：
+
+- Metrics Generator 產生
+- Prometheus 收集
+- Grafana 顯示
+
+但不納入：
+
+- Metrics Threshold Detection 正式 Event 輸出
+- Metrics Isolation Forest Detection v1.0 模型輸入
+- 本階段正式 Event Detection 驗收條件
+
+本階段不定義 DB Pool 專屬 Event Type。
+
+六大情境中的資料庫相關劇本仍可透過以下訊號驗證：
+
+- S2：`api_p95_latency_ms`、相同 `trace_id` 與跨服務 Log
+- S5：相同 `downstream_service` 與跨服務 Log
+
+因此六大情境驗收不依賴 DB Pool Event。
+若未來要將 DB Pool 納入正式異常偵測，必須先更新 PRD-002，
+定義 Metric 語意、觸發條件、Event Type、Severity 與驗收案例。
 ---
 
 ## 5. Event Schema（各模組共用契約）
@@ -268,7 +371,7 @@ PRD-001 僅引用本章，不另行維護 Event Schema。
 | `event_id` | string | `EVT-{timestamp}-{random4}` 格式 |
 | `detected_at` | string | ISO8601 UTC，偵測到異常的時間 |
 | `event_source` | string | Event 來源模組。允許值：`log_event_detection`、`metrics_threshold_detection`、`metrics_iforest_detection` |
-| `event_type` | string | 對應第 4 章各劇本的 Event Type |
+| `event_type` | string | 對應第 4 章已知劇本或 General Anomaly fallback 的正式 Event Type |
 | `detection_method` | string | `rule_based`、`threshold`、`isolation_forest` |
 | `severity` | string | `CRITICAL`、`HIGH`、`MEDIUM`、`LOW` |
 | `confidence` | float | 0.0–1.0，偵測信心度 |
@@ -279,7 +382,7 @@ PRD-001 僅引用本章，不另行維護 Event Schema。
 | `external_service` | string or null | 外部依賴服務（S4 必填） |
 | `status` | string | `OPEN`（新建立）或 `CLOSED`（已處理） |
 | `triggered_features` | object | 觸發此 Event 的特徵值，供 Alert Correlation 參考 |
-| `raw_log_sample` | array | 最多 3 筆觸發此 Event 的原始 Log |
+| `raw_log_sample` | array | Log Event 最多保留 3 筆原始 Log；Metrics Event 固定使用空陣列 `[]` |
 
 ---
 
@@ -567,12 +670,17 @@ git branch -D
 | AC-01 | 觸發 S1（50 筆 401），`event_store.jsonl` 中出現且僅出現 1 筆 `brute_force_detected` Event |
 | AC-02 | 觸發 S2（同 trace_id 三層 Log），出現 1 筆 `cross_service_failure` Event，含正確 trace_id |
 | AC-02b | 觸發 S2 Metrics 補強時，`api_p95_latency_ms >= 3000ms` 產生 1 筆 `high_latency_detected` Event |
-| AC-03 | 觸發 S3（OOM），出現 `oom_crash_detected` Event；Metrics 超過 90% 時出現 `high_memory_detected` Event |
+| AC-03 | 觸發 S3（OOM），出現 `oom_crash_detected` Event；Metrics 達 90% 時出現 `high_memory_detected` Event |
 | AC-04 | 觸發 S4（外部 API 逾時），出現 1 筆 `external_dependency_failure` Event，含 external_service 資訊 |
 | AC-05 | 觸發 S5（50 筆跨服務 Log），出現 1 筆 `downstream_cascade_failure` Event，`triggered_features.common_downstream=core-db` |
 | AC-06 | 觸發 S6（55 筆 429），出現 1 筆 `rate_limit_storm` Event（不是 55 個） |
+| AC-06b | QPS Window 被 Isolation Forest 判定異常，且當前 QPS 達近期基準至少 3.0 倍時，產生 1 筆 `request_spike_detected` Event |
+| AC-06c | QPS Window 被 Isolation Forest 判定異常，但無法分類為 Request Spike 時，產生 1 筆 `general_metrics_anomaly` Event |
+| AC-06d | Isolation Forest 判定正常時，Rule Classifier 不得單獨建立 `request_spike_detected` 或 `general_metrics_anomaly` |
+| AC-06e | `general_metrics_anomaly` 的正式範圍僅限 `api_requests_per_sec` |
+| AC-06f | `db_pool_active_connections` 本階段只收集與視覺化，不產生正式 Event |
 | AC-07 | 所有 Event 的 Schema 符合第 5 章定義，欄位完整，型別正確 |
-| AC-08 | Log Detection 與 Metrics Detection 各自獨立，其中一條關閉不影響另一條 |
+| AC-08 | Log Detection、Metrics Threshold Detection 與 Metrics Isolation Forest Detection 各自獨立，其中一條關閉或失敗不得影響其他 Pipeline |
 | AC-09 | Event 寫入 `events/event_store.jsonl`，格式為 JSONL（每行一筆完整 JSON） |
 | AC-10 | `events/` 目錄已加入 `.gitignore` |
 
