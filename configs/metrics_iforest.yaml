@@ -1,0 +1,46 @@
+prometheus:
+  base_url: "http://localhost:9090"
+  query_endpoint: "/api/v1/query_range"
+  timeout_seconds: 5
+
+metric:
+  name: "api_requests_per_sec"
+
+window:
+  lookback_seconds: 300
+  step_seconds: 15
+  min_sample_count: 10
+
+runtime:
+  poll_interval_seconds: 15
+
+isolation_forest:
+  contamination: 0.05
+  n_estimators: 200
+  random_state: 42
+  max_samples: "auto"
+
+anomaly:
+  score_threshold: -0.05
+  confidence_medium_score: -0.10
+  confidence_high_score: -0.30
+
+classification:
+  request_spike_ratio: 3.0
+  known_event_type: "request_spike_detected"
+  fallback_event_type: "general_metrics_anomaly"
+
+event:
+  cooldown_seconds: 60
+
+model:
+  path: "models/metrics_isolation_forest.pkl"
+  metadata_version: "1.0"
+  train_if_missing: false
+
+training:
+  baseline_fixture_path: "tests/fixtures/metrics_iforest/qps_baseline.json"
+  minimum_window_count: 30
+
+output:
+  event_store_path: "events/event_store.jsonl"
