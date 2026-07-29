@@ -29,3 +29,6 @@ Thumbs.db
 .venv/
 /.venv/
 events/
+
+# Metrics Isolation Forest runtime model
+models/*.pkl
