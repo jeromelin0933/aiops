@@ -1,12 +1,15 @@
 """Load and run a window-level Isolation Forest model."""
 
 from dataclasses import dataclass
+import operator
 from pathlib import Path
 from typing import Optional
 
 import joblib
 import numpy as np
 from sklearn.ensemble import IsolationForest
+from sklearn.exceptions import NotFittedError
+from sklearn.utils.validation import check_is_fitted
 
 from src.event_detection.model.schema import WindowFeatureVector
 
@@ -31,7 +34,49 @@ class AnomalyPredictor:
     def load(self) -> None:
         if not self.model_path.exists():
             raise FileNotFoundError(f"model not found: {self.model_path}")
-        self._model = joblib.load(self.model_path)
+        loaded_model = joblib.load(self.model_path)
+        self._validate_model_artifact(loaded_model)
+        self._model = loaded_model
+
+    @staticmethod
+    def _validate_model_artifact(model: object) -> None:
+        if model is None:
+            raise TypeError("loaded model artifact is None")
+        if isinstance(model, (dict, str, bytes, list, tuple)):
+            raise TypeError(
+                f"unsupported model artifact type: {type(model).__name__}"
+            )
+        if not callable(getattr(model, "predict", None)):
+            raise TypeError("model artifact does not provide callable predict()")
+        if not callable(getattr(model, "decision_function", None)):
+            raise TypeError(
+                "model artifact does not provide callable decision_function()"
+            )
+
+        try:
+            check_is_fitted(model)
+        except (NotFittedError, TypeError) as exc:
+            raise ValueError("model artifact is not fitted") from exc
+
+        missing = object()
+        feature_dimension = getattr(model, "n_features_in_", missing)
+        if feature_dimension is missing:
+            raise ValueError("model artifact is missing n_features_in_")
+        if isinstance(feature_dimension, bool):
+            raise TypeError("model artifact n_features_in_ must be an integer")
+        try:
+            actual_dimension = operator.index(feature_dimension)
+        except TypeError as exc:
+            raise TypeError(
+                "model artifact n_features_in_ must be an integer"
+            ) from exc
+
+        expected_dimension = len(WindowFeatureVector.feature_names())
+        if actual_dimension != expected_dimension:
+            raise ValueError(
+                "model feature dimension mismatch: "
+                f"expected {expected_dimension}, got {actual_dimension}"
+            )
 
     def predict_one(self, vector: WindowFeatureVector) -> PredictionResult:
         if self._model is None:

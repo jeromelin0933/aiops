@@ -7,10 +7,12 @@ import logging
 import math
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
@@ -20,6 +22,10 @@ from src.event_detection.store.event_store import EventStore
 
 
 logger = logging.getLogger(__name__)
+
+
+class _PrometheusResponseError(ValueError):
+    """A recoverable error in a Prometheus API response payload."""
 
 EVENT_FIELDS = {
     "event_id",
@@ -190,15 +196,27 @@ class MetricsFetcher:
 
         try:
             response = self.http_client(url, self.timeout_seconds)
+        except (TimeoutError, ConnectionError, HTTPError, URLError, OSError) as exc:
+            return self._unavailable_metric(metric_name, queried_at, exc)
+
+        try:
             payload = self._parse_response(response)
             return self._metric_value_from_payload(metric_name, queried_at, payload)
-        except Exception as exc:  # noqa: BLE001 - fetch errors become unavailable metrics.
-            return MetricValue(
-                name=metric_name,
-                value=None,
-                queried_at=queried_at,
-                error=str(exc),
-            )
+        except (TimeoutError, ConnectionError, HTTPError, URLError, OSError) as exc:
+            return self._unavailable_metric(metric_name, queried_at, exc)
+        except (UnicodeDecodeError, json.JSONDecodeError, _PrometheusResponseError) as exc:
+            return self._unavailable_metric(metric_name, queried_at, exc)
+
+    @staticmethod
+    def _unavailable_metric(
+        metric_name: str, queried_at: str, error: BaseException
+    ) -> MetricValue:
+        return MetricValue(
+            name=metric_name,
+            value=None,
+            queried_at=queried_at,
+            error=str(error),
+        )
 
     @staticmethod
     def _default_http_client(url: str, timeout_seconds: float) -> str:
@@ -206,8 +224,8 @@ class MetricsFetcher:
             return response.read().decode("utf-8")
 
     @staticmethod
-    def _parse_response(response: Any) -> dict[str, Any]:
-        if isinstance(response, dict):
+    def _parse_response(response: Any) -> Mapping[str, Any]:
+        if isinstance(response, Mapping):
             return response
         if isinstance(response, bytes):
             response = response.decode("utf-8")
@@ -216,27 +234,58 @@ class MetricsFetcher:
             if isinstance(response, bytes):
                 response = response.decode("utf-8")
         if not isinstance(response, str):
-            raise ValueError("HTTP client returned unsupported response type")
+            raise _PrometheusResponseError(
+                "HTTP client returned unsupported response type"
+            )
         payload = json.loads(response)
-        if not isinstance(payload, dict):
-            raise ValueError("Prometheus response must be a JSON object")
+        if not isinstance(payload, Mapping):
+            raise _PrometheusResponseError(
+                "Prometheus response must be a JSON object"
+            )
         return payload
 
     @staticmethod
     def _metric_value_from_payload(
-        metric_name: str, queried_at: str, payload: dict[str, Any]
+        metric_name: str, queried_at: str, payload: Mapping[str, Any]
     ) -> MetricValue:
-        result = payload.get("data", {}).get("result", [])
+        if "status" not in payload:
+            raise _PrometheusResponseError("Prometheus response is missing status")
+        if payload["status"] != "success":
+            raise _PrometheusResponseError("Prometheus response status is not success")
+
+        if "data" not in payload:
+            raise _PrometheusResponseError("Prometheus response is missing data")
+        data = payload["data"]
+        if not isinstance(data, Mapping):
+            raise _PrometheusResponseError("Prometheus response data must be an object")
+
+        if "result" not in data:
+            raise _PrometheusResponseError("Prometheus response data is missing result")
+        result = data["result"]
+        if not isinstance(result, list):
+            raise _PrometheusResponseError("Prometheus response result must be a list")
         if not result:
             return MetricValue(name=metric_name, value=None, queried_at=queried_at)
 
-        value_pair = result[0].get("value")
-        if not isinstance(value_pair, list) or len(value_pair) < 2:
-            raise ValueError("Prometheus result has invalid value")
+        first_result = result[0]
+        if not isinstance(first_result, Mapping):
+            raise _PrometheusResponseError(
+                "Prometheus response first result must be an object"
+            )
+        if "value" not in first_result:
+            raise _PrometheusResponseError("Prometheus result is missing value")
+        value_pair = first_result["value"]
+        if not isinstance(value_pair, (list, tuple)) or len(value_pair) < 2:
+            raise _PrometheusResponseError("Prometheus result has invalid value")
 
         query_timestamp = _to_float_or_none(value_pair[0])
-        value = _to_float_or_none(value_pair[1])
-        if value is None or not math.isfinite(value):
+        try:
+            value = float(value_pair[1])
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise _PrometheusResponseError(
+                "Prometheus result value must be numeric"
+            ) from exc
+        if not math.isfinite(value):
             return MetricValue(
                 name=metric_name,
                 value=None,
@@ -419,5 +468,5 @@ def _format_iso(value: datetime) -> str:
 def _to_float_or_none(value: Any) -> float | None:
     try:
         return float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None

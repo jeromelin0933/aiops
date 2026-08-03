@@ -1,0 +1,18 @@
+runtime:
+  tick_seconds: 1.0
+
+pipelines:
+  log_event_detection:
+    enabled: true
+    config_path: "configs/event_detection.yml"
+    interval_seconds: 5.0
+
+  metrics_threshold_detection:
+    enabled: true
+    config_path: "configs/thresholds.yaml"
+    interval_seconds: 15.0
+
+  metrics_iforest_detection:
+    enabled: true
+    config_path: "configs/metrics_iforest.yaml"
+    interval_seconds: 15.0
