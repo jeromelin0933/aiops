@@ -1,6 +1,7 @@
 import json
 from copy import deepcopy
 from datetime import datetime, timezone
+from urllib.error import HTTPError
 
 import pytest
 import yaml
@@ -209,7 +210,7 @@ def test_metrics_fetcher_non_finite_result_is_unavailable(raw_value):
     assert not value.is_available
 
 
-def test_metrics_fetcher_errors_become_unavailable_metric():
+def test_metrics_fetcher_timeout_becomes_unavailable_metric():
     def failing_http_client(_url, _timeout):
         raise TimeoutError("timeout")
 
@@ -222,6 +223,32 @@ def test_metrics_fetcher_errors_become_unavailable_metric():
     assert not value.is_available
 
 
+def test_metrics_fetcher_connection_error_becomes_unavailable_metric():
+    def failing_http_client(_url, _timeout):
+        raise ConnectionError("network unavailable")
+
+    fetcher = MetricsFetcher("http://localhost:9090", http_client=failing_http_client)
+
+    value = fetcher.fetch_one("system_memory_usage_pct")
+
+    assert value.value is None
+    assert "network unavailable" in value.error
+    assert not value.is_available
+
+
+def test_metrics_fetcher_http_error_becomes_unavailable_metric():
+    def failing_http_client(url, _timeout):
+        raise HTTPError(url, 503, "Service Unavailable", hdrs=None, fp=None)
+
+    fetcher = MetricsFetcher("http://localhost:9090", http_client=failing_http_client)
+
+    value = fetcher.fetch_one("system_memory_usage_pct")
+
+    assert value.value is None
+    assert "503" in value.error
+    assert not value.is_available
+
+
 def test_metrics_fetcher_invalid_json_becomes_unavailable_metric():
     fetcher = MetricsFetcher("http://localhost:9090", http_client=lambda _u, _t: "{")
 
@@ -229,6 +256,90 @@ def test_metrics_fetcher_invalid_json_becomes_unavailable_metric():
 
     assert value.value is None
     assert value.error
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param([], id="payload-not-mapping"),
+        pytest.param({}, id="status-missing"),
+        pytest.param({"status": "error"}, id="status-not-success"),
+        pytest.param({"status": "success"}, id="data-missing"),
+        pytest.param({"status": "success", "data": []}, id="data-not-mapping"),
+        pytest.param(
+            {"status": "success", "data": {}},
+            id="result-missing",
+        ),
+        pytest.param(
+            {"status": "success", "data": {"result": {}}},
+            id="result-not-list",
+        ),
+        pytest.param(
+            {"status": "success", "data": {"result": ["invalid"]}},
+            id="first-result-not-mapping",
+        ),
+        pytest.param(
+            {"status": "success", "data": {"result": [{"metric": {}}]}},
+            id="value-missing",
+        ),
+        pytest.param(
+            {"status": "success", "data": {"result": [{"value": [1]}]}},
+            id="value-invalid-structure",
+        ),
+        pytest.param(
+            {
+                "status": "success",
+                "data": {"result": [{"value": [1720000000.0, "invalid"]}]},
+            },
+            id="value-not-numeric",
+        ),
+    ],
+)
+def test_metrics_fetcher_malformed_response_becomes_unavailable_metric(payload):
+    fetcher = MetricsFetcher(
+        "http://localhost:9090", http_client=lambda _u, _t: payload
+    )
+
+    value = fetcher.fetch_one("system_memory_usage_pct")
+
+    assert value.value is None
+    assert value.error
+    assert not value.is_available
+
+
+@pytest.mark.parametrize(
+    ("exception_type", "message"),
+    [
+        (AttributeError, "client bug"),
+        (TypeError, "unexpected client contract"),
+    ],
+)
+def test_metrics_fetcher_unexpected_client_error_propagates(exception_type, message):
+    def failing_http_client(_url, _timeout):
+        raise exception_type(message)
+
+    fetcher = MetricsFetcher("http://localhost:9090", http_client=failing_http_client)
+
+    with pytest.raises(exception_type, match=message):
+        fetcher.fetch_one("system_memory_usage_pct")
+
+
+def test_metrics_fetcher_unexpected_parser_runtime_error_propagates(monkeypatch):
+    fetcher = MetricsFetcher(
+        "http://localhost:9090",
+        http_client=lambda _u, _t: {
+            "status": "success",
+            "data": {"result": []},
+        },
+    )
+
+    def failing_parser(_metric_name, _queried_at, _payload):
+        raise RuntimeError("parser bug")
+
+    monkeypatch.setattr(fetcher, "_metric_value_from_payload", failing_parser)
+
+    with pytest.raises(RuntimeError, match="parser bug"):
+        fetcher.fetch_one("system_memory_usage_pct")
 
 
 @pytest.mark.parametrize(
@@ -390,6 +501,37 @@ def detector_config(tmp_path):
     config = deepcopy(BASE_CONFIG)
     config["output"]["event_store_path"] = str(tmp_path / "unused.jsonl")
     return write_config(tmp_path, config)
+
+
+def test_detector_run_once_returns_empty_for_recoverable_unavailable_metrics(tmp_path):
+    def failing_http_client(_url, _timeout):
+        raise TimeoutError("timeout")
+
+    detector = MetricsThresholdDetector(
+        detector_config(tmp_path),
+        fetcher=MetricsFetcher(
+            "http://localhost:9090", http_client=failing_http_client
+        ),
+        store=EventStore(tmp_path / "events.jsonl"),
+    )
+
+    assert detector.run_once() == []
+
+
+def test_detector_run_once_propagates_unexpected_fetcher_error(tmp_path):
+    def failing_http_client(_url, _timeout):
+        raise AttributeError("client bug")
+
+    detector = MetricsThresholdDetector(
+        detector_config(tmp_path),
+        fetcher=MetricsFetcher(
+            "http://localhost:9090", http_client=failing_http_client
+        ),
+        store=EventStore(tmp_path / "events.jsonl"),
+    )
+
+    with pytest.raises(AttributeError, match="client bug"):
+        detector.run_once()
 
 
 def test_detector_run_once_fetches_evaluates_writes_and_returns_events(tmp_path):
