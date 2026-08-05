@@ -8,9 +8,9 @@
 |---|---|
 | Document ID | PRD-002 |
 | Document Name | Event Detection |
-| Version | 1.1 |
+| Version | 1.2 |
 | Status | Draft |
-| Date | 2026-07-26 |
+| Date | 2026-08-05 |
 | Author | 林子豪（PM） |
 | Related Documents | ADR-001、PRD-001、DDS-001 |
 
