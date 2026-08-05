@@ -17,6 +17,7 @@
 | Version | Date | Change |
 |---|---|---|
 | 1.1 | 2026-07-26 | 明確定義 Metrics Threshold 與 Metrics Isolation Forest 雙軌分工；SPEC-003 v1.0 限定 QPS；新增 `general_metrics_anomaly`；定義 DB Pool 為僅觀測指標；補充 S6 Metrics 驗收條件。 |
+| 1.2 | 2026-08-05 | 對齊 SPEC-002 v1.3 Threshold 邊界規則；將 S2 Latency 與 S3 Memory 觸發條件明確修正為大於或等於門檻。 |
 ---
 
 ## 1. 文件目的
@@ -185,7 +186,7 @@ Event Detection 必須能正確偵測全部六個劇本的異常，不得遺漏�
 
 | 項目 | 規格 |
 |---|---|
-| 觸發條件 | `api_p95_latency_ms` 超過 3000ms |
+| 觸發條件 | `api_p95_latency_ms` 達到或超過 3000ms |
 | Event Type | `high_latency_detected` |
 | Detection Method | Threshold |
 
@@ -203,7 +204,7 @@ Metrics Detection：
 
 | 項目 | 規格 |
 |---|---|
-| 觸發條件 | `system_memory_usage_pct` 超過 90% |
+| 觸發條件 | `system_memory_usage_pct` 達到或超過 90% |
 | Event Type | `high_memory_detected` |
 | Detection Method | Threshold |
 
