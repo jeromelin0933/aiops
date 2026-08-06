@@ -11,7 +11,7 @@
 | Document ID | SPEC-004 |
 | Document Name | Event Detection Runner |
 | Version | 1.0 |
-| Status | Ready for Implementation |
+| Status | Implemented |
 | Date | 2026-07-31 |
 | Author | 林子豪（PM） |
 | Assignee | 富裕 |

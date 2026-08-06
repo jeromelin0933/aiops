@@ -9,7 +9,7 @@
 | Document ID | PRD-002 |
 | Document Name | Event Detection |
 | Version | 1.2 |
-| Status | Draft |
+| Status | Approved |
 | Date | 2026-08-05 |
 | Author | 林子豪（PM） |
 | Related Documents | ADR-001、PRD-001、DDS-001 |
@@ -17,7 +17,7 @@
 | Version | Date | Change |
 |---|---|---|
 | 1.1 | 2026-07-26 | 明確定義 Metrics Threshold 與 Metrics Isolation Forest 雙軌分工；SPEC-003 v1.0 限定 QPS；新增 `general_metrics_anomaly`；定義 DB Pool 為僅觀測指標；補充 S6 Metrics 驗收條件。 |
-| 1.2 | 2026-08-05 | 對齊 SPEC-002 v1.3 Threshold 邊界規則；將 S2 Latency 與 S3 Memory 觸發條件明確修正為大於或等於門檻。 |
+| 1.2 | 2026-08-06 | 對齊 SPEC-002 v1.3 Threshold 邊界規則；將 S2 Latency 與 S3 Memory 觸發條件明確修正為大於或等於門檻。；經 PM 確認後將文件狀態更新為 Approved。 |
 ---
 
 ## 1. 文件目的

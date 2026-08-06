@@ -32,3 +32,13 @@ events/
 
 # Metrics Isolation Forest runtime model
 models/*.pkl
+
+# ==========================
+# Test Cache
+# ==========================
+.pytest_cache/
+
+# ==========================
+# SPEC-005 Validation Reports
+# ==========================
+reports/spec005/
