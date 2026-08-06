@@ -11,7 +11,7 @@
 | Document ID | SPEC-003 |
 | Document Name | Metrics Isolation Forest Detection |
 | Version | 1.0 |
-| Status | Ready for Implementation |
+| Status | Implemented |
 | Date | 2026-07-26 |
 | Author | 林子豪（PM） |
 | Assignee | Tako |
