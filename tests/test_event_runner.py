@@ -185,7 +185,7 @@ def _config(*, min_log_count=1, cooldown_seconds=60):
         "event": {"cooldown_seconds": cooldown_seconds},
         "output": {"model_path": "unused.pkl", "event_store_path": "unused.jsonl"},
         "anomaly": {
-            "score_threshold": -0.05,
+            "score_threshold": -0.01,
             "confidence_high_threshold": -0.3,
             "confidence_medium_threshold": -0.1,
         },

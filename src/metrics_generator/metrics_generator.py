@@ -1,55 +1,69 @@
-import time
-import random
-import threading
-from prometheus_client import start_http_server, Gauge
+"""SPEC-005 Prometheus metrics generator with exactly one series per metric."""
 
-# 定義 Prometheus 指標
-METRIC_MEMORY = Gauge('system_memory_usage_pct', 'Memory usage percentage', ['service_name'])
-METRIC_LATENCY = Gauge('api_p95_latency_ms', 'p95 API Latency', ['service_name', 'downstream_service'])
-METRIC_QPS = Gauge('api_requests_per_sec', 'API Requests per second', ['service_name'])
-METRIC_DB_POOL = Gauge('db_pool_active_connections', 'Active DB pool connections')
+from __future__ import annotations
 
-# 全域狀態
-current_scenario = None
-memory_leak_pool = 58.0
+import math
+from typing import Any
 
-def metrics_worker():
-    global current_scenario, memory_leak_pool
-    print("🟢 [Metrics] Prometheus Exporter 已啟動於 Port 8000")
-    
-    while True:
-        # 常態基線
-        mem_pct = round(random.uniform(55, 60), 2)
-        qps = random.randint(5, 15)
-        db_latency = random.randint(15, 30)
-        
-        if current_scenario == "2": # DB 卡頓
-            db_latency = random.randint(4500, 5500)
-        elif current_scenario == "3": # OOM[cite: 3]
-            memory_leak_pool += random.uniform(5.0, 10.0)
-            if memory_leak_pool >= 100.0: memory_leak_pool = 60.0
-            mem_pct = round(memory_leak_pool, 2)
-        elif current_scenario == "6": # 流量打爆[cite: 3]
-            qps = random.randint(250, 320)
-        elif current_scenario is None:
-            memory_leak_pool = 58.0
+from prometheus_client import Gauge, start_http_server
 
-        # 更新指標數值
-        METRIC_MEMORY.labels(service_name="payment-service").set(mem_pct)
-        METRIC_QPS.labels(service_name="gateway-service").set(qps)
-        METRIC_LATENCY.labels(service_name="payment-service", downstream_service="core-db").set(db_latency)
-        METRIC_DB_POOL.set(random.randint(20, 80))
-        
-        time.sleep(1.0) # PRD 雖定 15s 抓取，但內部狀態每秒更新以求精準[cite: 3]
+from src.scenario_runtime.schema import ScenarioId, ScenarioPhase, ScenarioRuntimeSnapshot
+
+METRIC_MEMORY = Gauge("system_memory_usage_pct", "Mock system memory usage percentage")
+METRIC_LATENCY = Gauge("api_p95_latency_ms", "Mock API p95 latency in milliseconds")
+METRIC_QPS = Gauge("api_requests_per_sec", "Mock API requests per second")
+METRIC_DB_POOL = Gauge("db_pool_active_connections", "Mock active database pool connections")
+
+
+class MetricsGenerator:
+    """Update the four formal gauges; no labels or detector-facing metadata are emitted."""
+
+    def __init__(self, config: Any) -> None:
+        self._config = config
+        self._exporter_started = False
+
+    def start_exporter(self) -> None:
+        if not self._exporter_started:
+            start_http_server(self._config.raw["metrics"]["exporter_port"])
+            self._exporter_started = True
+
+    def values_for(self, snapshot: ScenarioRuntimeSnapshot, rng: Any) -> dict[str, float]:
+        baseline = self._config.raw["metrics"]["baseline"]
+        jitter = self._config.raw["metrics"]["jitter"]
+        def value(name: str, delta_name: str) -> float:
+            delta = float(jitter[delta_name]) if jitter["enabled"] else 0.0
+            return float(baseline[name]) + rng.uniform(-delta, delta)
+        values = {
+            "system_memory_usage_pct": value("system_memory_usage_pct", "memory_max_delta"),
+            "api_p95_latency_ms": value("api_p95_latency_ms", "latency_max_delta"),
+            "api_requests_per_sec": value("api_requests_per_sec", "qps_max_delta"),
+            "db_pool_active_connections": value("db_pool_active_connections", "db_pool_max_delta"),
+        }
+        if snapshot.phase is ScenarioPhase.INJECTING and snapshot.active_scenario is not None:
+            scenario = self._config.scenarios[snapshot.active_scenario]
+            if snapshot.active_scenario is ScenarioId.S2:
+                values["api_p95_latency_ms"] = float(scenario["api_p95_latency_ms"])
+            elif snapshot.active_scenario is ScenarioId.S3:
+                values["system_memory_usage_pct"] = float(scenario["system_memory_usage_pct"])
+            elif snapshot.active_scenario is ScenarioId.S6:
+                values["api_requests_per_sec"] = float(baseline["api_requests_per_sec"]) * float(scenario["qps_spike_multiplier"])
+        return values
+
+    def tick(self, snapshot: ScenarioRuntimeSnapshot, rng: Any) -> None:
+        values = self.values_for(snapshot, rng)
+        if not all(math.isfinite(value) for value in values.values()):
+            raise ValueError("metric values must be finite")
+        METRIC_MEMORY.set(values["system_memory_usage_pct"])
+        METRIC_LATENCY.set(values["api_p95_latency_ms"])
+        METRIC_QPS.set(values["api_requests_per_sec"])
+        METRIC_DB_POOL.set(values["db_pool_active_connections"])
+
+
+def main() -> int:
+    """Keep ``python -m src.metrics_generator.metrics_generator`` usable via the formal runtime."""
+    from scripts.run_mock_runtime import main as runtime_main
+    return runtime_main()
+
 
 if __name__ == "__main__":
-    start_http_server(8000) # 於 port 8000 暴露[cite: 3]
-    threading.Thread(target=metrics_worker, daemon=True).start()
-    
-    while True:
-        print("\n=== Metrics 模擬器 ===")
-        print("[2] DB 卡頓 | [3] OOM 記憶體 | [6] 流量打爆 | [0] 恢復正常 | [q] 退出")
-        choice = input("👉 選擇劇本改變指標: ").strip()
-        if choice in ["2", "3", "6"]: current_scenario = choice
-        elif choice == "0": current_scenario = None
-        elif choice == "q": break
+    raise SystemExit(main())

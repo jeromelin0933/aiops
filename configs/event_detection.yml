@@ -15,8 +15,15 @@ isolation_forest:
   random_state: 42
   max_samples: auto
 
+training:
+  log_model:
+    baseline_fixture_path: tests/fixtures/log_model/normal_baseline.jsonl
+    minimum_window_count: 50
+    window_stride_seconds: 60
+
 anomaly:
-  score_threshold: -0.05
+  # Calibrated deployment threshold from the Phase 6 S1-S6 model audit.
+  score_threshold: -0.01
   confidence_high_threshold: -0.3
   confidence_medium_threshold: -0.1
 

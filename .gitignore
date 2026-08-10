@@ -37,6 +37,7 @@ models/*.pkl
 # Test Cache
 # ==========================
 .pytest_cache/
+.pytest-runtime-basetemp/
 
 # ==========================
 # SPEC-005 Validation Reports

@@ -1,0 +1,66 @@
+version: "1.0"
+
+runtime:
+  tick_seconds: 1.0
+  random_seed: 42
+  recovery_seconds: 60
+  allow_trigger_during_injection: false
+  allow_trigger_during_recovery: false
+
+log:
+  output_path: "logs/aiops.json.log"
+  baseline_interval_seconds: 1.0
+  baseline_records_per_tick: 1
+
+metrics:
+  exporter_port: 8000
+  update_interval_seconds: 1.0
+  baseline:
+    system_memory_usage_pct: 55.0
+    api_p95_latency_ms: 250.0
+    api_requests_per_sec: 10.0
+    db_pool_active_connections: 8.0
+  jitter:
+    enabled: true
+    memory_max_delta: 2.0
+    latency_max_delta: 50.0
+    qps_max_delta: 1.5
+    db_pool_max_delta: 2.0
+
+background_errors:
+  enabled: false
+
+scenarios:
+  S1:
+    duration_seconds: 5
+    unauthorized_count: 50
+    source_ip: "192.0.2.10"
+    user_id: "user_mock_001"
+  S2:
+    duration_seconds: 45
+    trace_id_prefix: "trace-s2"
+    api_p95_latency_ms: 4500.0
+    downstream_service: "core-db"
+  S3:
+    duration_seconds: 45
+    system_memory_usage_pct: 95.0
+  S4:
+    duration_seconds: 10
+    external_service: "external-bank-gateway"
+    status_code: 500
+  S5:
+    duration_seconds: 10
+    affected_service_count: 5
+    downstream_service: "core-db"
+    error_type: "ConnectionRefused"
+  S6:
+    duration_seconds: 45
+    rate_limit_log_count: 55
+    target_service: "sms-gateway"
+    qps_spike_multiplier: 4.0
+
+validation:
+  prometheus_scrape_interval_seconds: 15
+  metrics_detection_poll_seconds: 15
+  safety_margin_seconds: 15
+  require_qps_warmup: true
