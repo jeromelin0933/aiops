@@ -1,6 +1,6 @@
 # SPEC-003：Metrics Isolation Forest Detection
 
-## Software Design Specification v1.0
+## Software Design Specification v1.1
 
 ---
 
@@ -10,15 +10,19 @@
 |---|---|
 | Document ID | SPEC-003 |
 | Document Name | Metrics Isolation Forest Detection |
-| Version | 1.0 |
+| Version | 1.1 |
 | Status | Implemented |
-| Date | 2026-07-26 |
+| Date | 2026-08-12 |
 | Author | 林子豪（PM） |
 | Assignee | Tako |
 | Branch Metadata | `feature/metrics-iforest` |
-| Related PRD | PRD-001 v3.1、PRD-002 v1.1 |
+| Related PRD | PRD-001 v3.2、PRD-002 current Approved version（v1.3） |
 | Related DDS | DDS-001 |
-| Related SPEC | SPEC-001、SPEC-002 v1.3、SPEC-004 |
+| Related SPEC | SPEC-001、SPEC-002 v1.4、SPEC-004 |
+
+| Version | Date | Change |
+|---|---|---|
+| 1.1 | 2026-08-12 | 更新 PRD-002 reference、釐清 config-driven request spike classification wording，並將 SPEC-005 integration 未來式更新為已完成的 non-normative validation evidence；Metrics IForest gate 與 fallback contract 不變。 |
 
 > 本文件是 Metrics Isolation Forest Detection 的正式工程契約。Git 操作、Codex CLI 操作方式及完整 AI Coding Agent Prompt 不屬於本 SPEC，由 PM 透過獨立工作文件提供。
 
@@ -44,7 +48,7 @@ Isolation Forest
        Rule Classifier
        判斷「是否為已知 Request Spike」
               │
-              ├── spike_ratio >= 3.0
+              ├── current_qps / baseline_mean >= configured request_spike_ratio
               │      → request_spike_detected
               │
               └── 其他異常
@@ -55,9 +59,9 @@ Isolation Forest
 
 ## 0.1 規格優先序
 
-1. PRD-002 v1.1 第 5 章 Event Schema 與正式 Event Type。
+1. PRD-002 current Approved version 第 5 章 Event Schema 與正式 Event Type。
 2. 本 SPEC-003 的模組邊界、介面、資料結構與驗收標準。
-3. PRD-001 v3.1 的整體架構與產品範圍。
+3. PRD-001 v3.2 的整體架構與產品範圍。
 4. SPEC-001、SPEC-002 已完成的共用介面與既有測試。
 
 若文件、既有程式碼或測試之間出現無法同時滿足的衝突，實作者與 AI Coding Agent 必須停止擴大修改並回報 PM，不得自行重新定義需求。
@@ -65,7 +69,7 @@ Isolation Forest
 ## 0.2 核心決策
 
 1. 使用 Hybrid Pipeline：Isolation Forest 負責異常判定，Rule Classifier 負責已知事件分類。
-2. SPEC-003 v1.0 只處理 `api_requests_per_sec`。
+2. SPEC-003 v1.1 只處理 `api_requests_per_sec`。
 3. 正式 Runtime 使用 Prometheus `query_range`，不使用 Instant Query 作為模型推論輸入。
 4. 已知 QPS Spike 輸出 `request_spike_detected`。
 5. 未知 QPS Window 異常輸出 `general_metrics_anomaly`。
@@ -74,8 +78,8 @@ Isolation Forest
 8. 模型檔由 Training Script 產生，不納入版本控制。
 9. 模型不存在時預設 Fail Fast，不得無聲退化為 Rule-only。
 10. 單元測試、模型測試及必要驗收不得依賴 Docker、真實 Prometheus、Metrics Generator 或網路。
-11. 現有 Log／Metrics Generator 的驗證與修改延後至 SPEC-004 完成後統一處理。
-12. `db_pool_active_connections` 本階段僅收集與視覺化，不納入 SPEC-003 v1.0。
+11. Log／Metrics Generator integration 已由 SPEC-005 v1.2 完成驗證；其結果僅作 non-normative evidence。
+12. `db_pool_active_connections` 本階段僅收集與視覺化，不納入 SPEC-003 v1.1。
 
 ---
 
@@ -144,14 +148,14 @@ SPEC-002 與 SPEC-003 是互補且彼此獨立的 Metrics Detection Pipeline：
 
 開始實作前，工作分支內容應包含：
 
-- PRD-001 v3.1。
-- PRD-002 v1.1。
+- PRD-001 v3.2。
+- PRD-002 current Approved version（v1.3）。
 - SPEC-001 已完成成果。
-- SPEC-002 v1.3 已完成成果。
+- SPEC-002 v1.4 已完成成果。
 - DDS-001 已建立的 Prometheus、Metrics Generator 與 Grafana 基礎。
 - `requirements.txt` 已包含 `requests`。
 
-本 SPEC 不要求目前 Metrics Generator 已完成最終情境驗證；Generator Validation 與 Patch 由 PM 在 SPEC-004 完成後另行安排。
+Metrics Generator final integration validation 已由 SPEC-005 v1.2 完成；該 controller 與 Generator 行為不改變本 Detector requirement。
 
 ## 2.2 既有共用介面
 
@@ -377,6 +381,11 @@ output:
   event_store_path: "events/event_store.jsonl"
 ```
 
+`3.0` 是目前 Approved configuration／baseline value；正式 algorithm contract 為
+`current_qps / baseline_mean >= configured request_spike_ratio`，不得在 Python
+hardcode 為不可變常數。SPEC-005 scenario generator 的 4x 值只用於產生驗證輸入，
+不是 classification requirement。
+
 ## 5.1 Config Loader
 
 ```python
@@ -482,7 +491,7 @@ requests.get(
 
 ## 6.4 多 Series Response
 
-SPEC-003 v1.0 預期只回傳一個 Series。若超過一個 Series：
+SPEC-003 v1.1 預期只回傳一個 Series。若超過一個 Series：
 
 - 不得任意取第一個 Series。
 - 不得將不同 Label Series 自行相加或平均。
@@ -1172,7 +1181,7 @@ severity = HIGH
 classification_reason = current_qps_at_least_3x_recent_baseline
 ```
 
-剛好 3.0 倍必須分類為 Known Request Spike。
+上述 `current_qps_at_least_3x_recent_baseline` 是目前 config value `3.0` 的 evidence wording；正式判斷仍為 `current_qps / baseline_mean >= configured request_spike_ratio`。在目前 Approved configuration 下，剛好 3.0 倍必須分類為 Known Request Spike。
 
 ## 13.5 Unknown QPS Window Anomaly
 
@@ -1199,7 +1208,7 @@ confidence < 0.8  → MEDIUM
 
 ## 13.6 Rule-only 禁止規則
 
-`spike_ratio >= 3.0` 但 Isolation Forest 判定正常時，不得輸出任何 Event。
+即使 `current_qps / baseline_mean >= configured request_spike_ratio`，若 Isolation Forest 判定正常，仍不得輸出任何 Event。
 
 ---
 
@@ -1750,11 +1759,24 @@ python scripts/validate_metrics_iforest.py
 
 ---
 
-# 22. Deferred Integration
+# 22. Completed Integration Evidence（Non-normative）
 
-## 22.1 本次交付不要求真實 Generator 整合
+## 22.1 SPEC-005 v1.2 Final Validation
 
-本次必要完成條件以：
+SPEC-005 v1.2 已完成 S6 final validation，evidence flow 為：
+
+```text
+baseline samples ready
+→ QPS spike satisfies configured request_spike_ratio
+→ EventDetectionRunner
+→ request_spike_detected
+→ EventStore persistence evidence
+→ PASS
+```
+
+此為已完成的 integration validation evidence，不是 MetricsIForestDetector 的新 requirement；validation controller 行為亦不屬於本 Detector contract。原有正式 gate 保持 `label == -1 AND score <= configured threshold`，未達 configured request spike ratio 的 model anomaly 仍 fallback 為 `general_metrics_anomaly`。
+
+既有模組交付條件以：
 
 - Mock Prometheus Response。
 - 固定 Baseline Fixture。
@@ -1765,11 +1787,11 @@ python scripts/validate_metrics_iforest.py
 
 為準。
 
-不得因目前 Generator 尚未完成最終驗證而延後 SPEC-003 核心實作，也不得由 Tako 修改 Generator 使測試通過。
+上述既有模組交付條件與 Detector contract 不因 integration evidence 而改變。
 
-## 22.2 SPEC-004 完成後的整合階段
+## 22.2 已完成的整合範圍
 
-待 SPEC-004 Event Runner 完成後，由 PM 另行安排：
+SPEC-005 v1.2 已執行：
 
 ```text
 Generator Validation
@@ -1779,7 +1801,7 @@ Generator Validation
 → 六大情境端到端驗收
 ```
 
-該階段可能驗證：
+該階段已驗證：
 
 1. 正常 QPS 不輸出 Event。
 2. S6 QPS Spike 產生 `request_spike_detected`。
@@ -1787,7 +1809,7 @@ Generator Validation
 4. Log `rate_limit_storm` 與 Metrics `request_spike_detected` 可被後續 Correlation 收斂。
 5. Event Runner 可獨立呼叫三條 Detection Pipeline。
 
-上述真實環境整合不屬於 Tako 本次必要交付，也不允許提前修改 SPEC-004 或 Generator。
+上述結果是 integration evidence，不將 validation controller 行為升級為 Metrics detector requirement。
 
 ---
 

@@ -1,13 +1,14 @@
 # AIOps 智慧維運平台
-## 產品需求文件（PRD）v3.1
+## 產品需求文件（PRD）v3.2
 
 > **文件狀態**：執行中
-> **最後更新**：2026-07-11
+> **最後更新**：2026-08-12
 > **適用對象**：東吳大學資管系專題四人組
 > **對應文件**：SDD v0.1、ADR-001
 | Version | Date | Change |
 |---|---|---|
 | 3.1 | 2026-07-26 | 釐清 Metrics Threshold 與 Isolation Forest 雙軌分工；SPEC-003 v1.0 限定 QPS；新增未知 QPS Event 說明；DB Pool 定義為僅觀測與未來擴充。 |
+| 3.2 | 2026-08-12 | Post-SPEC-005 Cross-Document Governance Batch 2B：依 PRD-002 v1.3 與 SPEC-001～004 正式契約同步 S1、S3、S6、模組二驗收與 G3 里程碑；補充 SPEC-005 v1.2 非規範性驗證證據及相關文件。整體平台狀態維持執行中。 |
 
 ---
 
@@ -87,9 +88,10 @@ Logs ─────────────────┐
 | 項目 | 說明 |
 |---|---|
 | 場景描述 | 駭客針對單一帳號暴力嘗試密碼，觸發系統保護機制 |
-| 產生資料 | 50 筆 `401 Unauthorized` + 1 筆帳號鎖定 Log |
+| 正式偵測契約 | 同一 `source_ip` 在 60 秒內出現 ≥ 10 筆 `status_code=401`，分類為 `brute_force_detected`；≥ 10 是 Detector classification threshold |
+| Approved Demo／E2E Input | 同一 `source_ip` 在 60 秒內 exactly 50 筆 `status_code=401`；exactly 50 是核准的驗證輸入，不是 Detector 門檻，且不包含額外 account-lock Log |
 | 收斂邏輯 | 相同 IP + 極短時間窗 → 壓縮為 1 個安全威脅 Incident |
-| 展示價值 | AI 能識別「高頻同源」特徵，避免工程師被 51 筆告警淹沒 |
+| 展示價值 | AI 能識別「高頻同源」特徵；產品層級上可支援後續帳號保護機制，但 account-lock Log 不是本劇本的正式 Event Detection input |
 | 涉及欄位 | `source_ip`、`user_id`、`status_code`、`timestamp` |
 
 ### 劇本二：資料庫卡頓引發 API 雪崩（跨服務收斂）⭐ 最經典
@@ -106,8 +108,9 @@ Logs ─────────────────┐
 
 | 項目 | 說明 |
 |---|---|
-| 場景描述 | AP 記憶體滿載 → OOM 崩潰 → 前端出現 502 Bad Gateway |
-| 產生資料 | `memory_usage=95%` 警告 → `OutOfMemoryError` → `502` Log |
+| 場景描述 | AP 記憶體滿載 → OOM 崩潰；前端出現 502 Bad Gateway 是可能的 downstream／user-visible symptom |
+| 正式偵測契約 | Log 中的 `OOM`／`OutOfMemoryError` 證據產生 `oom_crash_detected`；`system_memory_usage_pct >= 90%` 產生 `high_memory_detected` |
+| Validation Input／Evidence | SPEC-005 Demo 使用 `memory=95%` 作為驗證輸入；95 不是永久門檻。502 不是 required detector trigger、required generated Log 或 required acceptance condition |
 | 收斂邏輯 | 基礎設施警告 + 應用崩潰 → 1 個 Incident |
 | 展示價值 | AI 能看穿 502 的本質是記憶體洩漏，而非網路問題 |
 | 涉及欄位 | `memory_usage_pct`（Metrics）、`error_type`、`status_code` |
@@ -136,8 +139,11 @@ Logs ─────────────────┐
 
 | 項目 | 說明 |
 |---|---|
-| 場景描述 | 行銷推播打爆簡訊閘道器（SMS Gateway）每秒發送額度 |
-| 產生資料 | 1 秒內 50 筆以上 `429 Too Many Requests` Log |
+| 場景描述 | 同一 `target_service` 發生 HTTP 429 storm，並伴隨 QPS 異常 |
+| Log Detector 契約 | 同一 `target_service` 在 60 秒內出現 ≥ 20 筆 `status_code=429`，分類為 `rate_limit_storm`；≥ 20 是 Detector classification threshold |
+| Approved Demo／E2E Input | 同一 `target_service` 在 60 秒內 exactly 55 筆 `status_code=429`；exactly 55 是核准的驗證輸入，不是 Detector 門檻 |
+| Metrics IForest 契約 | Isolation Forest 判定 QPS Window 異常，且 `current_qps / baseline_mean >= configured request_spike_ratio`，分類為 `request_spike_detected`；ratio 維持 config-driven，3.0 與 SPEC-005 的 4x scenario generation value 均不是不可變 algorithm requirement |
+| Event Detection 預期證據 | `rate_limit_storm` + `request_spike_detected` |
 | 收斂邏輯 | 時間窗冷卻期機制 → 靜默折疊，只觸發 1 次 LLM 分析 |
 | 展示價值 | 展示「高頻同質性垃圾告警的靜默與折疊」，保護 LLM API 成本 |
 | 涉及欄位 | `status_code=429`、`target_service`、`rate_limit_quota` |
@@ -160,7 +166,7 @@ Logs ─────────────────┐
 > 並可由 Prometheus 收集及於 Grafana 顯示，
 > 但本階段僅作為觀測與未來擴充指標，
 > 不納入 Metrics Threshold Detection 或
-> Metrics Isolation Forest Detection v1.0 的正式 Event Detection 範圍。
+> Metrics Isolation Forest Detection v1.1 的正式 Event Detection 範圍。
 
 **Log Schema 必要欄位：**
 
@@ -201,10 +207,11 @@ Logs ─────────────────┐
 | Log 異常偵測 | 以 Isolation Forest 判斷 Log Window 是否異常，再由 Rule Classifier 分類已知情境；無法分類時輸出 `general_log_anomaly`。 |
 | Metrics 雙軌原則 | Metrics Threshold Detection 與 Metrics Isolation Forest Detection 為互補且彼此獨立的雙軌機制；任一 Pipeline 判定異常，即可各自產生標準化 Event。 |
 | Metrics Threshold Detection | 對 `api_p95_latency_ms` 與 `system_memory_usage_pct` 執行靜態門檻判斷。 |
-| Metrics Isolation Forest Detection | SPEC-003 v1.0 對 `api_requests_per_sec` 建立 QPS 動態基準，輸出 `request_spike_detected` 或 `general_metrics_anomaly`。 |
+| Metrics Isolation Forest Detection | SPEC-003 v1.1 對 `api_requests_per_sec` 建立 QPS 動態基準，輸出 `request_spike_detected` 或 `general_metrics_anomaly`。 |
 | DB Pool | `db_pool_active_connections` 本階段僅收集與視覺化，不納入正式 Event Detection。 |
 | 偵測週期 | Event Runner 整合後，由各 Detection Pipeline 依設定週期執行。 |
 | 輸出格式 | 所有 Detection Pipeline 輸出符合 PRD-002 第 5 章的 Event。 |
+| G3 里程碑 | Event Detection implementation／validation completed：SPEC-001～004 Implemented；SPEC-005 v1.2 validation completed，結果為 PASS WITH KNOWN LIMITATIONS。此里程碑完成不代表 AIOps Platform 整體完成。 |
 > Threshold 與 Isolation Forest 不互相取代或排斥。
 > 同一事故可能同時產生不同來源的 Metrics Event，
 > 後續再由 Event Runner 與 Alert Correlation Engine 進行整理與收斂。
@@ -436,13 +443,21 @@ main        ← 只有 PM 可以 merge，發表前才更新
 - [ ] 能觸發六大劇本，各劇本的 Log 特徵在 Grafana Loki 中可見
 - [ ] Prometheus 能看到各劇本對應的 Metrics 異常
 
-### 模組二（偵測 + 收斂 + Incident）
-- [ ] 劇本一：50+ 筆 401 收斂為 1 個 Security Threat Incident
-- [ ] 劇本二：3 筆不同層 Log（同 trace_id）收斂為 1 個 Incident
-- [ ] 劇本三：Metrics 警告 + 應用崩潰收斂為 1 個 Incident
-- [ ] 劇本四：外部依賴斷線獨立識別為外部服務 Incident
-- [ ] 劇本五：47 筆不同服務 Log 收斂為 1 個核心 DB Incident
-- [ ] 劇本六：50+ 筆 429 冷卻折疊，只觸發 1 次 LLM
+### 模組二（Event Detection + 後續收斂與 Incident）
+
+#### Event Detection acceptance
+- [ ] 劇本一：使用 exactly 50 筆核准 Demo／E2E 401 輸入產生 `brute_force_detected`；正式分類門檻維持同一 `source_ip`、60 秒內 ≥ 10 筆 401
+- [ ] 劇本二：產生 `cross_service_failure` + `high_latency_detected`
+- [ ] 劇本三：產生 `oom_crash_detected` + `high_memory_detected`
+- [ ] 劇本四：產生 `external_dependency_failure`
+- [ ] 劇本五：產生 `downstream_cascade_failure`
+- [ ] 劇本六：使用 exactly 55 筆核准 Demo／E2E 429 輸入產生 `rate_limit_storm` + `request_spike_detected`；正式 Log 分類門檻維持同一 `target_service`、60 秒內 ≥ 20 筆 429，QPS ratio 維持 config-driven
+
+#### 後續 Incident／Correlation／RCA／LLM pipeline acceptance
+- [ ] 各劇本的 Event 由後續 Correlation／Incident pipeline 正確收斂為對應 Incident
+- [ ] RCA／LLM 行為依模組三驗收；不得取代上述 Event Detection acceptance
+
+> Event Detection milestone 已完成 implementation／validation，不表示 Incident、Correlation、RCA 或 LLM 已完成驗收。
 
 ### 模組三（RAG + LLM）
 - [ ] 各劇本 RCA 報告有正確的根因假說（對應各劇本場景）
@@ -490,6 +505,14 @@ main        ← 只有 PM 可以 merge，發表前才更新
 - 預測性告警（Predictive Alert）
 - 自動修復（Auto Remediation）
 - 多租戶架構（Multi-tenant）
+
+---
+
+## 13. 相關文件與驗證證據
+
+正式需求與實作契約依治理優先序參照：PRD-002 v1.3、SPEC-001 v2.2、SPEC-002 v1.4、SPEC-003 v1.1、SPEC-004 v1.1。
+
+SPEC-005 v1.2 僅作 Implementation／Validation Evidence（non-normative）：Phase 5 Observability PASS、Phase 6 S1–S6 PASS、E2E Exit Code 0、Phase 7 PASS WITH KNOWN LIMITATIONS、Blocking Defects 0。這些結果不新增、取代或放寬正式 product requirement，也不將 observed E2E values 升級為永久門檻。
 
 ---
 

@@ -8,9 +8,9 @@
 |---|---|
 | Document ID | PRD-002 |
 | Document Name | Event Detection |
-| Version | 1.2 |
+| Version | 1.3 |
 | Status | Approved |
-| Date | 2026-08-05 |
+| Date | 2026-08-12 |
 | Author | 林子豪（PM） |
 | Related Documents | ADR-001、PRD-001、DDS-001 |
 
@@ -18,6 +18,7 @@
 |---|---|---|
 | 1.1 | 2026-07-26 | 明確定義 Metrics Threshold 與 Metrics Isolation Forest 雙軌分工；SPEC-003 v1.0 限定 QPS；新增 `general_metrics_anomaly`；定義 DB Pool 為僅觀測指標；補充 S6 Metrics 驗收條件。 |
 | 1.2 | 2026-08-06 | 對齊 SPEC-002 v1.3 Threshold 邊界規則；將 S2 Latency 與 S3 Memory 觸發條件明確修正為大於或等於門檻。；經 PM 確認後將文件狀態更新為 Approved。 |
+| 1.3 | 2026-08-12 | Cross-Document Governance reconciliation：釐清 S1／S6 Detector Contract 與 Demo／E2E Input、補充 SPEC-004 EventStore ownership traceability、更新實作驗證證據、相關文件與 G3 里程碑；既有 Approved requirement semantics 不變。 |
 ---
 
 ## 1. 文件目的
@@ -103,7 +104,7 @@ Event Detection 是 Incident 誕生前的最後一道關口，其輸出品質直
 
 #### Metrics Isolation Forest Detection
 
-SPEC-003 v1.0 僅針對：
+SPEC-003 v1.1 僅針對：
 
 ```text
 api_requests_per_sec
@@ -170,7 +171,8 @@ Event Detection 必須能正確偵測全部六個劇本的異常，不得遺漏�
 | Event Type | `brute_force_detected` |
 | Severity | CRITICAL |
 | 關鍵欄位 | `source_ip`、`user_id`、`status_code` |
-| 預期行為 | 50 筆 401 → 建立 1 個 Event（不是 50 個） |
+| Approved Demo／E2E Input | 同一 `source_ip` 在 60 秒內 exactly 50 筆 `status_code=401`；此數量是驗證輸入，不是 Detector 觸發門檻，且不包含額外 account-lock Log |
+| 預期行為 | 上述 Demo／E2E Input → 建立 1 個 Event（不是 50 個） |
 
 ### S2 DB 慢查詢引發雪崩（Log Detection）
 
@@ -235,22 +237,25 @@ Metrics Detection：
 | Event Type | `rate_limit_storm` |
 | Severity | HIGH |
 | 關鍵欄位 | `target_service`、`rate_limit_quota` |
-| 預期行為 | 55 筆 429 → 建立 1 個 Event（冷卻期機制） |
+| Approved Demo／E2E Input | 同一 `target_service` 在 60 秒內 55 筆 `status_code=429`；此數量是驗證輸入，不是 Detector 觸發門檻 |
+| 預期行為 | 上述 Demo／E2E Input → 建立 1 個 Event（冷卻期機制） |
 
 同時需要 Metrics Isolation Forest Detection 補強：
 | 項目 | 規格 |
 |---|---|
 | 適用 Metric | `api_requests_per_sec` |
-| 觸發條件 | Isolation Forest 判定 QPS Window 異常，且當前 QPS 達近期基準至少 3.0 倍 |
+| 觸發條件 | Isolation Forest 判定 QPS Window 異常，且 `current_qps / baseline_mean >= configured request_spike_ratio` |
 | Event Type | `request_spike_detected` |
 | Event Source | `metrics_iforest_detection` |
 | Detection Method | `isolation_forest` |
 | Severity | HIGH |
 | 預期行為 | 建立 1 筆 `request_spike_detected` Event，並保留 QPS 基準、當前值、Spike Ratio、Window Features 與 Anomaly Score |
 
-Isolation Forest 負責判斷 QPS Window 是否異常；
-Rule Classifier 負責將已判定異常且 Spike Ratio 達 3.0 的行為
-分類為 `request_spike_detected`。
+Isolation Forest 負責判斷 QPS Window 是否異常；Rule Classifier 負責將已判定異常且
+`current_qps / baseline_mean >= configured request_spike_ratio` 的行為分類為
+`request_spike_detected`。目前 Approved configuration／baseline value 為 `3.0`；它不是
+Python hardcode 或不可變 algorithm constant。SPEC-005 的 4x scenario generation value
+僅屬驗證資料設計，不是 classification requirement。
 
 Rule Classifier 不得在 Isolation Forest 判定正常時單獨建立正式 Event。
 
@@ -340,6 +345,8 @@ PRD-001 僅引用本章，不另行維護 Event Schema。
 
 任何 SPEC、程式碼或測試案例不得自行新增、刪除或重新命名本章定義的欄位。若未來需要調整 Event Schema，必須先更新本章，並同步修正所有受影響的 SPEC 文件。
 > ⚠️ 此 Schema 為所有模組的共用契約。一旦確定，任何修改都必須先與 PM 討論並更新本文件後，才能異動程式碼。
+
+Detector pipelines 依 SPEC-004 ownership model 建立 Event、處理 cooldown，並持久化至 EventStore；Event Detection Runner 僅負責協調已啟用的 Detector pipelines，不是 EventStore writer。
 
 ```json
 {
@@ -668,14 +675,14 @@ git branch -D
 
 | 編號 | 驗收項目 |
 |---|---|
-| AC-01 | 觸發 S1（50 筆 401），`event_store.jsonl` 中出現且僅出現 1 筆 `brute_force_detected` Event |
+| AC-01 | 使用 Approved Demo／E2E Input（同一 `source_ip`、60 秒內 exactly 50 筆 401）觸發 S1，`event_store.jsonl` 中出現且僅出現 1 筆 `brute_force_detected` Event；Detector classification threshold 仍為 ≥ 10 筆 |
 | AC-02 | 觸發 S2（同 trace_id 三層 Log），出現 1 筆 `cross_service_failure` Event，含正確 trace_id |
 | AC-02b | 觸發 S2 Metrics 補強時，`api_p95_latency_ms >= 3000ms` 產生 1 筆 `high_latency_detected` Event |
 | AC-03 | 觸發 S3（OOM），出現 `oom_crash_detected` Event；Metrics 達 90% 時出現 `high_memory_detected` Event |
 | AC-04 | 觸發 S4（外部 API 逾時），出現 1 筆 `external_dependency_failure` Event，含 external_service 資訊 |
 | AC-05 | 觸發 S5（50 筆跨服務 Log），出現 1 筆 `downstream_cascade_failure` Event，`triggered_features.common_downstream=core-db` |
 | AC-06 | 觸發 S6（55 筆 429），出現 1 筆 `rate_limit_storm` Event（不是 55 個） |
-| AC-06b | QPS Window 被 Isolation Forest 判定異常，且當前 QPS 達近期基準至少 3.0 倍時，產生 1 筆 `request_spike_detected` Event |
+| AC-06b | QPS Window 被 Isolation Forest 判定異常，且 `current_qps / baseline_mean >= configured request_spike_ratio` 時，產生 1 筆 `request_spike_detected` Event；目前 Approved configuration／baseline value 為 `3.0` |
 | AC-06c | QPS Window 被 Isolation Forest 判定異常，但無法分類為 Request Spike 時，產生 1 筆 `general_metrics_anomaly` Event |
 | AC-06d | Isolation Forest 判定正常時，Rule Classifier 不得單獨建立 `request_spike_detected` 或 `general_metrics_anomaly` |
 | AC-06e | `general_metrics_anomaly` 的正式範圍僅限 `api_requests_per_sec` |
@@ -702,14 +709,21 @@ Alert Correlation & Incident Manager
 └── 冷卻期機制（防止 LLM 被洗版）
 ```
 
-對應的 SPEC 文件（實作細節）將在 PRD-003 確認後產出：
+Event Detection 對應文件現況如下；僅保留必要 traceability：
 
 | SPEC | 內容 |
 |---|---|
-| SPEC-001 | Log Event Detection 實作規格 |
-| SPEC-002 | Metrics Threshold Detection 實作規格 |
-| SPEC-003 | Metrics Isolation Forest Detection 實作規格 |
-| SPEC-004 | Event Runner 整合規格 |
+| SPEC-001 v2.2 | Log Event Detection 實作規格 |
+| SPEC-002 v1.4 | Metrics Threshold Detection 實作規格 |
+| SPEC-003 v1.1 | Metrics Isolation Forest Detection 實作規格 |
+| SPEC-004 v1.1 | Event Runner 整合規格 |
+| SPEC-005 v1.2 | Mock Data Generator Validation and Scenario Alignment；Phase 5／6／7 validation evidence |
+
+### 10.1 Implementation／Validation Evidence（Non-normative）
+
+Event Detection implementation 已由 SPEC-001～SPEC-004 實作，並由 SPEC-005 v1.2 完成 Phase 5／Phase 6／Phase 7 validation。Final evidence：Phase 5 Observability PASS、Phase 6 S1–S6 PASS、E2E Exit Code 0、Phase 7 PASS WITH KNOWN LIMITATIONS、Blocking Defects 0。
+
+本節只記錄 implementation／validation reality，不新增、取代或放寬第 3～9 章的 Requirement／Contract。
 
 ---
 
@@ -719,9 +733,11 @@ Alert Correlation & Incident Manager
 |---|---|
 | G1 Mock Data | ✅ Completed（DDS-001） |
 | G2 Observability Platform | ✅ Completed（DDS-001） |
-| G3 Event Detection | 🔄 In Progress（本文件） |
+| G3 Event Detection | ✅ Implementation／validation completed（SPEC-005 v1.2；PASS WITH KNOWN LIMITATIONS） |
 | G4 Alert Correlation | Planned（PRD-003） |
 | G5 Incident Manager | Planned（PRD-003） |
 | G6 LLM + RAG RCA | Planned（PRD-004） |
 | G7 Dashboard Integration | Planned（PRD-005） |
 | G8 Email Notification | Planned（PRD-005） |
+
+> Governance distinction：PRD-002 Requirement Status 維持 `Approved`；G3 Implementation Reality 為 implemented／validated with known limitations。兩者是不同治理維度。

@@ -1,6 +1,6 @@
 # SPEC-002：Metrics Threshold Detection
 
-## Software Design Specification v1.2（Aligned with PRD-001 / PRD-002 / SPEC-001 / DDS-001）
+## Software Design Specification v1.4（Aligned with PRD-001 / PRD-002 / SPEC-001 / DDS-001）
 
 ---
 
@@ -10,9 +10,9 @@
 |---|---|
 | Document ID | SPEC-002 |
 | Document Name | Metrics Threshold Detection |
-| Version | 1.3 |
+| Version | 1.4 |
 | Status | Implemented |
-| Date | 2026-07-26 |
+| Date | 2026-08-12 |
 | Author | 林子豪（PM） |
 | Assignee | 富裕 |
 | Branch | `feature/metrics-threshold` |
@@ -23,6 +23,7 @@
 | Version | Date | Change |
 |---|---|---|
 | 1.3 | 2026-07-26 | 文件對齊 PRD-001／PRD-002；明確限定 SPEC-003 v1.0 的未知 Metrics 異常為 QPS Window；將 DB Pool 定義為僅收集與視覺化；移除 Git 操作、Agent Prompt 與 Implementation Notes。無程式碼變更。 |
+| 1.4 | 2026-08-12 | 修正標題與 metadata 版本不一致及重複標題；補充 SPEC-004 ownership traceability 與 SPEC-005 v1.2 final integration evidence。Threshold 與 Event Schema contract 不變。 |
 ---
 
 ## 0. 文件目的與設計原則
@@ -53,7 +54,7 @@ Git 操作與 AI Coding Agent Prompt工作指示不屬於本 SPEC，
    `api_requests_per_sec` 的動態基準、Request Spike 與未知 QPS Window 異常，
    屬於 SPEC-003 Metrics Isolation Forest Detection。
 
-   SPEC-003 v1.0 的未知 Metrics 異常能力僅限於
+   SPEC-003 v1.1 的未知 Metrics 異常能力僅限於
    `api_requests_per_sec`，不代表所有 Prometheus Metrics
    均具備未知異常偵測能力。
 
@@ -64,7 +65,7 @@ Git 操作與 AI Coding Agent Prompt工作指示不屬於本 SPEC，
 
    `db_pool_active_connections` 可由 Metrics Generator 產生、
    Prometheus 收集並於 Grafana 顯示，但不納入 SPEC-002 或
-   SPEC-003 v1.0 的正式 Event Detection 範圍。
+   SPEC-003 v1.1 的正式 Event Detection 範圍。
 ---
 
 ## 1. 前置條件（Prerequisites）
@@ -302,12 +303,10 @@ api_p95_latency_ms == 3000.0 時，必須觸發 high_latency_detected。
 ```
 ### 5.2 不在本 SPEC 正式輸出範圍的 Metrics
 
-### 5.2 不在本 SPEC 正式輸出範圍的 Metrics
-
 | Metric | 原因 | 處理方式 |
 |---|---|---|
-| `api_requests_per_sec` | 屬於動態基準與 QPS Window 異常偵測 | 交由 SPEC-003 v1.0；可輸出 `request_spike_detected` 或 `general_metrics_anomaly` |
-| `db_pool_active_connections` | PRD-002 v1.1 定義為本階段僅收集與視覺化 | 維持 disabled；不由 SPEC-002 或 SPEC-003 v1.0 輸出正式 Event |
+| `api_requests_per_sec` | 屬於動態基準與 QPS Window 異常偵測 | 交由 SPEC-003 v1.1；可輸出 `request_spike_detected` 或 `general_metrics_anomaly` |
+| `db_pool_active_connections` | PRD-002 current Approved version 定義為本階段僅收集與視覺化 | 維持 disabled；不由 SPEC-002 或 SPEC-003 輸出正式 Event |
 
 ### 5.3 六大情境與非六情境資料處理精神
 
@@ -322,8 +321,8 @@ api_p95_latency_ms == 3000.0 時，必須觸發 high_latency_detected。
 不同類型異常的處理方式如下：
 
 1. 已定義 Memory／Latency Threshold：由 SPEC-002 輸出正式 Event。
-2. QPS 動態異常：由 SPEC-003 v1.0 處理。
-3. 未知 QPS Window 異常：由 SPEC-003 v1.0 輸出 `general_metrics_anomaly`。
+2. QPS 動態異常：由 SPEC-003 v1.1 處理。
+3. 未知 QPS Window 異常：由 SPEC-003 v1.1 輸出 `general_metrics_anomaly`。
 4. DB Pool：本階段僅收集與視覺化，不輸出 Event。
 5. 其他未定義 Metrics：可記錄 Debug Log 或提出 PRD 更新需求，
    但不得直接輸出未定義的正式 Event。
@@ -468,7 +467,7 @@ metrics:
 
   api_requests_per_sec:
   enabled: false
-  note: "QPS dynamic baseline, request_spike_detected, and general_metrics_anomaly belong to SPEC-003 v1.0."
+  note: "QPS dynamic baseline, request_spike_detected, and general_metrics_anomaly belong to SPEC-003 v1.1."
 
 db_pool_active_connections:
   enabled: false
@@ -533,6 +532,14 @@ db_pool_active_connections:
         ▼
 events/event_store.jsonl
 ```
+
+依 SPEC-004 ownership model，Event 建立、cooldown 與 `EventStore.write` 均由本 Detector pipeline 負責；EventDetectionRunner 只協調已啟用的 pipeline，不代寫 EventStore。
+
+### 8.1 Implementation and Validation Evidence（Non-normative）
+
+SPEC-005 v1.2 final integration evidence 記錄：Phase 5 observability integration PASS、Phase 6 S2 PASS、Phase 6 S3 PASS、EventDetectionRunner integration validated，以及 EventStore persistence evidence validated。
+
+本節只記錄已完成的 implementation／validation evidence。一次 observed metric value 不構成新的永久 threshold；正式比較仍為 `current_value >= configured threshold`，S2 為 latency `>= 3000 ms`，S3 為 memory `>= 90%`。
 
 ---
 

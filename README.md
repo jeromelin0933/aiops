@@ -1,164 +1,146 @@
-[README (2).md](https://github.com/user-attachments/files/29916856/README.2.md)
 # AIOps Incident-driven Platform
 
-> 東吳大學資訊管理學系 × 富邦人壽產學合作專題
+Last reviewed against current governance baseline: 2026-08-12
 
-## 專案簡介
+本 repository 目前已實作 Mock Data generation、Observability foundation、Event Detection、Event Detection Runner，以及 Scenario runtime / validation。整體平台願景仍包含 downstream Alert Correlation、Incident lifecycle、RCA / RAG / LLM closed loop 與完整 platform workflow；這些能力尚未由 SPEC-005 證明完成，PRD-001 整體狀態仍為「執行中」。
 
-本專案旨在建置一套以 **Incident-driven Architecture（事件驅動架構）**
-為核心的 AIOps 維運平台。
+## Current implementation
 
-系統透過 **Logs** 與 **Metrics** 的事件偵測，經由 **Alert Correlation
-Engine** 整合為 Incident，再結合 **LLM + RAG** 進行 Root Cause
-Analysis（RCA）與修復建議，並透過 **Email 告警通知** 即時通報維運人員，以降低 MTTR（Mean Time To Repair），提升維運效率。
+- Mock log and metrics generation
+- Prometheus / Loki / Promtail / Grafana observability foundation
+- Log Event Detection
+- Metrics Threshold Detection
+- Metrics Isolation Forest Detection
+- EventDetectionRunner
+- Scenario runtime and Demo / E2E integration validation controller
 
----
+Alert Correlation、Incident Manager、RCA、RAG / LLM 與完整 closed loop 屬於 downstream platform scope；請勿把 architecture vision 解讀為所有模組目前都可運行。RAG framework 目前仍為 future architecture / TBD。
 
-## 系統架構
+## Current repository layout
 
-<img width="2084" height="2444" alt="image" src="https://github.com/user-attachments/assets/29211b19-7ae2-4d92-8aa1-fb8964bac6ad" />
-
-
----
-
-## 核心功能
-
-- Log Event Detection（Log 事件偵測）
-- Metrics Event Detection（Metrics 事件偵測）
-- Alert Correlation Engine（告警關聯分析）
-- Incident Manager（事件管理）
-- LLM + RAG 根因分析（RCA）
-- Dashboard 視覺化監控
-- Email 告警通知（Gmail SMTP）
-
----
-
-## 技術架構暫定)
-
-| 類別 | 技術 |
-|---|---|
-| 程式語言 | Python 3.11 |
-| 容器化 | Docker Compose |
-| Log 收集 | Grafana Loki + Promtail |
-| Metrics 收集 | Prometheus |
-| 觀測視覺化 | Grafana |
-| AIOps Dashboard | FastAPI + Jinja2 |
-| AI 推論 | Gemini 2.5 Flash API |
-| RAG 框架 | 還不確定 |
-| 機器學習 | Isolation Forest（scikit-learn） |
-| Email 通知 | Gmail SMTP |
-| 版本控制 | Git + GitHub |
-
----
-
-## 專案目錄
+以下項目均已於 2026-08-12 靜態確認存在：
 
 ```text
-AIOps-Platform/
-├── configs/
-├── demo/
-├── docker/
-├── docs/
-├── scripts/
-├── src/
-├── tests/
-├── .gitignore
-└── README.md
+configs/scenarios.yaml
+
+src/scenario_runtime/
+src/log_generator/
+src/metrics_generator/
+src/event_detection/
+
+scripts/run_mock_runtime.py
+scripts/validate_scenarios.py
+scripts/train_log_model.py
+scripts/train_metrics_model.py
+
+docker/prometheus/
+docker/promtail/
+docker/grafana/
 ```
 
-> `src/` 為核心程式碼目錄，後續將依 Phase 逐步建立各模組，不一次建立完整骨架，以降低維護成本並讓架構隨專案自然演進。
+## Quick start and verified commands
 
----
-
-## Git Flow
-
-```text
-main
- │
- └── develop
-      ├── feature/log-generator
-      ├── feature/metrics
-      ├── feature/event-detection
-      ├── feature/incident
-      ├── feature/rag
-      └── feature/dashboard
-```
-
----
-
-## 快速啟動
+在已取得 repository 並進入專案目錄後，啟動目前 Compose 定義的 observability services：
 
 ```bash
-# 1. 複製專案
-git clone https://github.com/your-repo/AIOps-Platform.git
-
-# 2. 設定環境變數
-cp .env.example .env
-# 填入 GEMINI_API_KEY、GMAIL_SENDER、GMAIL_APP_PASSWORD 等設定
-
-# 3. 啟動所有服務
 docker compose up -d
-
-# 4. 開啟 AIOps Dashboard
-# http://localhost:8080
-
-# 5. 開啟 Grafana 觀測介面
-# http://localhost:3000
 ```
 
----
+此命令不是「啟動完整平台／所有服務」。目前 Compose 啟動 Prometheus、Loki、Promtail 與 Grafana。Scenario runtime 是另一個程序；以下參數已由 script 原始碼靜態確認：
 
-## 專案工作流程
+```bash
+python scripts/run_mock_runtime.py --config configs/scenarios.yaml
+python scripts/run_mock_runtime.py --config configs/scenarios.yaml --scenario S2 --exit-after-recovery
+```
+
+`scripts/validate_scenarios.py` 是 Demo / E2E integration validation controller，不是 production master runtime。其 CLI 可選擇單一 scenario 或明確執行全部 scenarios：
+
+```bash
+python scripts/validate_scenarios.py --scenario S2
+python scripts/validate_scenarios.py --all
+```
+
+Validation 會依賴所需 local services、configuration 與 model artifacts；執行前應先確認 prerequisites。本段僅記錄已存在的 CLI，不把 validation-specific behavior 升格為 production requirement。
+
+## Model artifact prerequisites
+
+執行 Event Detection / E2E 前，應確認本機存在所需 runtime artifacts：
 
 ```text
-情境分析與系統規劃
-        │
-        ▼
-Mock Data 建立
-        │
-        ▼
-Prototype 開發
-        │
-        ▼
-階段性成果驗證
-        │
-        ▼
-系統優化與功能擴充
-        │
-        ▼
-PoC 成果驗證
-        │
-        ▼
-專案成果展示
+models/log_isolation_forest.pkl
+models/metrics_isolation_forest.pkl
 ```
 
----
+Repository 不提供／不提交這些 runtime artifacts；artifact 未提交不等同 defect。若本機已有 Metrics model，可直接使用，不需每次執行都重新訓練。需建立 artifact 時，repository 確實提供 `scripts/train_log_model.py` 與 `scripts/train_metrics_model.py`；Log model 的正式行為與訓練邊界請依 SPEC-001 v2.2。本文不複製 Isolation Forest contract。
 
-## 開發原則
+## Observability deployment notes
 
-- 採用 Incident-driven Architecture。
-- 以模組化方式逐步開發，不過度設計。
-- 每完成一個 Phase，再補齊對應的 `src` 模組。
-- 文件（SDD、ADR、Meeting Minutes）與程式碼同步維護。
+### Metrics
 
----
+```text
+Metrics exporter on host: :8000
+Prometheus container target: host.docker.internal:8000
+```
 
-## 規劃演進方向（v2.0）
+四個現行 Gauge 不使用 dynamic scenario、service 或 detector labels；`api_requests_per_sec` 目前是 single series。這是 implementation / deployment reality，不是 detector normative contract。
 
-- 預測性告警（Predictive Alert）
-- 自動修復（Auto Remediation）
-- 串流架構升級（Kafka / Flink）
+### Logs
 
----
+```text
+Host log:           logs/aiops.json.log
+Compose mount:      ./logs:/var/log/aiops
+Promtail reads:     /var/log/aiops/*.log
+Loki push endpoint: http://loki:3100/loki/api/v1/push
+```
 
-## 團隊資訊
+Host-relative path 與 container path 如上分列；Compose mount 將 host logs 提供給 Promtail。
 
-- 東吳大學 資訊管理學系
-- 富邦人壽產學合作專題
-- 專題目標：降低 MTTR、提升維運效率、強化知識傳承。
+### Grafana
 
----
+Grafana container 可由 Compose 啟動並映射至 `http://localhost:3000`，但 service started 不等於 dashboard ready。目前 Prometheus datasource 與 Loki datasource 需人工建立，`docker/grafana/dashboard.json` 需人工 import 並選擇 datasource。Repository 尚未提供完整 datasource / dashboard auto provisioning。
 
-## 授權
+目前 Compose / implementation 不提供 `http://localhost:8080` AIOps Dashboard。
 
-本專案僅供學術研究與專題展示使用。
+## Runtime artifacts and Git hygiene
+
+下列 runtime / local artifacts 不應提交：
+
+```text
+models/*.pkl
+events/
+logs/*.log
+logs/*.txt
+reports/spec005/
+.pytest_cache/
+.pytest-runtime-basetemp/
+__pycache__/
+.venv/
+```
+
+上述項目以及其他已由 repository ignore policy 明確管理的 runtime / temporary artifacts 應留在本機；不泛稱所有名稱含 `temp` 的檔案都會被 ignore。
+
+## Authoritative documents / governance
+
+治理優先序為 PRD-002 → SPEC-001 / SPEC-002 / SPEC-003 / SPEC-004 → PRD-001 → DDS / README。
+
+| Document | Role |
+|---|---|
+| PRD-001 v3.2 | 執行中的整體產品需求 |
+| PRD-002 v1.3 | Approved；正式 Event Detection requirement |
+| SPEC-001 v2.2 | Implemented；Log Event Detection contract |
+| SPEC-002 v1.4 | Implemented；Metrics Threshold Detection contract |
+| SPEC-003 v1.1 | Implemented；Metrics Isolation Forest Detection contract |
+| SPEC-004 v1.1 | Implemented；Event Detection Runner contract |
+| SPEC-005 v1.2 | Implemented — PASS WITH KNOWN LIMITATIONS；implementation / validation evidence，不是 detector authoritative contract |
+| DDS-001 v1.1 | Repository-level Mock Data / Observability design reference |
+
+PRD-002 與 SPEC-001～SPEC-004 提供正式 Event Detection contract；DDS / README 不重新定義其 schema、threshold、semantics、ownership、generator behavior 或 model parameters。
+
+SDD、ADR-001 與 PM team instructions 是由 Google Drive 管理的 external governance documents。Repository 不建立其 mirror，本 README 也不推測其版本或內容。
+
+## Current limitations
+
+- Grafana datasource provisioning 與 dashboard import 尚未自動化。
+- Model artifacts 是 local runtime prerequisites。
+- SPEC-005 validation evidence 不證明完整 Alert Correlation / Incident / RCA closed loop 已完成。
+- Demo / E2E validation controller 與其 validation-specific behavior 不構成 production architecture requirement。

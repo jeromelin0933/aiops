@@ -1,5 +1,5 @@
 # SPEC-001：Log Event Detection
-## Software Design Specification v2.1（Hybrid Pipeline 版）
+## Software Design Specification v2.2（Hybrid Pipeline 版）
 
 ---
 
@@ -7,14 +7,19 @@
 
 | 欄位 | 內容 |
 |---|---|
-| Document ID | SPEC-001 v2.1 |
+| Document ID | SPEC-001 v2.2 |
 | Document Name | Log Event Detection — Hybrid Pipeline |
-| Status | Ready for Implementation |
+| Status | Implemented |
 | Date | 2026-07-14 |
 | Related PRD | PRD-001、PRD-002 |
 | Related DDS | DDS-001 |
 | Implements | PRD-002 FR-01、FR-03、FR-04、FR-05、FR-06 |
 | Target | AI Coding Agent（Claude Code / Cursor / Copilot） |
+
+| Version | Date | Change Summary |
+|---|---|---|
+| 2.1 | 2026-07-14 | 定義 Hybrid Window-level Log Event Detection Pipeline。 |
+| 2.2 | 2026-08-12 | 與 SPEC-005 Phase 6 calibration 對齊；完成 training-flow reconciliation、deterministic fixture 文件化與 calibration limitation 文件化。 |
 
 ---
 
@@ -297,7 +302,7 @@ isolation_forest:
 
 anomaly:
   # decision_function 分數低於此值才建立 Event（避免噪音誤報）
-  score_threshold: -0.05
+  score_threshold: -0.01
   # Confidence 分級邊界（詳見 predictor.py）
   confidence_high_threshold: -0.3
   confidence_medium_threshold: -0.1
@@ -978,7 +983,7 @@ class FeatureExtractor:
 #
 # 職責：
 #   接收 RawFeatures，將類別欄位數值化，
-#   回傳 EncodedFeatureVector（可直接傳給 numpy / Isolation Forest）。
+#   回傳 EncodedFeatureVector（單筆 Log encoding 的中介 representation，供 Window 聚合使用）。
 #
 # 每個 function 的職責：
 #   FeatureEncoder.__init__()   從 config 建立 Label Encoding 映射 dict
@@ -1263,7 +1268,7 @@ class AnomalyPredictor:
 
     is_anomaly 的判定條件（兩者同時成立）：
       1. predict() 回傳 -1
-      2. decision_function() 分數 < score_threshold（預設 -0.05）
+      2. decision_function() 分數 < score_threshold（正式部署值 -0.01）
 
     第 2 個條件是額外保護，避免模型在邊界附近造成過度誤報。
     """
@@ -1275,7 +1280,7 @@ class AnomalyPredictor:
         """
         self.model_path       = Path(config["output"]["model_path"])
         anomaly_cfg           = config["anomaly"]
-        self.score_threshold  = anomaly_cfg.get("score_threshold",           -0.05)
+        self.score_threshold  = anomaly_cfg.get("score_threshold",           -0.01)
         self.conf_high        = anomaly_cfg.get("confidence_high_threshold",  -0.3)
         self.conf_medium      = anomaly_cfg.get("confidence_medium_threshold",-0.1)
         self._model: Optional[IsolationForest] = None
@@ -2154,59 +2159,65 @@ if __name__ == "__main__":
 
 ## 13. scripts/train_log_model.py
 
-```python
-# scripts/train_log_model.py
-#
-# 使用說明：
-#   1. 執行 Log Generator 以正常模式跑 10 分鐘（不觸發任何 Scenario）
-#   2. 執行：python scripts/train_log_model.py
-#   3. 確認 models/log_isolation_forest.pkl 產生
+正式訓練流程：
 
-import sys
-import yaml
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from src.event_detection.log.reader    import LogReader
-from src.event_detection.log.parser    import LogParser
-from src.event_detection.log.features  import FeatureExtractor
-from src.event_detection.log.encoder   import FeatureEncoder
-from src.event_detection.model.trainer import ModelTrainer
-
-
-def main():
-    with open("configs/event_detection.yml", encoding="utf-8") as f:
-        config = yaml.safe_load(f)
-
-    print("請確認：Log Generator 已以正常模式執行 10+ 分鐘")
-    input("按 Enter 開始訓練...")
-
-    reader    = LogReader(config["log_reader"]["log_file_path"])
-    parser    = LogParser()
-    extractor = FeatureExtractor()
-    encoder   = FeatureEncoder(config["feature_extraction"])
-    trainer   = ModelTrainer(config)
-
-    all_lines = reader.read_all()
-    print(f"讀取 {len(all_lines)} 行 Log...")
-
-    vectors, errors = [], 0
-    for line in all_lines:
-        entry = parser.parse(line)
-        if entry is None:
-            errors += 1
-            continue
-        vectors.append(encoder.encode(extractor.extract_one(entry)))
-
-    print(f"有效特徵向量：{len(vectors)} 筆，解析失敗：{errors} 筆")
-    trainer.train(vectors)
-    print("訓練完成。執行推論：python -m src.event_detection.runner")
-
-
-if __name__ == "__main__":
-    main()
+```text
+tests/fixtures/log_model/normal_baseline.jsonl
+→ LogParser／FeatureExtractor（單筆 Log 可產生中介 EncodedFeatureVector）
+→ 依 timestamp 分組為不重疊的 60 秒 buckets
+→ WindowFeatureAggregator
+→ WindowFeatureVector
+→ 確認 Window 樣本數 >= 50
+→ IsolationForest fit
+→ joblib persistence
+→ reload validation
 ```
+
+`EncodedFeatureVector` 僅是單筆 Log encoding 的中介 representation，不是正式 Isolation Forest training sample。正式訓練單位為 `WindowFeatureVector`。
+
+正式模型必須是 fitted `sklearn.ensemble.IsolationForest` estimator；參數維持 `contamination=0.05`、`n_estimators=200`、`random_state=42`、`max_samples="auto"`。模型以 joblib 寫入 `models/log_isolation_forest.pkl` 後必須重新載入，並驗證 `predict`、`decision_function` 及 feature dimension consistency。
+
+### 13.1 Deterministic Baseline Fixture
+
+核准的 deterministic fixture 為 `tests/fixtures/log_model/normal_baseline.jsonl`：
+
+- 250 筆 JSONL rows。
+- 50 個不重疊的 60 秒 windows。
+- 每個 window 5 筆 rows。
+- deterministic／reproducible。
+- 用於 deterministic training、regression 與 threshold calibration audit。
+
+#### Representativeness Boundary
+
+此 fixture 不得被宣稱為 production normal traffic 的代表，不涵蓋完整 seasonality、完整 service／traffic mix 或 operational variance。`0/50` fixture false positives 不等於 production false-positive rate 為 0，亦不代表 `score_threshold` 已證明具完整泛化能力。
+
+### 13.2 Phase 6 Calibration Decision（Implementation Evidence）
+
+SPEC-005 v1.2 Phase 6 的校準證據顯示：deployed model 對 S1～S6 均輸出 `label=-1`；`score_threshold=-0.05` 時 scenario coverage 為 `0/6`，調整為 `-0.01` 後為 `6/6`；核准 deterministic fixture 的 false positives 為 `0/50`。因此正式部署值 reconciliation 為 `score_threshold=-0.01`。
+
+Predictor contract 仍為雙重 gate：
+
+```text
+label == -1
+AND
+score < configured score_threshold
+```
+
+不得改為 label-only detection。上述 Phase 6 數值是 calibration implementation evidence，不是將單次 E2E 結果改寫為永久 scenario 數值需求。
+
+### 13.3 Calibration Known Limitation
+
+SPEC-005 Attempt #5 曾觀察到 baseline-like runtime window 輸出：
+
+```text
+event_type = general_log_anomaly
+anomaly_score = -0.02050324516956037
+window_log_count = 51
+```
+
+此結果應解讀為 **calibration／live-normal false-positive uncertainty**：deterministic fixture 的 representativeness 有限，live-normal false-positive rate 尚未完整量化；現有 `general_log_anomaly` fallback contract 仍然有效。由於尚無足夠證據將該 runtime window 宣告為完整 production-normal distribution，此 finding 不構成靜默回退 `score_threshold` 至 `-0.05` 的依據。
+
+Phase 6 calibration 與 Phase 7 final audit 的 implementation evidence 詳見 SPEC-005 v1.2；該 evidence 不改變 Event Schema、Event Types、Detector／EventStore ownership 或 fallback behavior。
 
 ---
 
@@ -2340,4 +2351,3 @@ def main():
             continue
 
         print(f"✅ PASS | severity={event['severity']} | confidence={event['confidence']}")
-      

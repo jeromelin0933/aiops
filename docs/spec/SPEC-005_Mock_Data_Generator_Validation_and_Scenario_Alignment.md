@@ -1,6 +1,6 @@
 # SPEC-005：Mock Data Generator Validation and Scenario Alignment
 
-## Software Design Specification v1.1
+## Software Design Specification v1.2
 
 ---
 
@@ -11,15 +11,15 @@
 | Document ID | SPEC-005 |
 | Document Name | Mock Data Generator Validation and Scenario Alignment |
 | 中文名稱 | 模擬資料產生器驗證與六大情境對齊 |
-| Version | 1.1 |
-| Status | Ready for Implementation |
+| Version | 1.2 |
+| Status | Implemented — PASS WITH KNOWN LIMITATIONS |
 | Date | 2026-08-05 |
 | Author | 林子豪（PM） |
 | Assignee | 夜雨 |
 | Branch Metadata | `feature/mock-data-validation` |
-| Related PRD | PRD-001 v3.1、PRD-002 v1.2 |
-| Related DDS | DDS-001 v1.0 |
-| Related SPEC | SPEC-001 v2.1、SPEC-002 v1.3、SPEC-003 v1.0、SPEC-004 v1.0 |
+| Related PRD | PRD-001 v3.2、PRD-002 v1.3 |
+| Related DDS | DDS-001 v1.1 |
+| Related SPEC | SPEC-001 v2.2、SPEC-002 v1.4、SPEC-003 v1.1、SPEC-004 v1.1 |
 | Implements | SPEC-001 Phase 4、SPEC-003 Deferred Integration、SPEC-004 Deferred Follow-up |
 | Target | Developer／AI Coding Agent |
 
@@ -27,6 +27,7 @@
 |---|---|---|
 | 1.0 | 2026-08-05 | 建立 Generator Audit、Scenario Runtime、Log／Metrics Generator 對齊、Prometheus／Grafana 驗證、SPEC-001～004 真實整合與六大情境 E2E Gate；明確定義持續 Baseline、有限 Scenario Injection、Recovery、同 Runtime 重複觸發、受控隨機性、Docker 修改核准與 Model Artifact 邊界。 |
 | 1.1 | 2026-08-05 | 對齊 PRD-002 v1.2；確認 S2 Latency 與 S3 Memory Threshold 邊界為大於或等於，並將上游文字修訂狀態更新為已完成。 |
+| 1.2 | 2026-08-12 | 記錄 Phase 5／6 implementation completion evidence、Phase 7 final read-only audit、Log IForest calibration、runner priming、EventStore evidence isolation 與已知限制；不變更既有 normative contract。 |
 
 > 本文件是 SPEC-005 的正式工程契約。Git 操作、Codex 安裝方式、虛擬環境建立指令及完整 AI Coding Agent Prompt 不屬於本 SPEC，由 PM 透過獨立工作指示提供。
 
@@ -77,11 +78,11 @@ DDS-001 是較早期的 Mock Data 與 Observability Foundation 設計紀錄，�
 
 本 SPEC 的上游依據優先順序如下：
 
-1. PRD-002 v1.2 的六大情境、Event Type、Event Schema 與 NFR。
+1. PRD-002 v1.3 的六大情境、Event Type、Event Schema 與 NFR。
 2. SPEC-001～004 的正式 Detector／Runner Contract。
-3. PRD-001 v3.1 的產品定位、Demo 範圍與資安邊界。
+3. PRD-001 v3.2 的產品定位、Demo 範圍與資安邊界。
 4. 本 SPEC-005 的 Generator Runtime、Validation 與 E2E 實作契約。
-5. DDS-001 v1.0 的既有資料來源與 Observability Foundation。
+5. DDS-001 v1.1 的既有資料來源與 Observability Foundation。
 6. 現有 Generator 程式碼與舊操作流程。
 
 若文件、程式碼或測試無法同時滿足：
@@ -164,7 +165,7 @@ Generator 必須讓異常值維持足夠久，使 Prometheus Instant Query 與 1
 
 ### SPEC-003
 
-SPEC-003 v1.0 只處理：
+SPEC-003 v1.1 只處理：
 
 ```text
 api_requests_per_sec
@@ -204,13 +205,13 @@ api_p95_latency_ms 達到或超過 3000ms
 system_memory_usage_pct 達到或超過 90%
 ```
 
-上述描述與 SPEC-002 v1.3 的正式比較契約一致：
+上述描述與 SPEC-002 v1.4 的正式比較契約一致：
 
 ```text
 current_value >= threshold
 ```
 
-實作者應以 PRD-002 v1.2 與 SPEC-002 v1.3 為準，不得將比較條件改回單純大於。
+實作者應以 PRD-002 v1.3 與 SPEC-002 v1.4 為準，不得將比較條件改回單純大於。
 
 ### 0.5.2 不阻擋 SPEC-005、但不得由實作者修改的 Detector 差異
 
@@ -333,6 +334,8 @@ current_value >= threshold
 - 不得成為 Detector 的正式 Runtime Dependency。
 - 不得把 `scenario_id` 注入 Event Schema。
 
+Implementation Evidence：`validate_scenarios.py` 是 Demo／E2E integration controller，不是 Detector、production master runtime 或 EventStore writer；不自行建立 Event，亦不使用 `EventBuilder` 建立 Event。Event ownership 維持在 Detector／`EventDetectionRunner` pipeline。
+
 ---
 
 # 2. 前置條件與執行環境
@@ -418,6 +421,8 @@ models/metrics_isolation_forest.pkl
 模型不存在時不得由 SPEC-005 Runtime 無聲自動訓練，也不得跳過 Enabled Pipeline。
 
 應先使用既有 Training Script 建立模型。模型檔不得提交版本控制。
+
+Implementation Evidence：上述兩個 prerequisite path 均已驗證；Controller 在缺少任一模型時 fail fast，不自動 train，也不 disable detector pipeline。模型 artifact 是執行 prerequisite，不是 SPEC-005 source deliverable。Log training artifact 與 threshold calibration 定義參照 SPEC-001 v2.2。
 
 ## 2.5 Runtime Artifact
 
@@ -537,6 +542,31 @@ Audit 必須輸出 Scenario Gap Matrix，至少包含：
 - 只讀取本輪新增的 EventStore Evidence。
 - Recovery 完成後才進入下一個 Scenario。
 - 產生 ScenarioValidationResult。
+
+### 3.7 Phase 5／6 Implementation Result
+
+以下是已完成執行的 completion evidence，不新增或改寫永久 Requirement／Contract：
+
+| Phase | Result |
+|---|---|
+| Phase 5 | PASS |
+| Phase 6 — S1 | PASS |
+| Phase 6 — S2 | PASS |
+| Phase 6 — S3 | PASS |
+| Phase 6 — S4 | PASS |
+| Phase 6 — S5 | PASS |
+| Phase 6 — S6 | PASS |
+| E2E Exit Code | 0 |
+
+### 3.8 Phase 7：Final Read-only Audit
+
+Phase 7 final read-only audit 結果為 `PASS WITH KNOWN LIMITATIONS`，Blocking Defects 為 `0`。
+
+此結果表示 engineering completion；external／business approval 是不同治理狀態，不由本 engineering evidence 自動宣告。Final engineering state 為：
+
+```text
+Implemented — PASS WITH KNOWN LIMITATIONS
+```
 
 ---
 
@@ -1604,6 +1634,12 @@ Fail Fast
 runner.run_once()
 ```
 
+### Pre-scenario Runner Priming（Implementation Evidence）
+
+Runtime／runner 啟動後、任何 scenario evidence 產生前，Controller 先呼叫一次 `runner.run_once()`，用以建立 `LogReader` initial EOF／offset state。Priming pipeline failure 必須使 validation fail。
+
+Priming 不是 scenario；priming event 不得計入任何 scenario evidence。
+
 原因：
 
 - 強制執行所有 Enabled Pipeline。
@@ -1629,6 +1665,8 @@ runner.run_once()
 不得以刪除整個 EventStore 作為唯一隔離方式。
 
 Runtime Artifact 可於人工測試前備份／清理，但正式 Validation Script 必須能只分析 Append 後的新增 Event。
+
+Implementation Evidence：Controller 在 scenario 前記錄 EventStore byte boundary，僅讀取該 boundary 後 append 的 events。Runner return events 不是唯一成功依據；必須確認 runner-produced event 已存在於 EventStore。Controller 不寫 EventStore，append-only ownership 維持於 Detector／`EventDetectionRunner` pipeline。
 
 ## 13.4 Expected Event Matrix
 
@@ -1728,6 +1766,23 @@ Validation Metadata 只存在 ScenarioValidationResult。
 - `request_spike_detected.event_source=metrics_iforest_detection`。
 - `request_spike_detected.detection_method=isolation_forest`。
 - `triggered_features` 保留 Baseline、Current QPS、Spike Ratio、Window／Score 資訊。
+
+#### S6 Final Flow（Implementation Evidence）
+
+```text
+baseline samples ready
+→ trigger S6
+→ exact 55 HTTP 429（same target_service）
+→ Prometheus observes current_qps
+   >= baseline_mean × configured request_spike_ratio
+→ EventDetectionRunner.run_once()
+→ rate_limit_storm
+→ request_spike_detected
+→ recovery
+→ PASS
+```
+
+`request_spike_ratio` 保持 config-driven。Baseline samples readiness 與 formal spike readiness 均以資料判定；允許 bounded polling with timeout／polling interval，禁止以固定 sleep 秒數作為「已 ready」的判斷依據。
 
 ---
 
@@ -2152,6 +2207,8 @@ __pycache__/
 
 # 19. Acceptance Criteria
 
+> Completion annotation：僅有 Phase 5、Phase 6 與 Phase 7 final evidence 直接支援的結果可標記 PASS。下列未勾選 checklist 項目不得僅因 E2E Exit Code `0` 自動推定為通過；其原始 normative contract 保留不變。Phase completion summary 見 3.7、3.8。
+
 ## 19.1 Audit
 
 - [ ] 已完成 Read-only Audit。
@@ -2348,6 +2405,30 @@ SPEC-005 以 File Offset／Line Count 區隔本輪 Evidence，不代表已完成
 
 Validation Script 不自動執行 `docker compose up/down`，避免在未確認環境下修改或停止其他服務。
 
+## 21.8 Log IForest Calibration／Live-normal False-positive Uncertainty
+
+SPEC-005 Attempt #5 曾觀察到 baseline-like runtime window 輸出：
+
+```text
+event_type = general_log_anomaly
+anomaly_score = -0.02050324516956037
+window_log_count = 51
+```
+
+此 finding 表示 calibration／live-normal false-positive uncertainty，而非證明該 window 代表完整 production-normal distribution。核准 deterministic fixture 的 representativeness 有限，live-normal false-positive rate 尚未完整量化；fixture 的 `0/50` false positives 不等於 production false-positive rate 為 0，亦不證明 threshold 已完整泛化。
+
+`general_log_anomaly` fallback contract 仍然有效。歷史 `score_threshold = -0.05` 的 coverage 為 `0/6`，目前正式部署值 `score_threshold = -0.01` 的 coverage 為 `6/6`，且核准 deterministic fixture 的 false positives 為 `0/50`。這些 evidence 仍受上述 live-normal false-positive uncertainty 與 representativeness limitation 限制；本 limitation 不構成靜默回退 `score_threshold` 至歷史值 `-0.05` 的依據。
+
+以下僅為 current deployed contract summary／cross-document reference：目前正式部署的 `score_threshold = -0.01`，predictor 必須同時通過 double gate：
+
+```text
+label == -1
+AND
+score < configured score_threshold
+```
+
+Log Event Detection 的 authoritative detector contract 仍由 SPEC-001 v2.2 定義。SPEC-005 不重新定義 predictor semantics，且不得改為 label-only detection。
+
 ---
 
 # 22. PM Review Checklist
@@ -2429,10 +2510,22 @@ Validation Script 不自動執行 `docker compose up/down`，避免在未確認�
 | 同 Runtime 重複 Scenario | PM Decision／SPEC-005 | State Machine Re-trigger Test |
 | Docker 修改需核准 | PRD-002 Out of Scope | File Scope Audit |
 | Model 只在 E2E 必要 | SPEC-004 Manual Runtime Prerequisite | Unit／E2E Split |
+| Log IForest score threshold calibration | SPEC-001 v2.2 | Predictor double gate＋SPEC-005 Phase 6 calibration evidence |
+| Log training artifact prerequisite | SPEC-001 v2.2 training flow | Model prerequisite fail-fast check |
 
 ---
 
 # 24. Definition of Done
+
+## 24.1 Engineering Completion Result
+
+Engineering DoD 已完成，結果為：
+
+```text
+PASS WITH KNOWN LIMITATIONS
+```
+
+此結論不宣告 external／business approval。
 
 SPEC-005 只有在以下全部成立時才算完成：
 
@@ -2454,8 +2547,10 @@ Read-only Audit 完成
 + Full Regression 通過
 + File Scope Audit 通過
 + Runtime Artifact Audit 通過
-+ PM Review 通過
++ 內部 PM 工程／文件審查完成
 ```
+
+上述審查項目僅表示本專案內部 engineering/document governance review 已完成，用以確認 engineering completion；不代表 external stakeholder acceptance、business approval 或合作企業正式驗收，也不應因此將 SPEC-005 `Status` 改為 `Approved`。
 
 SPEC-005 完成代表：
 

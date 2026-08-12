@@ -1,6 +1,6 @@
 # SPEC-004：Event Detection Runner
 
-## Software Design Specification v1.0
+## Software Design Specification v1.1
 
 ---
 
@@ -10,16 +10,19 @@
 |---|---|
 | Document ID | SPEC-004 |
 | Document Name | Event Detection Runner |
-| Version | 1.0 |
+| Version | 1.1 |
 | Status | Implemented |
-| Date | 2026-07-31 |
+| Date | 2026-08-12 |
 | Author | 林子豪（PM） |
 | Assignee | 富裕 |
 | Branch Metadata | `feature/event-runner` |
-| Related PRD | PRD-001 v3.1、PRD-002 v1.1 |
+| Related PRD | PRD-001 v3.2、PRD-002 current Approved version（v1.3） |
 | Related DDS | DDS-001 |
-| Related SPEC | SPEC-001 v2.1、SPEC-002 v1.3、SPEC-003 v1.0 |
-| Deferred Follow-up | SPEC-005 Mock Data Generator Validation and Scenario Alignment |
+| Related SPEC | SPEC-001 v2.2、SPEC-002 v1.4、SPEC-003 v1.1、SPEC-005 v1.2 |
+
+| Version | Date | Change |
+|---|---|---|
+| 1.1 | 2026-08-12 | 更新 cross-document references；將 SPEC-005 deferred integration 更新為 completed evidence，並補充 validation controller、runner priming 與 EventStore validation boundary。Runner lifecycle、status、error isolation 與 ownership contract 不變。 |
 
 > 本文件是 Event Detection Runner 的正式工程契約。Git 操作、Codex CLI 操作方式及完整 AI Coding Agent Prompt 不屬於本 SPEC，由 PM 透過獨立工作文件提供。
 
@@ -61,17 +64,17 @@ Metrics IForest Detection ────────┘              │
 
 ## 0.1 規格優先序
 
-1. PRD-002 v1.1 的三條 Pipeline 獨立性、Event Schema、NFR 與驗收要求。
+1. PRD-002 current Approved version 的三條 Pipeline 獨立性、Event Schema、NFR 與驗收要求。
 2. 本 SPEC-004 的模組邊界、Runner Contract、Scheduler、錯誤處理與驗收標準。
-3. PRD-001 v3.1 的 Incident-driven Architecture 與 Prototype 範圍。
-4. SPEC-001 v2.1、SPEC-002 v1.3、SPEC-003 v1.0 已完成的既有介面與 Regression Tests。
+3. PRD-001 v3.2 的 Incident-driven Architecture 與 Prototype 範圍。
+4. SPEC-001 v2.2、SPEC-002 v1.4、SPEC-003 v1.1 已完成的既有介面與 Regression Tests。
 5. DDS-001 已建立的 Generator、Prometheus、Loki、Grafana 與 Docker 基礎。
 
 若文件、既有程式碼或測試之間出現無法同時滿足的衝突，實作者與 AI Coding Agent 必須停止擴大修改並回報 PM，不得自行重新定義需求、修改其他 SPEC 的核心邏輯或降低驗收標準。
 
 ## 0.2 核心決策
 
-1. SPEC-004 v1.0 採 **單行程、循序式 Orchestration**，不使用 Thread、Process、AsyncIO、Kafka 或外部 Message Queue。
+1. SPEC-004 v1.1 採 **單行程、循序式 Orchestration**，不使用 Thread、Process、AsyncIO、Kafka 或外部 Message Queue。
 2. 三條 Pipeline 固定依序執行：Log → Metrics Threshold → Metrics IForest。
 3. Metrics Threshold 與 Metrics IForest 採 **OR 接納**；任一 Pipeline 獨立產生的 Event 均保留。
 4. Event Runner 不做 Cross-Pipeline Deduplication、Correlation 或 Incident 建立。
@@ -86,7 +89,7 @@ Metrics IForest Detection ────────┘              │
 13. 單一 Pipeline 的 Runtime Error 採 **Error Isolation**，不得阻止其他 Pipeline 執行，下一個排程週期再重試。
 14. Scheduler 不進行積欠週期的 Burst Catch-up；若執行時間超過排程，跳過已錯過的時間點並排到下一個未來週期。
 15. Unit Tests 不依賴 Docker、真實 Prometheus、Generator、外部網路、正式 Model File 或實際等待時間。
-16. Generator 驗證與修改不屬於本 SPEC，延後至 SPEC-005。
+16. Generator validation 由 SPEC-005 v1.2 的 Demo／E2E integration controller 完成，不屬於 production Runner contract。
 17. v1.0 不宣稱能捕捉所有短於 Prometheus Scrape／Polling 間隔的瞬時 Metrics Spike。
 
 ---
@@ -184,11 +187,11 @@ Cross-Pipeline Correlation 必須留給後續 Alert Correlation Engine。
 
 開始實作前，`feature/event-runner` 應包含：
 
-- PRD-001 v3.1。
-- PRD-002 v1.1。
-- SPEC-001 v2.1 已完成成果。
-- SPEC-002 v1.3 已完成成果。
-- SPEC-003 v1.0 已完成成果。
+- PRD-001 v3.2。
+- PRD-002 current Approved version（v1.3）。
+- SPEC-001 v2.2 已完成成果。
+- SPEC-002 v1.4 已完成成果。
+- SPEC-003 v1.1 已完成成果。
 - DDS-001 基礎設施與既有目錄。
 - 全專案 Baseline Regression Tests 通過。
 
@@ -1681,7 +1684,7 @@ python -m src.event_detection.runner --config configs/event_runner.yaml --once
 python -m src.event_detection.runner --config configs/event_runner.yaml
 ```
 
-正式 E2E 情境驗證延後至 SPEC-005。
+正式 E2E 情境驗證已由 SPEC-005 v1.2 完成；結果記錄於第 20.4 節，且不改變本章 test contract。
 
 ---
 
@@ -1753,7 +1756,7 @@ python -m src.event_detection.runner --config configs/event_runner.yaml
 
 ---
 
-# 20. Known Limitations 與 Deferred Integration
+# 20. Known Limitations 與 Completed Integration Evidence
 
 ## 20.1 Sequential Prototype Trade-off
 
@@ -1810,26 +1813,23 @@ Streaming Metrics Processing
 
 未來若改為 Kafka 或其他 Queue，需另立 ADR／PRD／SPEC。
 
-## 20.4 SPEC-005 Deferred Integration
+## 20.4 SPEC-005 v1.2 Completed Integration Evidence（Non-normative）
 
-SPEC-004 完成後，由 PM 另行安排：
+SPEC-005 v1.2 已完成 Phase 5／Phase 6 final validation：Phase 5 Observability PASS、Phase 6 S1–S6 PASS、E2E Exit Code 0、Blocking Defects 0；Phase 7 結果為 PASS WITH KNOWN LIMITATIONS。
 
-```text
-六大 Scenario Generator Audit
-→ Log / Metrics Generator Patch
-→ Prometheus / Grafana Validation
-→ SPEC-001 / 002 / 003 / 004 真實整合
-→ 六大情境 E2E Gate
-→ develop 合併 main
-```
+`scripts/validate_scenarios.py` 是 Demo／E2E integration controller，不是 production master runtime、EventDetectionRunner replacement、Detector、Event owner 或 EventStore writer。它不改變 EventDetectionRunner 的 constructor、`run_once()`、`run_due_once()`、`start()` 或 `stop()` semantics。
 
-SPEC-005 原則：
+### 20.4.1 Validation-specific Runner Priming
 
-> Generator 對齊 PRD-002 與 SPEC-001～004，不為了配合不完整 Generator 回頭放寬穩定 Detection Contract。
+SPEC-005 E2E controller 在 scenario evidence 前執行一次 `runner.run_once()`，用途是建立 LogReader initial EOF／offset state。這是 validation-specific readiness／priming step，不代表所有 production EventDetectionRunner 啟動前都必須 priming，也不構成新的 Runner lifecycle requirement。
 
-若發現正式 Contract Defect，必須回報 PM，另以 SPEC Revision／Integration Fix 處理。
+### 20.4.2 EventStore Validation Boundary
 
-## 20.5 不屬於本次驗收
+Validation controller 在每個 scenario 前保存 EventStore byte boundary，只讀取該 boundary 後 appended Events，並比對 runner return events 與 persisted EventStore evidence。Controller 不寫 EventStore；Event 建立、cooldown 與 EventStore persistence 仍由各 Detector pipeline 負責，Runner 僅協調已啟用的 pipelines。
+
+以上均為 validation method／evidence，不修改正式 ownership contract。Generator 仍須對齊 PRD-002 與 SPEC-001～004，不得反向放寬 Detection Contract。
+
+## 20.5 Known Limitations／Out of Scope
 
 - 真實 Generator 六大情境全通過。
 - Grafana Demo 畫面。
@@ -1939,7 +1939,7 @@ docs 修改（除 PM 事先安排）
 | Log 不重複讀取 | PRD-002 NFR-02 | LogReader Offset Tests |
 | Event 寫入 JSONL | PRD-002 NFR-06 | Existing Detector Regression |
 | Fail Fast | SPEC-003 Model Lifecycle、PM 決策 | Startup Failure Tests |
-| Generator 延後驗證 | SPEC-001 Phase 4、SPEC-003 Deferred Integration | Scope Audit |
+| Generator integration evidence | SPEC-005 v1.2 Completed Integration Evidence | Evidence／scope audit |
 | 不做 Alert／Incident | PRD-002 Out of Scope | File／Behavior Audit |
 
 ---
