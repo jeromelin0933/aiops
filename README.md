@@ -1,8 +1,8 @@
 # AIOps Incident-driven Platform
 
-Last reviewed against current governance baseline: 2026-08-12
+Last reviewed against current governance baseline: 2026-08-17
 
-本 repository 目前已實作 Mock Data generation、Observability foundation、Event Detection、Event Detection Runner，以及 Scenario runtime / validation。整體平台願景仍包含 downstream Alert Correlation、Incident lifecycle、RCA / RAG / LLM closed loop 與完整 platform workflow；這些能力尚未由 SPEC-005 證明完成，PRD-001 整體狀態仍為「執行中」。
+本 repository 目前已實作 Mock Data generation、Observability foundation、Event Detection、Event Detection Runner，以及 Scenario runtime / validation。PRD-001 v3.3 的 downstream product direction 尚包含 Alert Correlation、Incident lifecycle、Jira integration、Discord / ChatOps、RAG / LLM RCA、complete Dashboard workflow、Email fallback / escalation、human review 與 complete closed loop；這些能力尚未由 implementation evidence 證明完成，PRD-001 整體狀態仍為「執行中」。
 
 ## Current implementation
 
@@ -14,7 +14,7 @@ Last reviewed against current governance baseline: 2026-08-12
 - EventDetectionRunner
 - Scenario runtime and Demo / E2E integration validation controller
 
-Alert Correlation、Incident Manager、RCA、RAG / LLM 與完整 closed loop 屬於 downstream platform scope；請勿把 architecture vision 解讀為所有模組目前都可運行。RAG framework 目前仍為 future architecture / TBD。
+Not yet implemented / downstream platform scope：Alert Correlation、Incident lifecycle / Incident Manager、Jira integration、Discord / ChatOps query、RAG / LLM RCA、complete Dashboard workflow、Email fallback / escalation、human review，以及 complete closed loop。請勿把 product direction 解讀為這些模組目前可運行；RAG framework 目前仍為 future architecture / TBD。
 
 ## Current repository layout
 
@@ -125,14 +125,14 @@ __pycache__/
 
 | Document | Role |
 |---|---|
-| PRD-001 v3.2 | 執行中的整體產品需求 |
+| PRD-001 v3.3 | 執行中的整體產品需求 |
 | PRD-002 v1.3 | Approved；正式 Event Detection requirement |
 | SPEC-001 v2.2 | Implemented；Log Event Detection contract |
 | SPEC-002 v1.4 | Implemented；Metrics Threshold Detection contract |
 | SPEC-003 v1.1 | Implemented；Metrics Isolation Forest Detection contract |
 | SPEC-004 v1.1 | Implemented；Event Detection Runner contract |
 | SPEC-005 v1.2 | Implemented — PASS WITH KNOWN LIMITATIONS；implementation / validation evidence，不是 detector authoritative contract |
-| DDS-001 v1.1 | Repository-level Mock Data / Observability design reference |
+| DDS-001 v1.2 | Repository-level Mock Data / Observability design reference |
 
 PRD-002 與 SPEC-001～SPEC-004 提供正式 Event Detection contract；DDS / README 不重新定義其 schema、threshold、semantics、ownership、generator behavior 或 model parameters。
 
@@ -142,5 +142,5 @@ SDD、ADR-001 與 PM team instructions 是由 Google Drive 管理的 external go
 
 - Grafana datasource provisioning 與 dashboard import 尚未自動化。
 - Model artifacts 是 local runtime prerequisites。
-- SPEC-005 validation evidence 不證明完整 Alert Correlation / Incident / RCA closed loop 已完成。
+- SPEC-005 validation evidence 不證明 PRD-001 v3.3 downstream workflow / integrations 已完成，包括 Alert Correlation、Incident lifecycle、Jira、Discord / ChatOps、RAG / LLM RCA、complete Dashboard workflow、Email fallback / escalation、human review 與 complete closed loop。
 - Demo / E2E validation controller 與其 validation-specific behavior 不構成 production architecture requirement。
