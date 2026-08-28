@@ -110,6 +110,12 @@ class EventBuilder:
 
     @staticmethod
     def _pick_service(summary, event_type, context):
+        if event_type == "oom_crash_detected":
+            if not summary.oom_origin_service:
+                raise ValueError(
+                    "oom_crash_detected requires OOM-origin service metadata"
+                )
+            return summary.oom_origin_service
         if event_type == "downstream_cascade_failure":
             return "multiple"
         if event_type == "cross_service_failure":

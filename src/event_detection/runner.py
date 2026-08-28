@@ -344,6 +344,7 @@ class LogEventDetectionRunner:
         trace_downstreams = {}
         downstream_services = defaultdict(set)
         external_failures = []
+        oom_origin_services = set()
         for log in logs:
             status = int(log.get("status_code", 0))
             if status == 401 and log.get("source_ip"):
@@ -361,6 +362,19 @@ class LogEventDetectionRunner:
                     downstream_services[downstream].add(log["service_name"])
             if log.get("external_service") and status >= 500:
                 external_failures.append(log)
+            service_name = log.get("service_name")
+            if (
+                log.get("error_type") == "OutOfMemoryError"
+                and isinstance(service_name, str)
+                and service_name.strip()
+            ):
+                oom_origin_services.add(service_name)
+
+        if len(oom_origin_services) > 1:
+            raise ValueError(
+                "multiple OOM-origin services in one window require PM contract decision"
+            )
+        oom_origin_service = next(iter(oom_origin_services), None)
 
         timestamps = [log["_parsed_timestamp"] for log in logs]
         samples = error_logs[:3] if error_logs else logs[:3]
@@ -375,6 +389,7 @@ class LogEventDetectionRunner:
             max_duration_ms=max(durations, default=0),
             mean_duration_ms=sum(durations) / len(durations) if durations else 0,
             max_memory_pct=max(memories, default=0),
+            oom_origin_service=oom_origin_service,
             source_ip_401_counts=dict(ip_401),
             trace_error_services={key: sorted(value) for key, value in trace_services.items()},
             trace_downstreams=trace_downstreams,

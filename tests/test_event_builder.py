@@ -47,6 +47,7 @@ def test_unknown_anomaly_uses_fallback():
 def test_fixed_priority_prefers_s3_then_s5():
     summary = WindowSummary(
         top_error_types=["OutOfMemoryError"],
+        oom_origin_service="order-service",
         downstream_error_services={"db": ["a", "b", "c", "d", "e"]},
         source_ip_401_counts={"ip": 10}, target_429_counts={"sms": 20},
     )

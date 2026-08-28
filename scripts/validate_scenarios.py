@@ -130,6 +130,25 @@ def _records_after(path: Path, offset: int) -> list[dict[str, Any]]:
     return [json.loads(line) for line in raw.splitlines() if line.strip()]
 
 
+def log_detector_checkpoint_ready(
+    scenario: str,
+    records: list[dict[str, Any]],
+    min_log_count: int,
+) -> bool:
+    """Return whether this scenario has enough new evidence for Log inference."""
+    valid_records = [record for record in records if isinstance(record, dict)]
+    if len(valid_records) < min_log_count:
+        return False
+    if scenario != "S3":
+        return True
+    return any(
+        record.get("error_type") == "OutOfMemoryError"
+        and isinstance(record.get("service_name"), str)
+        and bool(record["service_name"].strip())
+        for record in valid_records
+    )
+
+
 def validate_input_evidence(scenario: str, records: list[dict[str, Any]], scenario_config: dict[str, Any]) -> tuple[bool, dict[str, Any], str | None]:
     """Validate generator output only; no expected event data is fed back to it."""
     evidence: dict[str, Any] = {"new_log_count": len(records)}
@@ -190,6 +209,18 @@ class ScenarioValidator:
         self.iforest = iforest
         self.event_store_path = self._resolve_store_path()
         self.log_path = self._resolve_path(self.config.raw["log"]["output_path"])
+        runner = self._load_yaml(self.runner_config)
+        log_config_path = runner["pipelines"]["log_event_detection"]["config_path"]
+        log_config = self._load_yaml(self._resolve_path(log_config_path))
+        self.log_min_log_count = log_config["window"]["min_log_count"]
+        if (
+            not isinstance(self.log_min_log_count, int)
+            or isinstance(self.log_min_log_count, bool)
+            or self.log_min_log_count <= 0
+        ):
+            raise ValidationFailure(
+                "ENVIRONMENT", "log detector window.min_log_count must be positive"
+            )
 
     @staticmethod
     def _load_yaml(path: Path) -> dict[str, Any]:
@@ -374,6 +405,29 @@ class ScenarioValidator:
             records = _records_after(self.log_path, log_offset)
             valid, input_evidence, error = validate_input_evidence(scenario, records, config)
             if not valid: raise ValidationFailure("GENERATOR", error or "generator evidence invalid")
+
+            def log_detector_is_ready() -> bool:
+                checkpoint_records = _records_after(self.log_path, log_offset)
+                ready = log_detector_checkpoint_ready(
+                    scenario, checkpoint_records, self.log_min_log_count
+                )
+                if (
+                    not ready
+                    and triggered_ok
+                    and runtime.snapshot().phase is ScenarioPhase.BASELINE
+                ):
+                    raise ValidationFailure(
+                        "DETECTION_CONTRACT",
+                        f"{scenario} recovery completed before Log detector checkpoint",
+                    )
+                return ready
+
+            self._wait(log_detector_is_ready, f"{scenario} Log detector checkpoint")
+            checkpoint_records = _records_after(self.log_path, log_offset)
+            input_evidence["log_detector_min_log_count"] = self.log_min_log_count
+            input_evidence["log_detector_checkpoint_log_count"] = len(
+                checkpoint_records
+            )
             if scenario in {"S2", "S3"}:
                 metric = "api_p95_latency_ms" if scenario == "S2" else "system_memory_usage_pct"; minimum = 3000.0 if scenario == "S2" else 90.0
                 self._wait(lambda: float(self._prometheus_query(metric)["result"][0]["value"][1]) >= minimum, f"{scenario} Prometheus metric")
