@@ -1,8 +1,8 @@
 # AIOps Incident-driven Platform
 
-Last reviewed against current governance baseline: 2026-08-17
+Last reviewed against current governance baseline: 2026-08-29
 
-本 repository 目前已實作 Mock Data generation、Observability foundation、Event Detection、Event Detection Runner，以及 Scenario runtime / validation。PRD-001 v3.3 的 downstream product direction 尚包含 Alert Correlation、Incident lifecycle、Jira integration、Discord / ChatOps、RAG / LLM RCA、complete Dashboard workflow、Email fallback / escalation、human review 與 complete closed loop；這些能力尚未由 implementation evidence 證明完成，PRD-001 整體狀態仍為「執行中」。
+本repository目前已實作Mock Data generation、Observability foundation、Event Detection、Event Detection Runner，以及Scenario runtime／validation。PRD-003 v1.0已定稿為Alert Correlation／Incident Management Final Requirements，但**PRD Final Requirements ≠ implementation complete**；Correlation Engine、Correlation State、Incident Store／Manager、Shadow persistence、lifecycle workflow與downstream integrations仍待Engineering SPEC／implementation，PRD-001 v3.4整體狀態維持「執行中」。
 
 ## Current implementation
 
@@ -15,6 +15,15 @@ Last reviewed against current governance baseline: 2026-08-17
 - Scenario runtime and Demo / E2E integration validation controller
 
 Not yet implemented / downstream platform scope：Alert Correlation、Incident lifecycle / Incident Manager、Jira integration、Discord / ChatOps query、RAG / LLM RCA、complete Dashboard workflow、Email fallback / escalation、human review，以及 complete closed loop。請勿把 product direction 解讀為這些模組目前可運行；RAG framework 目前仍為 future architecture / TBD。
+
+```text
+Logs / Metrics
+→ Event Detection                ✅ implemented
+→ EventStore                     ✅ implemented
+→ Alert Correlation              planned implementation / PRD-003 Final
+→ Incident Manager               planned implementation / PRD-003 Final
+→ RCA / integrations             future downstream implementation
+```
 
 ## Current repository layout
 
@@ -71,7 +80,7 @@ models/log_isolation_forest.pkl
 models/metrics_isolation_forest.pkl
 ```
 
-Repository 不提供／不提交這些 runtime artifacts；artifact 未提交不等同 defect。若本機已有 Metrics model，可直接使用，不需每次執行都重新訓練。需建立 artifact 時，repository 確實提供 `scripts/train_log_model.py` 與 `scripts/train_metrics_model.py`；Log model 的正式行為與訓練邊界請依 SPEC-001 v2.2。本文不複製 Isolation Forest contract。
+Repository 不提供／不提交這些 runtime artifacts；artifact 未提交不等同 defect。若本機已有 Metrics model，可直接使用，不需每次執行都重新訓練。需建立 artifact 時，repository 確實提供 `scripts/train_log_model.py` 與 `scripts/train_metrics_model.py`；Log model 的正式行為與訓練邊界請依 SPEC-001 v2.3。本文不複製 Isolation Forest contract。
 
 ## Observability deployment notes
 
@@ -121,20 +130,21 @@ __pycache__/
 
 ## Authoritative documents / governance
 
-治理優先序為 PRD-002 → SPEC-001 / SPEC-002 / SPEC-003 / SPEC-004 → PRD-001 → DDS / README。
+治理依domain分工：PRD-002與SPEC-001～004治理Event Detection；PRD-003 v1.0 Final治理Alert Correlation／Incident Management detailed requirements；PRD-001治理overall platform direction；DDS-001治理repository-level Mock Data／Observability reference；README只提供入口與索引。SPEC-005提供implementation／validation evidence，不是detector authority。
 
 | Document | Role |
 |---|---|
-| PRD-001 v3.3 | 執行中的整體產品需求 |
-| PRD-002 v1.3 | Approved；正式 Event Detection requirement |
-| SPEC-001 v2.2 | Implemented；Log Event Detection contract |
+| PRD-001 v3.4 | 執行中的overall platform requirement |
+| PRD-002 v1.5 | Approved；Event Detection authoritative PRD |
+| PRD-003 v1.0 | Final Requirements；Alert Correlation／Incident Management authority，implementation pending |
+| SPEC-001 v2.3 | Implemented；Log Event Detection contract |
 | SPEC-002 v1.4 | Implemented；Metrics Threshold Detection contract |
 | SPEC-003 v1.1 | Implemented；Metrics Isolation Forest Detection contract |
 | SPEC-004 v1.1 | Implemented；Event Detection Runner contract |
-| SPEC-005 v1.2 | Implemented — PASS WITH KNOWN LIMITATIONS；implementation / validation evidence，不是 detector authoritative contract |
-| DDS-001 v1.2 | Repository-level Mock Data / Observability design reference |
+| SPEC-005 v1.3 | Implemented；S3 Identity Revalidation PASS；implementation／validation evidence，不是detector authority |
+| DDS-001 v1.3 | Repository-level Mock Data／Observability reference |
 
-PRD-002 與 SPEC-001～SPEC-004 提供正式 Event Detection contract；DDS / README 不重新定義其 schema、threshold、semantics、ownership、generator behavior 或 model parameters。
+PRD-002與SPEC-001～SPEC-004提供正式Event Detection contract；PRD-003 v1.0 Final提供Alert Correlation／Incident Management detailed requirements。DDS／README不重新定義其schema、threshold、semantics、ownership、generator behavior、model parameters或correlation policy。
 
 SDD、ADR-001 與 PM team instructions 是由 Google Drive 管理的 external governance documents。Repository 不建立其 mirror，本 README 也不推測其版本或內容。
 
@@ -142,5 +152,6 @@ SDD、ADR-001 與 PM team instructions 是由 Google Drive 管理的 external go
 
 - Grafana datasource provisioning 與 dashboard import 尚未自動化。
 - Model artifacts 是 local runtime prerequisites。
-- SPEC-005 validation evidence 不證明 PRD-001 v3.3 downstream workflow / integrations 已完成，包括 Alert Correlation、Incident lifecycle、Jira、Discord / ChatOps、RAG / LLM RCA、complete Dashboard workflow、Email fallback / escalation、human review 與 complete closed loop。
+- PRD-003只是Final Requirements，不表示Correlation Engine、Correlation State、Shadow persistence或Incident lifecycle implementation已完成。
+- SPEC-005 validation evidence不證明PRD-001 v3.4／PRD-003 v1.0 downstream workflow／integrations已完成，包括Jira、Discord／ChatOps、RAG／LLM RCA、complete Dashboard workflow、Email fallback／escalation、human review與complete closed loop。
 - Demo / E2E validation controller 與其 validation-specific behavior 不構成 production architecture requirement。

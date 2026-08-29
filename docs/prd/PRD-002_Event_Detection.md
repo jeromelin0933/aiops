@@ -8,9 +8,9 @@
 |---|---|
 | Document ID | PRD-002 |
 | Document Name | Event Detection |
-| Version | 1.4 |
+| Version | 1.5 |
 | Status | Approved |
-| Date | 2026-08-28 |
+| Date | 2026-08-29 |
 | Author | 林子豪（PM） |
 | Related Documents | ADR-001、PRD-001、DDS-001 |
 
@@ -20,6 +20,7 @@
 | 1.2 | 2026-08-06 | 對齊 SPEC-002 v1.3 Threshold 邊界規則；將 S2 Latency 與 S3 Memory 觸發條件明確修正為大於或等於門檻。；經 PM 確認後將文件狀態更新為 Approved。 |
 | 1.3 | 2026-08-12 | Cross-Document Governance reconciliation：釐清 S1／S6 Detector Contract 與 Demo／E2E Input、補充 SPEC-004 EventStore ownership traceability、更新實作驗證證據、相關文件與 G3 里程碑；既有 Approved requirement semantics 不變。 |
 | 1.4 | 2026-08-28 | S3 OOM identity contract strengthening：正式保證 `oom_crash_detected.service_name` 為實際 `OutOfMemoryError` evidence 所屬服務；不新增、刪除或重新命名 Event Schema top-level field。 |
+| 1.5 | 2026-08-29 | Post-PRD-003 downstream-reference reconciliation：更新 correlation／Incident governance reference與milestone wording；不修改Event Detection algorithm、15-field schema shape或S1～S6 detector semantics。 |
 ---
 
 ## 1. 文件目的
@@ -392,7 +393,7 @@ Detector pipelines 依 SPEC-004 ownership model 建立 Event、處理 cooldown�
 | `source_ip` | string or null | 攻擊來源 IP（S1 必填） |
 | `downstream_service` | string or null | 下游根因服務（S2、S5 必填） |
 | `external_service` | string or null | 外部依賴服務（S4 必填） |
-| `status` | string | `OPEN`（新建立）或 `CLOSED`（已處理） |
+| `status` | string | 現行Detector輸出為`OPEN`。`CLOSED`保留為legacy／reserved schema value，目前沒有由downstream correlation修改immutable EventStore record的合法mutation path。Correlation ownership、Pending、Processed／Dedup、Shadow與Incident lifecycle不得藉由改寫此欄位表達。 |
 | `triggered_features` | object | 觸發此 Event 的特徵值，供 Alert Correlation 參考 |
 | `raw_log_sample` | array | Log Event 最多保留 3 筆原始 Log；Metrics Event 固定使用空陣列 `[]` |
 
@@ -698,34 +699,25 @@ git branch -D
 
 ---
 
-## 10. 下一階段預告
+## 10. Downstream Governance Status
 
-本 PRD-002 完成後，進入：
+`PRD-003 v1.0 — Alert Correlation & Incident Management`已於2026-08-29定稿為Final Requirements，並以Runtime Event evidence定義evidence-driven Strong／Known Weak／Shadow policies、rolling Correlation Window、Pending Grace、Incident ownership／dedup／recovery，以及`OPEN → ASSIGNED → IN_PROGRESS → AWAITING_REVIEW → CLOSED` lifecycle。
 
-```
-PRD-003
-Alert Correlation & Incident Manager
-
-內容包含：
-├── 四條收斂規則（S1–S6 各自的 Correlation Logic）
-├── Incident Schema 定義
-├── Incident 狀態機（Open → Analyzing → Resolved）
-└── 冷卻期機制（防止 LLM 被洗版）
-```
+PRD-003是downstream correlation／Incident detailed requirement authority；PRD-002仍只負責Event Detection。Correlation／Incident implementation不因PRD Final而完成，後續Engineering SPEC仍待建立。EventStore中的normalized Event evidence保持immutable；Pending／Processed／Dedup屬PRD-003 Correlation State，Incident lifecycle status屬Incident，不得以修改`Event.status`表達。
 
 Event Detection 對應文件現況如下；僅保留必要 traceability：
 
 | SPEC | 內容 |
 |---|---|
-| SPEC-001 v2.2 | Log Event Detection 實作規格 |
+| SPEC-001 v2.3 | Log Event Detection 實作規格；Implemented |
 | SPEC-002 v1.4 | Metrics Threshold Detection 實作規格 |
 | SPEC-003 v1.1 | Metrics Isolation Forest Detection 實作規格 |
 | SPEC-004 v1.1 | Event Runner 整合規格 |
-| SPEC-005 v1.2 | Mock Data Generator Validation and Scenario Alignment；Phase 5／6／7 validation evidence |
+| SPEC-005 v1.3 | Mock Data Generator Validation and Scenario Alignment；Implemented，S3 Identity Revalidation PASS |
 
 ### 10.1 Implementation／Validation Evidence（Non-normative）
 
-Event Detection implementation 已由 SPEC-001～SPEC-004 實作，並由 SPEC-005 v1.2 完成 Phase 5／Phase 6／Phase 7 validation。Final evidence：Phase 5 Observability PASS、Phase 6 S1–S6 PASS、E2E Exit Code 0、Phase 7 PASS WITH KNOWN LIMITATIONS、Blocking Defects 0。
+Event Detection implementation已由SPEC-001～SPEC-004完成；SPEC-005 v1.3提供implementation／validation evidence，包含S3 Identity Revalidation PASS。此狀態不表示PRD-003 correlation／Incident implementation已完成。
 
 本節只記錄 implementation／validation reality，不新增、取代或放寬第 3～9 章的 Requirement／Contract。
 
@@ -737,11 +729,11 @@ Event Detection implementation 已由 SPEC-001～SPEC-004 實作，並由 SPEC-0
 |---|---|
 | G1 Mock Data | ✅ Completed（DDS-001） |
 | G2 Observability Platform | ✅ Completed（DDS-001） |
-| G3 Event Detection | ✅ Implementation／validation completed（SPEC-005 v1.2；PASS WITH KNOWN LIMITATIONS） |
-| G4 Alert Correlation | Planned（PRD-003） |
-| G5 Incident Manager | Planned（PRD-003） |
+| G3 Event Detection | ✅ Implementation／validation completed（SPEC-001～005 current baseline） |
+| G4 Alert Correlation | Requirements Final／Implementation Pending（PRD-003 v1.0 Final） |
+| G5 Incident Manager | Requirements Final／Implementation Pending（PRD-003 v1.0 Final） |
 | G6 LLM + RAG RCA | Planned（PRD-004） |
 | G7 Dashboard Integration | Planned（PRD-005） |
 | G8 Email Notification | Planned（PRD-005） |
 
-> Governance distinction：PRD-002 Requirement Status 維持 `Approved`；G3 Implementation Reality 為 implemented／validated with known limitations。兩者是不同治理維度。
+> Governance distinction：PRD-002 Requirement Status維持`Approved`；G3 Implementation Reality為implementation／validation completed。兩者是不同治理維度，且均不表示G4／G5 downstream implementation完成。
