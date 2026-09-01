@@ -11,17 +11,18 @@
 | Document ID | SPEC-006 |
 | Document Name | Alert Correlation Policy Engine |
 | Version | 1.0 |
-| Status | Approved — Implementation Pending |
-| Date | 2026-08-30 |
+| Status | Implemented |
+| Date | 2026-09-01 |
 | Requirement Authority | PRD-003 v1.0 Final |
 | Upstream Event Contract | PRD-002 v1.5 |
-| Implementation Owner（預計） | 富裕 |
+| Implementation Owner | 富裕 |
 
 | Version | Date | Change |
 |---|---|---|
 | 1.0 | 2026-08-30 | PRD-003 第一份 Engineering SPEC；定義 deterministic Alert Correlation Policy Engine、versioned Policy Registry、candidate selection、decision 與 structured failure contract。 |
+| 1.0 | 2026-09-01 | Implementation completed and PM reviewed；Alert Correlation Policy Engine production package、targeted tests、production Event integration-lite 與 full repository regression通過，Status 更新為 Implemented。Engineering Contract 未變更。 |
 
-> **SPEC Approved ≠ Implemented。** 本 SPEC 完成後仍須完成 implementation、targeted tests、contract tests 與 full repository regression，通過後才可更新為 `Implemented`。
+> **Implementation Status：** SPEC-006 v1.0 已完成 implementation；targeted tests、production Event contract／integration-lite、full repository regression與 PM Final Review均已完成，Status 已更新為 `Implemented`。此狀態只表示 SPEC-006 Deterministic Alert Correlation Policy Engine完成，不代表完整 Alert Correlation Runtime完成。Pending persistence、Incident mutation、Lifecycle、Shadow persistence、Runtime orchestration及 downstream Docker correlation E2E仍屬 SPEC-007～011與既有 downstream boundary。
 
 ---
 
@@ -797,15 +798,29 @@ SPEC-007～011 尚未實作，完整 Correlation Runtime E2E 留待後續 integr
 
 # 13. Implementation Handoff 與 Governance
 
-本 SPEC implementation 預計由 **富裕** 負責。此 owner 資訊不改變工程契約：implementation 不得依賴特定個人的 local environment、測試習慣或手動 workaround。
+本 SPEC implementation 由 **富裕** 完成，並已通過 PM Final Review。此 owner 資訊不改變工程契約：implementation 不得依賴特定個人的 local environment、測試習慣或手動 workaround。
 
-Implementation 完成前，文件 Status 維持 `Approved — Implementation Pending`。更新為 `Implemented` 前必須具備：
+## 13.1 Implementation Closure Evidence
 
-1. 符合本 SPEC 的 implementation；
-2. targeted unit tests通過；
-3. 使用真實 PRD-002 Event model的 contract／integration-lite tests通過；
-4. full repository regression通過；
-5. 由 PM／reviewer確認 implementation evidence。
+| Evidence | Result |
+|---|---|
+| Implementation Owner | 富裕 |
+| Production package | `src/alert_correlation/__init__.py`、`src/alert_correlation/contracts.py`、`src/alert_correlation/policy.py`、`src/alert_correlation/engine.py` |
+| Test suite | `tests/test_alert_correlation_policy_engine.py` |
+| Implementation commit | `b6ad880` |
+| `develop` integration commit | `10b7807` |
+| Targeted SPEC-006 Tests | `172 passed` |
+| Full Repository Regression | `601 passed` |
+| Skipped／Warnings | `0`／`0` |
+| Syntax／Import Gate | PASS |
+| S3 production EventBuilder integration-lite | PASS |
+| S6 production EventBuilder integration-lite | PASS |
+| PM Final Review | PASS |
+| Functional blocker | None |
+| New dependency | None |
+| Forbidden-scope modification | None |
+
+上述 evidence 滿足本 SPEC 原先定義的 Implemented Gate，因此 2026-09-01 正式將 Status 更新為 `Implemented`。
 
 本 SPEC 不授權 implementation 階段之外的 upstream Event Schema修改、persistence選型或 downstream workflow提前實作。
 
@@ -813,16 +828,24 @@ Implementation 完成前，文件 Status 維持 `Approved — Implementation Pen
 
 # 14. PM Review Checklist
 
-- [ ] 文件標示 `Version 1.0`、`Approved — Implementation Pending`、`2026-08-30`，並明示 SPEC Approved ≠ Implemented。
-- [ ] D1～D12 全部成為 normative engineering decisions。
-- [ ] S1～S6 Policy Matrix、Known Weak與 explicit UNKNOWN完整。
-- [ ] Runtime不使用 Scenario ID／Generator／Validator answer leakage。
-- [ ] Strong exact tier、Weak promotion tier與 no-fallback ambiguity完整。
-- [ ] Promotion 明示 incoming Strong提供 instance-level identity。
-- [ ] Known Weak不因 candidate本身較Strong而優先 attach。
-- [ ] `INITIAL`／`PENDING_RECHECK`／`PENDING_EXPIRED` 與 final reevaluation完整。
-- [ ] exact policy version與 config bootstrap contract完整。
-- [ ] Decision／Failure分離、Fail Closed與 staged View validation完整。
-- [ ] SPEC-007～011界線清楚且未鎖定 persistence technology。
-- [ ] AC-006-A～H與 required test layers完整。
-- [ ] implementation owner記錄為富裕，但契約保持 implementation-neutral。
+- [x] 文件標示 `Version 1.0`、Status `Implemented`、Closure Date `2026-09-01`。
+- [x] D1～D12 全部成為 normative engineering decisions。
+- [x] S1～S6 Policy Matrix、Known Weak與 explicit UNKNOWN完整。
+- [x] Runtime不使用 Scenario ID／Generator／Validator answer leakage。
+- [x] Strong exact tier、Weak promotion tier與 no-fallback ambiguity完整。
+- [x] Promotion 明示 incoming Strong提供 instance-level identity。
+- [x] Known Weak不因 candidate本身較Strong而優先 attach。
+- [x] `INITIAL`／`PENDING_RECHECK`／`PENDING_EXPIRED` 與 final reevaluation完整。
+- [x] exact policy version與 config bootstrap contract完整。
+- [x] Decision／Failure分離、Fail Closed與 staged View validation完整。
+- [x] SPEC-007～011界線清楚且未鎖定 persistence technology。
+- [x] AC-006-A～H與 required test layers完整。
+- [x] implementation owner記錄為富裕，但契約保持 implementation-neutral。
+- [x] SPEC-006 production implementation完成。
+- [x] Targeted tests：`172 passed`。
+- [x] S3／S6 production Event integration-lite通過。
+- [x] Full repository regression：`601 passed`。
+- [x] Syntax／Import Gate通過。
+- [x] Final PM Review：PASS。
+- [x] 無 active contract conflict。
+- [x] SPEC-007～011 boundary未被提前實作。
