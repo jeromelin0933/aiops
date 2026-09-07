@@ -1,8 +1,8 @@
 # AIOps Incident-driven Platform
 
-Last reviewed against current governance baseline: 2026-08-29
+Last reviewed against current governance baseline: 2026-09-07
 
-本repository目前已實作Mock Data generation、Observability foundation、Event Detection、Event Detection Runner，以及Scenario runtime／validation。PRD-003 v1.0已定稿為Alert Correlation／Incident Management Final Requirements，但**PRD Final Requirements ≠ implementation complete**；Correlation Engine、Correlation State、Incident Store／Manager、Shadow persistence、lifecycle workflow與downstream integrations仍待Engineering SPEC／implementation，PRD-001 v3.4整體狀態維持「執行中」。
+本repository目前已實作Mock Data generation、Observability foundation、Event Detection、Event Detection Runner、Scenario runtime／validation、SPEC-006 deterministic Alert Correlation Policy Engine，以及SPEC-007 durable Correlation State Store／Pending Recovery。PRD-003 v1.0是Alert Correlation／Incident Management Final Requirements authority，但**部分correlation foundation完成 ≠ 完整Alert Correlation Runtime完成**；Incident Store／Manager、lifecycle workflow、Shadow persistence、Runtime orchestration與full downstream E2E仍待SPEC-008～011後續工作，PRD-001 v3.4整體狀態維持「執行中」。
 
 ## Current implementation
 
@@ -13,21 +13,29 @@ Last reviewed against current governance baseline: 2026-08-29
 - Metrics Isolation Forest Detection
 - EventDetectionRunner
 - Scenario runtime and Demo / E2E integration validation controller
+- SPEC-006 deterministic Alert Correlation Policy Engine
+- SPEC-007 Correlation State Store / Pending Recovery
 
-Not yet implemented / downstream platform scope：Alert Correlation、Incident lifecycle / Incident Manager、Jira integration、Discord / ChatOps query、RAG / LLM RCA、complete Dashboard workflow、Email fallback / escalation、human review，以及 complete closed loop。請勿把 product direction 解讀為這些模組目前可運行；RAG framework 目前仍為 future architecture / TBD。
+Current PoC implementation uses Python stdlib `sqlite3` for the Correlation State Store. This is an implementation detail，不是platform、production database或future implementation requirement。
+
+Not yet implemented / downstream platform scope：SPEC-008 Incident Store／Incident Manager Core、SPEC-009 Lifecycle／Human Workflow、SPEC-010 Shadow／Unclassified Store、SPEC-011 Runtime Orchestration／full downstream E2E、Jira integration、Discord／ChatOps query、RAG／LLM RCA、complete Dashboard workflow、Email fallback／escalation，以及complete closed loop。請勿將SPEC-006／007完成解讀為上述模組或完整Alert Correlation Runtime目前可運行；RAG framework仍為future architecture／TBD。
 
 ```text
 Logs / Metrics
 → Event Detection                ✅ implemented
 → EventStore                     ✅ implemented
-→ Alert Correlation              planned implementation / PRD-003 Final
-→ Incident Manager               planned implementation / PRD-003 Final
+→ SPEC-006 Policy Engine         ✅ implemented
+→ SPEC-007 Correlation State     ✅ implemented
+→ SPEC-008 Incident Core         pending
+→ SPEC-009 Lifecycle / Workflow  pending
+→ SPEC-010 Shadow Store          pending
+→ SPEC-011 Runtime / E2E         pending
 → RCA / integrations             future downstream implementation
 ```
 
 ## Current repository layout
 
-以下項目均已於 2026-08-12 靜態確認存在：
+以下項目已於 2026-09-07 implementation baseline確認存在：
 
 ```text
 configs/scenarios.yaml
@@ -36,6 +44,9 @@ src/scenario_runtime/
 src/log_generator/
 src/metrics_generator/
 src/event_detection/
+src/alert_correlation/            # SPEC-006 policy engine
+src/alert_correlation/state/      # state contracts, SQLite PoC adapter,
+                                  # pending state service, recovery service
 
 scripts/run_mock_runtime.py
 scripts/validate_scenarios.py
@@ -142,6 +153,9 @@ __pycache__/
 | SPEC-003 v1.1 | Implemented；Metrics Isolation Forest Detection contract |
 | SPEC-004 v1.1 | Implemented；Event Detection Runner contract |
 | SPEC-005 v1.3 | Implemented；S3 Identity Revalidation PASS；implementation／validation evidence，不是detector authority |
+| SPEC-006 v1.0 | Implemented；Deterministic Alert Correlation Policy Engine contract |
+| SPEC-007 v1.0 | Implemented；Correlation State Store／Pending Recovery contract |
+| SPEC-008～011 | Pending；Incident、Lifecycle、Shadow、Runtime orchestration與full downstream E2E |
 | DDS-001 v1.3 | Repository-level Mock Data／Observability reference |
 
 PRD-002與SPEC-001～SPEC-004提供正式Event Detection contract；PRD-003 v1.0 Final提供Alert Correlation／Incident Management detailed requirements。DDS／README不重新定義其schema、threshold、semantics、ownership、generator behavior、model parameters或correlation policy。
@@ -152,6 +166,6 @@ SDD、ADR-001 與 PM team instructions 是由 Google Drive 管理的 external go
 
 - Grafana datasource provisioning 與 dashboard import 尚未自動化。
 - Model artifacts 是 local runtime prerequisites。
-- PRD-003只是Final Requirements，不表示Correlation Engine、Correlation State、Shadow persistence或Incident lifecycle implementation已完成。
+- SPEC-006 Policy Engine與SPEC-007 Correlation State已完成，但完整Alert Correlation Runtime尚未完成；SPEC-008 Incident、SPEC-009 Lifecycle、SPEC-010 Shadow、SPEC-011 Runtime orchestration及full downstream E2E仍為pending。
 - SPEC-005 validation evidence不證明PRD-001 v3.4／PRD-003 v1.0 downstream workflow／integrations已完成，包括Jira、Discord／ChatOps、RAG／LLM RCA、complete Dashboard workflow、Email fallback／escalation、human review與complete closed loop。
 - Demo / E2E validation controller 與其 validation-specific behavior 不構成 production architecture requirement。

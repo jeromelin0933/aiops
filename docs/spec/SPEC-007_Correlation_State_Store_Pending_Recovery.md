@@ -11,8 +11,8 @@
 | Document ID | SPEC-007 |
 | Document Name | Correlation State Store & Pending Recovery |
 | Version | 1.0 |
-| Status | Approved — Implementation Pending |
-| Date | 2026-09-04 |
+| Status | Implemented |
+| Date | 2026-09-07 |
 | Requirement Authority | PRD-003 v1.0 Final |
 | Upstream Event Contract | PRD-002 v1.5 |
 | Upstream Correlation Contract | SPEC-006 v1.0 Implemented |
@@ -23,8 +23,9 @@
 | 0.1 | 2026-09-04 | Initial Draft；定義 Correlation State Store、Pending continuity、Processed／Dedup、Blocked／Failure、single-flight、durable Mutation Intent、crash consistency與restart recovery工程契約。 |
 | 0.2 | 2026-09-04 | PM Review revision：修正 Active Pending policy vocabulary、Block resolution semantics、nullable failure phase、MutationIntent upstream field alignment、schema/version implementation neutrality、startup integrity scope、Shadow dangling-reference coverage與 Claim wording；D1～D12核心架構不變。 |
 | 1.0 | 2026-09-04 | Second PM Review completed；D1～D12、D2 narrow clarification、D12 Time／Phase Ownership amendment、state／recovery／crash consistency contracts與 AC-007-A～I通過 PM Review。Status更新為 Approved — Implementation Pending；Engineering Contract frozen for implementation。尚未開始 implementation。 |
+| 1.0 | 2026-09-07 | Implementation completed and PM Final Review PASS；Correlation State Store／Pending Recovery已合併至develop，Status更新為 Implemented。Engineering Contract未變更。 |
 
-> **Implementation Status Honesty：Approved ≠ Implemented。** 本文件已完成 Second PM Review並進入 `Approved — Implementation Pending`；此狀態表示 Engineering Contract已核准，可進入後續受治理的 implementation，但不代表 Correlation State Store、Pending recovery、Processed／Dedup、Blocked／Failure persistence、MutationIntent、single-flight或 restart recovery已完成實作。只有在 production implementation、targeted tests、persistence／concurrency／crash recovery tests、cross-SPEC integration、full repository regression與 PM Final Review完成後，才可更新為 `Implemented`。
+> **Implementation Status Honesty：** SPEC-007 v1.0 已完成 implementation；Correlation State Store、Pending continuity、Blocked failure durability、MutationIntent、Processed／Dedup、Claim／fencing、restart／recovery及 retention／integrity guards均已通過對應測試與 PM Final Review，Status已更新為 `Implemented`。此狀態只表示 SPEC-007範圍完成，不代表完整 Alert Correlation Runtime完成；SPEC-008 Incident Store／Manager、SPEC-009 Lifecycle／Human Workflow、SPEC-010 Shadow／Unclassified Store、SPEC-011 Runtime Orchestration及 full downstream Docker Correlation E2E仍未完成。
 
 ---
 
@@ -178,7 +179,7 @@ SPEC-007知道 **WHAT state exists**；SPEC-011決定 **WHEN to act on it**。Do
 - 不保存 full Event、full Incident、full Shadow或 arbitrary traceback；
 - 在讀取與寫入時驗證 immutable fields與 cross-record invariants。
 
-Physical serialization、table／collection layout與 storage engine是 Implementation Choice，不屬本 Draft的固定契約。
+Physical serialization、table／collection layout與 storage engine是 Implementation Choice，不屬本 SPEC 的固定契約。
 
 ## 2.2 `ActivePendingRecord`
 
@@ -1004,39 +1005,51 @@ Future decisions必須保持本文件的 idempotency、single ownership、exact 
 
 ---
 
-# 18. Implementation Handoff／Governance
+# 18. Implementation Closure & Governance
 
-Implementation Owner為 **Tako**。文件目前為 `Approved — Implementation Pending`；Engineering Contract已完成 Second PM Review，本次 approval closure不開始 implementation，也不宣稱 Implemented。
+Implementation Owner為 **Tako**。SPEC-007 v1.0 production implementation已完成並通過 PM Final Review；owner與實作選型不改變本文件的 Engineering Contract或 authority boundaries。
 
-Implementation agent必須：
+持續適用的治理原則：
 
-- 依已核准的 SPEC-007 v1.0 Engineering Contract進入受治理的 implementation；
+- `Logical Store ≠ Physical Database`；current adapter不將SQLite升格為D12 normative requirement；
 - 不修改 PRD-002、PRD-003或 SPEC-006 authority；
-- 不實作 speculative SPEC-008／SPEC-010／SPEC-011 domain behavior；
-- 不執行 destructive reset／cleanup以通過測試；
-- 不依賴個人 local workaround或 Scenario answer leakage；
-- 發現 active conflict時停止受影響範圍並回報 PM。
+- 不將SPEC-007 implementation擴張為SPEC-008／SPEC-009／SPEC-010／SPEC-011 domain behavior或runtime orchestration；
+- normal runtime、validator與AI coding agent不得執行destructive reset／cleanup；destructive maintenance必須經PM明確授權；
+- 不依賴個人local workaround或Scenario／Generator／Validator answer leakage；
+- 後續若發現active authority conflict，必須停止受影響範圍並回報PM。
 
-AI coding agent不得自行執行 Git operation或 destructive state cleanup；版本控制與 destructive maintenance須由 PM明確授權的流程處理。
+## 18.1 Implementation Closure Evidence（Non-normative）
 
-更新為 `Implemented`前至少必須具備：
+| Evidence | Result |
+|---|---|
+| Implementation Owner | Tako |
+| Implementation files | `src/alert_correlation/state/__init__.py`、`src/alert_correlation/state/contracts.py`、`src/alert_correlation/state/sqlite_store.py`、`src/alert_correlation/state/pending.py`、`src/alert_correlation/state/recovery.py` |
+| Test files | `tests/_state_store_testkit.py`、`tests/test_correlation_state_claims_and_finalization.py`、`tests/test_correlation_state_contracts.py`、`tests/test_correlation_state_pending.py`、`tests/test_correlation_state_recovery.py`、`tests/test_correlation_state_sqlite_store.py`、`tests/test_spec_007_narrow_closure.py`、`tests/test_spec_007_phase6_integration.py` |
+| Current PoC persistence adapter | Python stdlib `sqlite3`／`SqliteCorrelationStateStore` |
+| Feature commit | `7fdcd96` |
+| Develop merge commit | `2ead79d` |
+| AC-007-A～I | PASS |
+| PM Final Review | PASS |
+| Post-merge full regression | `679 passed`／`0 failed`／`0 skipped` |
+| Functional blocking defects | None |
 
-1. 符合本 SPEC的 production implementation；
-2. targeted unit與 persistence contract tests通過；
-3. 使用真實 SPEC-006 contracts的 integration tests通過；
-4. concurrency與 crash recovery tests通過；
-5. full repository regression通過；
-6. PM Final Review確認 implementation evidence與 scope compliance。
+> **Implementation technology note：** This is a current PoC implementation detail, not a normative requirement of D12. Physical persistence technology仍是可替換的 Implementation Choice。
 
-> **Approved ≠ Implemented。** Approval只表示 Engineering Contract可進入實作；不表示 Correlation State persistence或完整 Alert Correlation Runtime已完成。
+> **Warning note：** Existing/environment dependency deprecation warnings outside SPEC-007 scope were observed in the PM post-merge environment.
+
+上述evidence滿足本SPEC原先定義的Implemented Gate，因此於2026-09-07將Status更新為`Implemented`。Evidence只證明SPEC-007範圍完成；SPEC-008～011與full downstream Docker Correlation E2E仍屬後續工作。
+
+> **Approved ≠ Implemented。** Approval只核准Engineering Contract；本文件已另以production implementation、targeted／persistence／concurrency／crash recovery tests、cross-SPEC integration、full repository regression與PM Final Review evidence滿足Implemented Gate。
 
 ---
 
-# 19. PM Review Checklist
+# 19. PM Review & Implementation Closure Checklist
 
 > **Second PM Review Result：PASS — 2026-09-04。** 本 checklist已完成 PM核准；後續若 implementation發現 active authority conflict，仍須停止受影響範圍並回報 PM。
 
-- [x] Metadata為 SPEC-007 v1.0／`Approved — Implementation Pending`／2026-09-04，Owner為 Tako。
+> **PM Final Review Result：PASS — 2026-09-07。** SPEC-007已滿足Implemented Gate；此closure不改變D1～D12或downstream boundaries。
+
+- [x] Metadata為 SPEC-007 v1.0／`Implemented`／Closure Date 2026-09-07，Owner為 Tako。
 - [x] Authority正確引用 PRD-003 v1.0 Final、PRD-002 v1.5、SPEC-006 v1.0 Implemented。
 - [x] D1～D12與 D2／D12 narrow clarifications完整且未重新設計。
 - [x] EventStore immutable；未修改15-field schema或使用 `Event.status`表示 correlation state。
@@ -1057,3 +1070,9 @@ AI coding agent不得自行執行 Git operation或 destructive state cleanup；�
 - [x] Public API只鎖 semantic capabilities，不鎖 physical implementation。
 - [x] AC-007-A～I可直接轉換為 targeted tests。
 - [x] SPEC-008／010／011 boundary保持鬆耦合且未提前實作。
+- [x] SPEC-007 production implementation completed。
+- [x] AC-007-A～I：PASS。
+- [x] Feature commit `7fdcd96`已合併至develop；merge commit為`2ead79d`。
+- [x] Post-merge full repository regression：`679 passed`／`0 failed`／`0 skipped`。
+- [x] PM Final Review：PASS。
+- [x] SPEC-008／009／010／011與full downstream Docker Correlation E2E仍明確維持後續範圍。
