@@ -1,6 +1,6 @@
 # SPEC-008 — Incident Store & Incident Manager Core
 
-## Software Design Specification v1.0
+## Software Design Specification v1.1
 
 ---
 
@@ -10,9 +10,9 @@
 |---|---|
 | Document ID | SPEC-008 |
 | Document Name | Incident Store & Incident Manager Core |
-| Version | 1.0 |
-| Status | Approved — Implementation Pending |
-| Date | 2026-09-08 |
+| Version | 1.1 |
+| Status | Implemented |
+| Date | 2026-09-09 |
 | Requirement Authority | PRD-003 v1.0 Final |
 | Upstream Event Contract | PRD-002 v1.5 |
 | Upstream Correlation Contract | SPEC-006 v1.0 Implemented |
@@ -23,8 +23,10 @@
 |---|---|---|
 | 0.1 | 2026-09-08 | Initial Draft；定義 authoritative Incident persistence、correlation-driven create／attach、Event ownership、idempotent operation replay、Late Strong-Anchor Promotion、audit、read boundary、SQLite PoC persistence與 recovery handoff工程契約。 |
 | 1.0 | 2026-09-08 | PM Review #1、Revision Round #1與PM Review #2完成；D1～D12、008-R1、008-R2、typed error contract、RCA initial state、replay／crash consistency、Acceptance Criteria與cross-SPEC boundaries完成final review。Status更新為 Approved — Implementation Pending；Engineering Contract frozen for implementation。 |
+| 1.1 | 2026-09-09 | Narrow additive read-capability refinement：新增public、read-only semantic capability，用於判斷Event是否已有authoritative Incident ownership。不改Incident ownership authority、mutation semantics、persistence topology、PRD requirements或既有D1～D12 behavior。Status維持 Approved — Implementation Pending。 |
+| 1.1 | 2026-09-09 | Implementation completed and PM Final Review PASS；Incident Store／Incident Manager Core、Event ownership、operation replay、Late Strong-Anchor Promotion、audit、public read-only Event→Incident ownership capability、restart／integrity／concurrency behavior及AC-008-A～K均已實作並完成驗證。Status更新為 Implemented；Engineering semantics與approved v1.1 contract一致，無implementation deviation。 |
 
-> **Implementation Status Honesty：Approved ≠ Implemented。** SPEC-008 v1.0已完成PM Review，Engineering Contract已frozen for implementation，Status為`Approved — Implementation Pending`；implementation尚未開始。本次approval不表示SQLite schema、production package或tests已存在或通過，也不表示SPEC-009 lifecycle、SPEC-010 Shadow、SPEC-011 Runtime／E2E或完整Alert Correlation Runtime已完成。
+> **Implementation Status Honesty：SPEC-008 v1.1已完成implementation，Status為`Implemented`。** 此狀態只表示SPEC-008 Incident Store／Incident Manager Core及其public read-only Event→Incident ownership capability已完成並通過PM Final Review；不代表SPEC-009 Incident Lifecycle／Human Workflow、SPEC-010 Shadow／Unclassified Store final integration、SPEC-011 Runtime Orchestration、full downstream Docker E2E、RCA／RAG、Jira／Discord／Dashboard workflow或完整AIOps closed loop已完成，亦不表示整體平台Production Ready。
 
 ---
 
@@ -71,6 +73,8 @@ SPEC-008是Incident domain side-effect authority；它不進行candidate matchin
 | D11 | Recovery existence與`IncidentCorrelationView`是不同read capability；View只暴露SPEC-006所需current fields，Store不做candidate selection。 |
 | D12 | PoC使用independent Python stdlib `sqlite3` database，並以local atomicity、own concurrency protection、durable operation result與Fail-Closed integrity支援replay／recovery；不與SPEC-007共用DB、table或transaction authority。 |
 
+SPEC-008 v1.1在不改寫D1～D12既有behavior的前提下，additive補充一項Event ownership read capability。此capability只公開既有D5 Event→Incident ownership authority的semantic read，不建立新的ownership authority或mutation path。
+
 ## 0.4 008-R1 — Physical Persistence Decision
 
 PoC正式選擇：
@@ -113,6 +117,7 @@ SPEC-008必須：
 - append correlation-driven business audit；
 - durable保存same-operation result／receipt並支援replay／recovery lookup；
 - 提供Incident read、existence及`IncidentCorrelationView` read capability；
+- 提供public、read-only Event→Incident ownership existence semantic capability；
 - 提供自身local concurrency、transaction、integrity及readiness protection。
 
 ## 1.2 MUST NOT
@@ -597,7 +602,55 @@ incident_exists(incident_id) -> bool
 
 或完全等價接口，供SPEC-007／SPEC-011 recovery reference validation。Malformed／unreadable matching record不得回`false`偽裝Not Found；應回typed integrity failure。SPEC-007不得直接讀SPEC-008 SQLite tables。
 
-## 11.2 Incident reads
+## 11.2 Event → Incident ownership read capability
+
+SPEC-008必須提供public、read-only semantic capability，概念接口為：
+
+```text
+event_has_incident_owner(event_id) -> bool
+```
+
+Exact implementation method name可依repository style決定，但等價semantic capability必須存在於public supported surface。Caller不得直接query SQLite或依賴`incident_events`等physical table／column名稱。
+
+Normative result semantics：
+
+| Authoritative state | Required result |
+|---|---|
+| `event_id`具有一個coherent、valid Incident owner | `True` |
+| authoritative state確認`event_id`沒有Incident ownership | `False` |
+| malformed ownership、dangling reference、contradictory ownership／receipt／Incident relationship、unsupported或corrupt persisted state | Fail Closed；使用既有SPEC-008 typed integrity／error contract |
+
+Corruption或無法可靠分類的state不得回`False`或Not Found以偽裝clean absence。除非既有error taxonomy確實無法表達，implementation不得為此capability新增平行error authority。
+
+此capability嚴格為read-only，且不得：
+
+- create Incident或attach Event；
+- 建立、修改、reassign或repair ownership；
+- 改變Incident lifecycle；
+- mutate operation receipt或business audit；
+- force promotion；
+- 暴露raw writable Store primitive。
+
+`IncidentManager`仍是sole authoritative correlation mutation boundary。Implementation只能讀取既有authoritative local ownership state，不得建立second ownership table、duplicate ownership ledger、shared SPEC-010 database、cross-store foreign key、distributed transaction或2PC。
+
+此capability允許SPEC-010在建立Shadow前判斷Event是否已有authoritative Incident ownership，但SPEC-008不得import SPEC-010、query Shadow Store、擁有global Incident／Shadow orchestration或實作SPEC-011 sequencing。Global single-terminal ownership仍由SPEC-007＋SPEC-008＋SPEC-010＋SPEC-011共同形成。
+
+此refinement不是competition instrumentation。不得因此新增`count_incidents()`、`scenario_id`、`evaluation_run_id`、expected answer、ground truth、competition-only timestamp或report table。Competition Evaluation仍遵循：existing evidence > offline derivation > evaluation-only instrumentation > production instrumentation > domain contract change。
+
+Documentation impact：
+
+```text
+PRD patch required          NO
+SPEC-006 patch required     NO
+SPEC-007 patch required     NO
+SPEC-010 patch required     NO
+SPEC-011                    future integration consumer
+README patch required       NO
+DDS patch required          NO
+Architecture change         NO
+```
+
+## 11.3 Incident reads
 
 至少提供：
 
@@ -608,7 +661,7 @@ incident_exists(incident_id) -> bool
 
 Read結果必須point-in-time coherent，不得組合不同transaction snapshot的fields。
 
-## 11.3 Minimal `IncidentCorrelationView`
+## 11.4 Minimal `IncidentCorrelationView`
 
 必須reuse SPEC-006 logical view semantics，只暴露：
 
@@ -919,6 +972,16 @@ Assignment發生於Incident建立後；future assignment failure不得rollback�
 - 未實作SPEC-009 lifecycle、SPEC-010 Shadow或SPEC-011 orchestration。
 - Full repository regression通過；full downstream Docker Correlation E2E仍defer至SPEC-011 integration。
 
+## AC-008-K — Event Ownership Read Capability
+
+- Existing coherent Event→Incident ownership回`True`。
+- Clean authoritative no-owner state回`False`。
+- Corrupt、malformed、dangling或contradictory ownership state必須Fail Closed，不得回`False`偽裝clean absence。
+- Close／reopen後，同一durable ownership或clean absence維持相同semantic result。
+- Capability strictly read-only，不得create／attach／promote、修改ownership、receipt、audit或lifecycle。
+- 不建立duplicate ownership authority、second ownership ledger或shared／cross-store persistence authority。
+- Public caller不接觸raw SQLite、`incident_events` table或writable Store primitive。
+
 ---
 
 # 18. Required Test Layers
@@ -935,6 +998,7 @@ Implementation acceptance至少需要：
 8. `IncidentCorrelationView` boundary tests：minimum fields、coherent snapshot、malformed-state failure與no candidate selection。
 9. Integrity／Fail-Closed tests：malformed record、unsupported version、dangling reference、ownership／receipt／context conflicts及unreadable store。
 10. Full repository regression：`python -m pytest -q`或Repository正式equivalent command。
+11. Event ownership read tests：existing owner、clean absence、corrupt／dangling／contradictory state、restart durability、read-only surface及no raw persistence leakage。
 
 建議使用parameterized及controlled concurrency／crash tests。不得以固定test count取代contract coverage；coverage優先於數量。
 
@@ -964,15 +1028,15 @@ Future work可包含production persistence adapter、governed schema migration�
 
 ---
 
-# 20. Implementation Handoff／Contract Freeze Governance
+# 20. Implementation Closure／Contract Freeze Governance
 
-Implementation Owner為 **富裕**。SPEC-008 v1.0已完成PM Review並進入`Approved — Implementation Pending`；Engineering Contract已frozen for implementation，但implementation尚未開始。PM將另行提供Implementation Work Instructions。
+Implementation Owner為 **富裕**。SPEC-008 v1.1 production implementation、public read-only Event→Incident ownership capability及AC-008-A～K已完成，並通過PM Final Review；Status已更新為`Implemented`。
 
 Contract freeze治理：
 
-> SPEC-008 v1.0已完成PM Review並frozen for implementation。任何後續semantic requirement／Engineering Contract change，必須先停止受影響implementation、保存evidence並交由PM審核；必要時更新本SPEC或upstream authority後才可繼續。Implementation不得靜默反向改寫SPEC；implementation reality可提出文件修訂，wording／metadata／implementation note可依治理作最小patch或defer，requirement-level change才考慮PRD revision。
+> SPEC-008 v1.1已完成PM-authorized narrow refinement並frozen for implementation。任何後續semantic requirement／Engineering Contract change，必須先停止受影響implementation、保存evidence並交由PM審核；必要時更新本SPEC或upstream authority後才可繼續。Implementation不得靜默反向改寫SPEC；implementation reality可提出文件修訂，wording／metadata／implementation note可依治理作最小patch或defer，requirement-level change才考慮PRD revision。
 
-Future implementation agent必須：
+Post-implementation governance持續要求：
 
 - 未經PM明確授權不得執行Git mutation；
 - 不修改PRD-002、PRD-003、SPEC-006或SPEC-007 authority；
@@ -982,13 +1046,30 @@ Future implementation agent必須：
 - 不以Scenario／Generator／Validator answer通過測試；
 - 不把SQLite PoC choice宣稱為PRD或future production requirement。
 
-更新為`Implemented`前至少必須完成targeted tests、SQLite persistence、idempotency／receipt、restart、crash、concurrency、real cross-SPEC contracts、View boundary、integrity tests、full repository regression與PM Final Review。
+## 20.1 Implementation Closure Evidence（Non-normative）
+
+下列結果為Engineering Confidence Evidence，不代表system accuracy為100%，亦不承諾future competition final repository的固定test count。
+
+| Evidence | Result |
+|---|---|
+| D1～D12 | PASS |
+| 008-R1／008-R2 | PASS |
+| AC-008-A～K | PASS |
+| SPEC-008 targeted tests | 126 passed |
+| Relevant SPEC-006 tests | 172 passed |
+| Relevant SPEC-007 tests | 78 passed |
+| Full repository regression | 805 passed |
+| Warnings | none |
+| PM Final Review | PASS |
+| Implementation deviations | NONE |
+
+SPEC-010可消費本SPEC提供的public read-only Event→Incident ownership capability；global Incident＋Shadow sequencing、Runtime Orchestration及full integration仍由SPEC-011承接，Cross-SPEC classification維持`REFINE DOWNSTREAM`。本次closure未新增competition instrumentation或competition contract。
 
 ---
 
-# 21. PM Review Checklist
+# 21. PM Review／Implementation Closure Checklist
 
-- [x] Metadata為SPEC-008 v1.0／`Approved — Implementation Pending`／2026-09-08，Owner為富裕。
+- [x] Metadata為SPEC-008 v1.1／`Implemented`／2026-09-09，Owner為富裕。
 - [x] Authority正確引用PRD-003 v1.0 Final、PRD-002 v1.5、SPEC-006 v1.0 Implemented、SPEC-007 v1.0 Implemented。
 - [x] D1～D12完整且與008-R1／008-R2一致。
 - [x] Event保持15-field immutable contract，未使用`Event.status`或answer leakage作Incident state。
@@ -1003,6 +1084,7 @@ Future implementation agent必須：
 - [x] Late Strong-Anchor Promotion保留Incident identity且concurrent conflict Fail Closed。
 - [x] Business audit exactly-once與durable operation receipt語意分離。
 - [x] Recovery existence與minimal `IncidentCorrelationView` APIs分離。
+- [x] Public Event→Incident ownership read capability定義existing owner／clean absence／integrity Fail-Closed semantics，且維持read-only與persistence abstraction。
 - [x] SQLite使用independent configurable `incident_store.db`，未宣稱SPEC-007 hardcode DB path。
 - [x] Incident、ownership、receipt、audit具有SPEC-008 local all-or-nothing transaction。
 - [x] 無shared DB、direct SPEC-007 table access、cross-store ACID或2PC。
@@ -1011,7 +1093,7 @@ Future implementation agent必須：
 - [x] Incident不因CLOSED／age自動刪除，無normal-runtime destructive cleanup。
 - [x] SPEC-009 lifecycle／human workflow未被提前實作。
 - [x] SPEC-010 Shadow與SPEC-011 Runtime／full downstream E2E未被提前實作。
-- [x] AC-008-A～J可直接轉換為targeted tests。
+- [x] AC-008-A～K可直接轉換為targeted tests。
 - [x] Required test layers完整且未以固定數量取代coverage。
-- [x] 文件維持`Approved ≠ Implemented`，未宣稱implementation、完整Runtime或full Docker E2E完成。
+- [x] SPEC-008 v1.1 implementation及PM Final Review已完成；未宣稱SPEC-009、SPEC-010 final integration、SPEC-011、完整Runtime或full Docker E2E完成。
 - [x] Incident-domain failure disposition closed mapping已由PM Review確認。
