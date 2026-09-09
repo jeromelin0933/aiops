@@ -7,6 +7,8 @@ from datetime import datetime
 from uuid import uuid4
 
 from alert_correlation.state.contracts import CorrelationMutationIntent
+from src.incident_management import IncidentDomainError
+from src.incident_management.contracts import IncidentErrorCode
 
 from .contracts import (
     ExactPolicyLookup,
@@ -122,6 +124,20 @@ class ShadowManager:
     def _require_no_incident_owner(self, event_id: str) -> None:
         try:
             has_owner = self._incident_ownership_lookup.event_has_incident_owner(event_id)
+        except IncidentDomainError as exc:
+            # SPEC-008 is the authoritative semantic reader.  Its failures
+            # cannot be interpreted as clean absence: map them into the
+            # frozen Shadow retry vocabulary while preserving fail-closed
+            # behaviour before any local transaction writes occur.
+            code = (
+                ShadowDomainErrorCode.TRANSIENT_SHADOW_STORE_FAILURE
+                if exc.code is IncidentErrorCode.TRANSIENT_INCIDENT_STORE_FAILURE
+                else ShadowDomainErrorCode.SHADOW_STORE_INTEGRITY_FAILURE
+            )
+            raise ShadowDomainError(
+                code,
+                "Incident ownership evidence cannot be safely interpreted",
+            ) from exc
         except Exception as exc:
             raise ShadowDomainError(
                 ShadowDomainErrorCode.SHADOW_STORE_INTEGRITY_FAILURE,

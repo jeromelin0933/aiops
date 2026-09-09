@@ -152,7 +152,12 @@ class ExactPolicyLookup(Protocol):
 
 
 class IncidentOwnershipLookup(Protocol):
-    """Read-only semantic dependency; SPEC-008 adapter remains future work."""
+    """Read-only semantic Event-to-Incident ownership boundary.
+
+    ``SqliteIncidentStore.event_has_incident_owner`` is the implemented
+    SPEC-008 provider.  Consumers must not substitute persistence reads or
+    infer clean absence after a provider failure.
+    """
 
     def event_has_incident_owner(self, event_id: str) -> bool: ...
 
