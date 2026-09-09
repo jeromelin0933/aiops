@@ -11,21 +11,22 @@
 | Document ID | SPEC-010 |
 | Document Name | Shadow / Unclassified Store |
 | Version | 1.0 |
-| Status | Approved — Implementation Pending |
-| Date | 2026-09-08 |
+| Status | Implemented |
+| Date | 2026-09-09 |
 | Requirement Authority | PRD-003 v1.0 Final |
 | Upstream Event Contract | PRD-002 v1.5 Approved |
 | Upstream Correlation Contract | SPEC-006 v1.0 Implemented |
 | Upstream Correlation State Contract | SPEC-007 v1.0 Implemented |
-| Related Incident Contract | SPEC-008 v1.0 Approved — Implementation Pending |
+| Related Incident Contract | SPEC-008 v1.1 Implemented |
 | Implementation Owner | 夜羽 |
 
 | Version | Date | Change |
 |---|---|---|
 | 0.1 | 2026-09-08 | Initial Draft；定義authoritative Shadow／Unclassified persistence、legal `ROUTE_SHADOW` side effect、Event ownership、operation replay、crash recovery、read／enumeration、integrity、retention及cross-domain ownership工程契約。 |
 | 1.0 | 2026-09-08 | Draft Review #1、Revision Round #1 與 PM Review #2 完成；D1～D12、010-R1～R5、ShadowReason semantics、Shadow／Incident ownership boundary、operation replay／crash recovery、closed Shadow error contract、Acceptance Criteria 與 cross-SPEC boundaries 完成 final review。Status 更新為 Approved — Implementation Pending；Engineering Contract frozen for implementation。 |
+| 1.0 | 2026-09-09 | Implementation completed and PM Final Review PASS；SPEC-010 Phase 1～6、Shadow persistence、ownership、operation replay／crash recovery、SPEC-008 public ownership integration及AC-010-A～J均已實作並完成驗證。Status更新為 Implemented；Engineering semantics與approved v1.0 contract一致，無implementation deviation。 |
 
-> **Implementation Status Honesty：Approved ≠ Implemented.** SPEC-010 v1.0已完成PM Review，Engineering Contract已freeze，Status為`Approved — Implementation Pending`；implementation尚未開始。Shadow Store production code與tests不因本次approval而存在或通過，physical persistence technology仍為Implementation Choice。SPEC-008仍為`Approved — Implementation Pending`的current implementation workstream；SPEC-011 Runtime、完整Alert Correlation Runtime、full downstream Docker E2E及Shadow Human Review／learning／clustering均尚未完成。
+> **Implementation Status Honesty：SPEC-010 v1.0已完成implementation，Status為`Implemented`。** 此狀態只表示Shadow／Unclassified Store及其與SPEC-008 public read-only Event→Incident ownership capability的integration已完成並通過PM Final Review；不代表SPEC-009 lifecycle／human workflow、SPEC-011 Runtime Orchestration、full downstream Docker E2E、RCA／RAG、ChatOps或完整AIOps closed loop已完成，亦不表示整體平台Production Ready。
 
 ---
 
@@ -728,20 +729,11 @@ Future work需另立authority與acceptance contract，不得把刪除Shadow／Pr
 
 ---
 
-# 20. Approved Implementation Handoff
+# 20. Implementation Closure
 
-Implementation Owner為 **夜羽**。SPEC-010 v1.0已完成PM Review並frozen for implementation；目前狀態為`Approved — Implementation Pending`，不代表implementation已開始或完成。
+Implementation Owner為 **夜羽**。SPEC-010 v1.0 Phase 1～6 implementation及PM Final Review已完成，Status已更新為`Implemented`。
 
-本文件已完成下列contract approval流程；PM將另行提供Implementation Work Instructions：
-
-```text
-PM Review
-→ required revisions
-→ v1.0
-→ Approved — Implementation Pending
-```
-
-建議future implementation phases：
+Approved implementation phases已完成：
 
 ```text
 Phase 0 — Read-only Implementation Plan
@@ -753,9 +745,49 @@ Phase 5 — Integrity / Concurrency / Read APIs
 Phase 6 — Cross-SPEC Integration / Regression
 ```
 
-Phases不鎖physical file layout或DB technology。Future implementation agent未經PM授權不得執行Git mutation，不得改upstream contracts、做destructive cleanup、實作SPEC-008／011 scope或把recommended physical adapter升格為requirement。
+Phases及implementation choices不改變本SPEC對physical DB technology保持open的normative contract。後續maintenance未經PM授權不得執行Git mutation、改寫upstream contracts、做destructive cleanup、實作SPEC-011 scope或把current physical adapter升格為永久requirement。
 
-更新為`Implemented`前至少必須完成第18章tests、cross-domain ownership integration evidence、full regression及PM Final Review。
+## 20.1 Implementation Closure Evidence（Non-normative）
+
+下列test counts屬Engineering Confidence Evidence，不代表system accuracy，亦不承諾future competition final repository的固定test count。
+
+| Evidence | Result |
+|---|---|
+| D1～D12 | PASS |
+| 010-R1～R5 | PASS |
+| AC-010-A～J | PASS |
+| SPEC-010 targeted tests | 55 passed |
+| Relevant SPEC-006 tests | 172 passed |
+| Relevant SPEC-007 tests | 78 passed |
+| Relevant SPEC-008 tests | 131 passed |
+| Full repository regression | 865 passed／0 failed |
+| PM Final Review | PASS |
+| Implementation deviations | NONE |
+
+Warnings evidence：PM validation觀察到24,022筆known joblib／NumPy `DeprecationWarning`及1筆existing environment `PytestCacheWarning`；未發現new functional warning pattern。
+
+## 20.2 SPEC-008 Public Ownership Integration（Non-normative）
+
+Current implementation透過public read-only semantic capability：
+
+```text
+SqliteIncidentStore.event_has_incident_owner(event_id: str) -> bool
+```
+
+SPEC-010只消費Event→Incident ownership evidence：coherent Incident owner存在時拒絕Shadow creation；clean absence時legal Shadow mutation可繼續；ownership corruption或contradiction必須Fail Closed。SPEC-010不存取private Incident persistence、raw Incident SQLite／tables，亦不建立duplicate Incident ownership authority。
+
+Phase 6 evidence已涵蓋Incident-owned拒絕Shadow、clean absence允許Shadow、corruption Fail Closed，以及replay、restart與concurrency。Global invariant仍為同一Event不得同時具有Incident與Shadow authoritative ownership。
+
+SPEC-010不提供distributed cross-store atomicity。Concurrency guarantee限於Shadow local-store atomicity加上protocol-level Incident ownership semantic check；unsupported cross-store race與Runtime sequencing／reconciliation仍由SPEC-011承接。本implementation未使用或宣稱2PC、distributed ACID、shared database locking或private cross-store access。
+
+## 20.3 Competition Evaluation Boundary（Non-normative）
+
+```text
+EVAL-09 evidence improved: YES
+Production competition instrumentation added: NO
+```
+
+未新增`scenario_id`、`evaluation_run_id`、ground truth、evaluation-only timestamps或KPI-specific production fields。Final measurement與reporting仍由external Evaluation Harness／SPEC-011處理。
 
 ---
 
@@ -787,10 +819,10 @@ Architecture change時必須評估PRD、SPEC、DDS、architecture diagram及READ
 
 ---
 
-# 22. PM Review Checklist
+# 22. PM Review／Implementation Closure Checklist
 
-- [x] Metadata為SPEC-010 v1.0 `Approved — Implementation Pending`／2026-09-08，Owner為夜羽。
-- [x] Authority正確引用PRD-003、PRD-002 v1.5、SPEC-006／007 Implemented及SPEC-008 Approved。
+- [x] Metadata為SPEC-010 v1.0 `Implemented`／2026-09-09，Owner為夜羽。
+- [x] Authority正確引用PRD-003、PRD-002 v1.5、SPEC-006／007 Implemented及SPEC-008 v1.1 Implemented。
 - [x] D1～D12與010-R1～R5完整且無active conflict。
 - [x] `Shadow ≠ Pending`及Blocked／invalid input不route Shadow。
 - [x] Event保持15-field immutable authority且未duplicate full Event。
@@ -808,8 +840,8 @@ Architecture change時必須評估PRD、SPEC、DDS、architecture diagram及READ
 - [x] No TTL、auto delete、auto repair或destructive normal-runtime cleanup。
 - [x] 無automatic reclassification、clustering、learning或retraining。
 - [x] Physical DB technology未frozen；`sqlite3`／`shadow_store.db`僅為Phase 0評估選項。
-- [x] Cross-SPEC impact為`REFINE DOWNSTREAM`，不阻塞current SPEC-008且在SPEC-011 full integration前解決。
+- [x] Cross-SPEC impact維持`REFINE DOWNSTREAM`；SPEC-008 public ownership capability已完成，unsupported cross-store race及Runtime sequencing仍由SPEC-011承接。
 - [x] SPEC-011 orchestration及full downstream Docker E2E未提前實作。
 - [x] AC-010-A～J均可轉為targeted tests且未以固定test count取代coverage。
 - [x] Required test layers含real SPEC-006／007 integration與full regression。
-- [x] 文件維持`Approved — Implementation Pending`，未宣稱Implemented、Store／tests存在或完整Runtime完成。
+- [x] SPEC-010 v1.0 implementation及PM Final Review已完成；未宣稱SPEC-009、SPEC-011、完整Runtime或full Docker E2E完成。
