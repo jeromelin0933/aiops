@@ -11,7 +11,7 @@
 | Document ID | SPEC-009 |
 | Document Name | Lifecycle / Human Workflow |
 | Version | 1.0 |
-| Status | Approved — Implementation Pending |
+| Status | Approved — Implementation In Progress |
 | Date | 2026-09-10 |
 | Requirement Authority | PRD-003 v1.0 Final |
 | Overall Product Context | PRD-001 v3.4 |
@@ -28,8 +28,9 @@
 | 0.1 | 2026-09-10 | Initial Draft；定義既有 Incident authority內的strict lifecycle、Assignment、workflow idempotency、Resolution Evidence revisions、Human Review、Recovery Verification、closure、audit、concurrency及additive persistence upgrade工程契約。 |
 | 0.1 | 2026-09-10 | Revision Round 2；凍結`REVIEW_ATTEMPT`／closure operation model、per-action replay identity、Unified Incident Timeline cross-source ordering、typed workflow time regression、`IncidentCorrelationView` lifecycle propagation及Acceptance Criteria coverage；Version與Draft status不變。 |
 | 1.0 | 2026-09-10 | PM Final Approval completed；D1～D12 frozen for implementation，Revision Round 1 R1～R5與Revision Round 2 R2-009-01～06均已納入。Status更新為`Approved — Implementation Pending`；Implementation Owner為夜羽。 |
+| 1.0 | 2026-09-10 | Implementation Status Reconciliation；PM implementation authorization與Implementation Work Instructions已於v1.0 approval後issued，Status更新為`Approved — Implementation In Progress`。Owner維持夜羽，current authorized phase為Phase 1 — Workflow Domain Contracts；Engineering Contract semantics未變更。 |
 
-> **Implementation Status Honesty：Approved ≠ Implemented。** SPEC-009 v1.0已完成PM Final Approval，Status為`Approved — Implementation Pending`，Engineering Contract可供後續受治理implementation使用；Lifecycle／Human Workflow尚未實作。只有在implementation、targeted validation、cross-SPEC regression、documentation closure與PM-controlled Git closure完成後，Status才可更新為`Implemented`。本狀態不表示Production Ready、Runtime Complete或full downstream E2E完成。
+> **Implementation Status Honesty：Approved — Implementation In Progress ≠ Implemented。** SPEC-009 v1.0已完成PM Final Approval；PM implementation authorization及Implementation Work Instructions均已issued，Implementation Owner夜羽已在approved feature branch進入phase-gated implementation。Current authorization只涵蓋Phase 1 — Workflow Domain Contracts，不表示Phase 1已implemented、audited或PASS，也不自動授權Phase 2～6。只有在全部受治理implementation、targeted validation、cross-SPEC regression、documentation closure與PM-controlled Git closure完成後，Status才可更新為`Implemented`。本狀態不表示Production Ready、Runtime Complete或full downstream E2E完成。
 
 ---
 
@@ -1162,7 +1163,7 @@ Full downstream Docker Runtime E2E defer至SPEC-011，不是SPEC-009 blocking im
 | Phase 5 — Concurrency / Integrity / Timeline | Races、fresh-read protection、readiness、reads及timeline。 |
 | Phase 6 — Integration / Regression | SPEC-008 integration、cross-SPEC relevant suites及full regression。 |
 
-本plan不授權implementation。只有PM Review、revisions及`v1.0 Approved — Implementation Pending`後，PM才另發Implementation Work Instructions。
+PM implementation authorization及Implementation Work Instructions已issued；目前只授權`Phase 1 — Workflow Domain Contracts`。Phase 1 authorized不等於implemented、audited或PASS。Phase 2～6仍須由對應implementation report、read-only phase audit與PM-controlled progression逐階授權，不得自動開始。
 
 ---
 
@@ -1258,8 +1259,8 @@ Implementation Owner：**夜羽**。
 
 ```text
 Version 1.0
-Approved — Implementation Pending
-Implementation not started
+Approved — Implementation In Progress
+Implementation authorized and in progress
 ```
 
 ## 26.1 Approval closure record
@@ -1271,24 +1272,55 @@ Implementation not started
 | PM Review Round 2 | PASS WITH REQUIRED REVISIONS |
 | Revision Round 2 | PASS |
 | Final PM Approval | PASS |
+| Implementation Authorization | ISSUED |
+| Implementation Work Instructions | ISSUED |
+| Current Authorized Phase | Phase 1 — Workflow Domain Contracts |
 
 SPEC-009 v1.0是Lifecycle／Human Workflow implementation的approved Engineering Contract。Implementation必須遵守D1～D12及本文件normative contracts；文件明示為Implementation Choice的技術細節不因此被凍結。若implementation發現與PRD-003、SPEC-008或其他active authority衝突，必須停止受影響範圍、保存evidence並交由PM裁定，不得靜默改寫semantics。
 
-Approval gate已完成；後續handoff為：
+## 26.2 Implementation authorization state
 
 ```text
-SPEC-009 v1.0 Approved — Implementation Pending
-→ PM issues separate Implementation Work Instructions
-→ governed implementation and validation
+Final PM Approval:
+PASS
+
+Implementation Authorization:
+ISSUED
+
+Implementation Owner:
+夜羽
+
+Implementation Branch:
+feature/spec-009-lifecycle-human-workflow
+
+Approved Implementation Baseline:
+a68e717dbe4672c55004eabf9d94d985cbaf00ac
+
+Implementation Work Instructions:
+ISSUED
+
+Current Authorized Phase:
+Phase 1 — Workflow Domain Contracts
 ```
 
-本文件不授權implementation、Git mutation、upstream rewrite或downstream scope expansion。
+PM implementation authorization已issued，Implementation Work Instructions已交付Owner夜羽；SPEC-009目前在approved feature branch下進行phase-gated implementation。Later phases仍須完成相應implementation report、read-only audit並取得PM-controlled progression，不得因Phase 1已授權而視為自動授權。
+
+Current governed handoff state：
+
+```text
+SPEC-009 v1.0 Approved — Implementation In Progress
+→ Phase 1 — Workflow Domain Contracts authorized
+→ implementation report and read-only phase audit
+→ PM-controlled next-phase decision
+```
+
+本文件只記錄已由PM授權的Phase 1 implementation狀態；不自行授權Phase 2～6、Git mutation、upstream rewrite或downstream scope expansion。
 
 ---
 
 # 27. PM Review／Approval Checklist
 
-- [x] Metadata為SPEC-009 v1.0 `Approved — Implementation Pending`／2026-09-10，Owner夜羽。
+- [x] Metadata為SPEC-009 v1.0 `Approved — Implementation In Progress`／2026-09-10，Owner夜羽。
 - [x] Authority正確引用PRD-003、PRD-001、PRD-002及SPEC-006/007/008/010。
 - [x] D1～D12對齊並保持single Incident authority。
 - [x] Strict lifecycle、invalid skip、no backward及no reopen完整。
@@ -1312,4 +1344,4 @@ SPEC-009 v1.0 Approved — Implementation Pending
 - [x] SPEC-011 Runtime/Docker E2E保持out of scope。
 - [x] Error mapping、integrity、retention及reads完整。
 - [x] AC-009-A～L及test layers完整，coverage不依固定count。
-- [x] Status honesty維持`Approved ≠ Implemented`；未宣稱Implemented、Production Ready或完整Runtime。
+- [x] Status honesty維持`Approved — Implementation In Progress ≠ Implemented`；Phase 1只標示authorized，未宣稱Implemented、Production Ready或完整Runtime。
