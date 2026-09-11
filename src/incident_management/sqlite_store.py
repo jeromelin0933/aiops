@@ -25,6 +25,7 @@ from src.alert_correlation import (
 from src.alert_correlation.state import TerminalOutcome
 
 from .contracts import (
+    AssignmentSelectionMode,
     IncidentAuditAction,
     IncidentAuditEffect,
     IncidentAuditEntry,
@@ -37,16 +38,30 @@ from .contracts import (
     IncidentRecord,
     IncidentSeverity,
     IncidentStatus,
+    IncidentTimelineEntry,
+    IncidentTimelineSource,
     OperationReceiptSemanticIdentity,
+    ResolutionSubmission,
+    ReviewAttempt,
+    SopFollowed,
+    WorkflowAction,
+    WorkflowAuditEffect,
+    WorkflowAuditEntry,
+    WorkflowCompletion,
+    WorkflowDomainError,
+    WorkflowErrorCode,
+    WorkflowOperationReceipt,
+    WorkflowOperationResult,
+    WorkflowReceiptSemanticIdentity,
 )
 
 
 DEFAULT_DATABASE_PATH = "incident_store.db"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 3
 STATE_VERSION = 1
 _BUSY_TIMEOUT_MS = 5000
 
-_EXPECTED_TABLES = frozenset(
+_V1_TABLES = frozenset(
     {
         "incident_store_metadata",
         "incidents",
@@ -55,6 +70,17 @@ _EXPECTED_TABLES = frozenset(
         "incident_audit",
     }
 )
+
+_WORKFLOW_TABLES = frozenset(
+    {
+        "incident_workflow_operation_receipts",
+        "incident_assignment_state",
+        "incident_resolution_submissions",
+        "incident_review_attempts",
+        "incident_workflow_audit",
+    }
+)
+_EXPECTED_TABLES = _V1_TABLES | _WORKFLOW_TABLES
 
 # Exact implemented SPEC-007 authority tables.  These names are inspected only
 # through sqlite_master to reject physical co-location; their contents are
@@ -146,6 +172,108 @@ _SCHEMA_STATEMENTS = (
     """,
     "CREATE INDEX idx_incident_events_incident_order ON incident_events(incident_id, ordinal)",
     "CREATE INDEX idx_incident_audit_incident_order ON incident_audit(incident_id, audit_id)",
+    """
+    CREATE TABLE incident_workflow_operation_receipts (
+        workflow_operation_id TEXT PRIMARY KEY,
+        state_version INTEGER NOT NULL,
+        incident_id TEXT NOT NULL,
+        action TEXT NOT NULL,
+        completion_result TEXT NOT NULL,
+        resulting_status TEXT NOT NULL,
+        result_reference TEXT,
+        completed_at TEXT NOT NULL,
+        immutable_workflow_identity TEXT NOT NULL,
+        assignment_policy_id TEXT,
+        assignment_policy_version TEXT,
+        selected_assignee TEXT,
+        bound_reviewer TEXT,
+        selection_mode TEXT,
+        CHECK ((assignment_policy_id IS NULL) = (assignment_policy_version IS NULL)),
+        CHECK ((selected_assignee IS NULL) = (bound_reviewer IS NULL)),
+        CHECK ((selected_assignee IS NULL) = (selection_mode IS NULL)),
+        FOREIGN KEY (incident_id) REFERENCES incidents(incident_id)
+            ON UPDATE RESTRICT ON DELETE RESTRICT
+    )
+    """,
+    """
+    CREATE TABLE incident_assignment_state (
+        policy_id TEXT NOT NULL,
+        policy_version TEXT NOT NULL,
+        state_version INTEGER NOT NULL,
+        engineers TEXT NOT NULL,
+        default_reviewer TEXT NOT NULL,
+        next_cursor INTEGER NOT NULL CHECK (next_cursor >= 0),
+        PRIMARY KEY (policy_id, policy_version)
+    )
+    """,
+    """
+    CREATE TABLE incident_resolution_submissions (
+        resolution_submission_id TEXT PRIMARY KEY,
+        state_version INTEGER NOT NULL,
+        incident_id TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK (revision >= 1),
+        actual_action TEXT NOT NULL,
+        resolution_note TEXT NOT NULL,
+        sop_followed TEXT NOT NULL,
+        additional_note TEXT,
+        deviation_reason TEXT,
+        submitted_by TEXT NOT NULL,
+        submitted_at TEXT NOT NULL,
+        UNIQUE (incident_id, revision),
+        FOREIGN KEY (incident_id) REFERENCES incidents(incident_id)
+            ON UPDATE RESTRICT ON DELETE RESTRICT
+    )
+    """,
+    """
+    CREATE TABLE incident_review_attempts (
+        review_attempt_id TEXT PRIMARY KEY,
+        state_version INTEGER NOT NULL,
+        incident_id TEXT NOT NULL,
+        resolution_revision INTEGER NOT NULL CHECK (resolution_revision >= 1),
+        reviewer TEXT NOT NULL,
+        review_approved INTEGER NOT NULL CHECK (review_approved IN (0, 1)),
+        review_note TEXT,
+        recovery_verified INTEGER NOT NULL CHECK (recovery_verified IN (0, 1)),
+        recovery_note TEXT,
+        reviewed_at TEXT NOT NULL,
+        FOREIGN KEY (incident_id, resolution_revision)
+            REFERENCES incident_resolution_submissions(incident_id, revision)
+            ON UPDATE RESTRICT ON DELETE RESTRICT
+    )
+    """,
+    """
+    CREATE TABLE incident_workflow_audit (
+        workflow_audit_id TEXT PRIMARY KEY,
+        state_version INTEGER NOT NULL,
+        workflow_operation_id TEXT NOT NULL UNIQUE,
+        incident_id TEXT NOT NULL,
+        actor TEXT NOT NULL,
+        action TEXT NOT NULL,
+        occurred_at TEXT NOT NULL,
+        old_status TEXT NOT NULL,
+        new_status TEXT NOT NULL,
+        effects TEXT NOT NULL,
+        reference_id TEXT,
+        assignment_policy_id TEXT,
+        assignment_policy_version TEXT,
+        CHECK ((assignment_policy_id IS NULL) = (assignment_policy_version IS NULL)),
+        FOREIGN KEY (workflow_operation_id) REFERENCES incident_workflow_operation_receipts(workflow_operation_id)
+            ON UPDATE RESTRICT ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED,
+        FOREIGN KEY (incident_id) REFERENCES incidents(incident_id)
+            ON UPDATE RESTRICT ON DELETE RESTRICT
+    )
+    """,
+    "CREATE INDEX idx_resolution_incident_revision ON incident_resolution_submissions(incident_id, revision DESC)",
+    "CREATE INDEX idx_review_incident_time ON incident_review_attempts(incident_id, reviewed_at, review_attempt_id)",
+    "CREATE INDEX idx_workflow_audit_incident_time ON incident_workflow_audit(incident_id, occurred_at, workflow_audit_id)",
+)
+
+_V2_TO_V3_STATEMENTS = (
+    "ALTER TABLE incident_workflow_operation_receipts ADD COLUMN assignment_policy_id TEXT",
+    "ALTER TABLE incident_workflow_operation_receipts ADD COLUMN assignment_policy_version TEXT",
+    "ALTER TABLE incident_workflow_operation_receipts ADD COLUMN selected_assignee TEXT",
+    "ALTER TABLE incident_workflow_operation_receipts ADD COLUMN bound_reviewer TEXT",
+    "ALTER TABLE incident_workflow_operation_receipts ADD COLUMN selection_mode TEXT",
 )
 
 
@@ -317,6 +445,50 @@ def _parse_identity(value: object) -> OperationReceiptSemanticIdentity:
     )
 
 
+def _workflow_identity(value: WorkflowReceiptSemanticIdentity) -> str:
+    resolution = value.resolution
+    review = value.review
+    return _json({
+        "action": value.action.value, "incident_id": value.incident_id, "actor": value.actor,
+        "target_assignee": value.target_assignee,
+        "resolution": None if resolution is None else {
+            "actual_action": resolution.actual_action, "resolution_note": resolution.resolution_note,
+            "sop_followed": resolution.sop_followed.value, "additional_note": resolution.additional_note,
+            "deviation_reason": resolution.deviation_reason,
+        },
+        "review": None if review is None else {
+            "target_resolution_revision": review.target_resolution_revision,
+            "review_approved": review.review_approved, "review_note": review.review_note,
+            "recovery_verified": review.recovery_verified, "recovery_note": review.recovery_note,
+        },
+    })
+
+
+def _parse_workflow_identity(value: object) -> WorkflowReceiptSemanticIdentity:
+    data = _load_json(value, "immutable_workflow_identity")
+    expected = {"action", "incident_id", "actor", "target_assignee", "resolution", "review"}
+    if not isinstance(data, dict) or set(data) != expected:
+        raise ValueError("immutable_workflow_identity has an invalid shape")
+    resolution_data, review_data = data["resolution"], data["review"]
+    resolution = None
+    if resolution_data is not None:
+        if not isinstance(resolution_data, dict) or set(resolution_data) != {"actual_action", "resolution_note", "sop_followed", "additional_note", "deviation_reason"}:
+            raise ValueError("resolution identity has an invalid shape")
+        from .contracts import ResolutionSubmissionPayload
+        resolution = ResolutionSubmissionPayload(**{**resolution_data, "sop_followed": SopFollowed(resolution_data["sop_followed"])})
+    review = None
+    if review_data is not None:
+        if not isinstance(review_data, dict) or set(review_data) != {"target_resolution_revision", "review_approved", "review_note", "recovery_verified", "recovery_note"}:
+            raise ValueError("review identity has an invalid shape")
+        from .contracts import ReviewAttemptPayload
+        review = ReviewAttemptPayload(**review_data)
+    return WorkflowReceiptSemanticIdentity(WorkflowAction(data["action"]), data["incident_id"], data["actor"], data["target_assignee"], resolution, review)
+
+
+def _workflow_error(code: WorkflowErrorCode, message: str) -> WorkflowDomainError:
+    return WorkflowDomainError(code, message)
+
+
 class _IncidentStoreTransaction:
     """Package-private transaction primitives; not a public write adapter."""
 
@@ -447,6 +619,72 @@ class _IncidentStoreTransaction:
             ),
         )
 
+    # SPEC-009 write primitives intentionally remain package-private.  They
+    # are only composable by the IncidentManager under this transaction.
+    def _get_workflow_receipt(self, workflow_operation_id: str) -> WorkflowOperationReceipt | None:
+        row = self._connection.execute("SELECT * FROM incident_workflow_operation_receipts WHERE workflow_operation_id = ?", (workflow_operation_id,)).fetchone()
+        return None if row is None else _decode_workflow_receipt(row)
+
+    def _insert_workflow_receipt(self, receipt: WorkflowOperationReceipt) -> None:
+        result = receipt.result
+        self._connection.execute(
+            """INSERT INTO incident_workflow_operation_receipts(
+            workflow_operation_id,state_version,incident_id,action,completion_result,resulting_status,
+            result_reference,completed_at,immutable_workflow_identity,assignment_policy_id,assignment_policy_version,
+            selected_assignee,bound_reviewer,selection_mode) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (result.workflow_operation_id, STATE_VERSION, result.incident_id, result.action.value,
+             result.completion_result.value, result.resulting_status.value, result.result_reference,
+              _timestamp(result.completed_at), _workflow_identity(receipt.immutable_workflow_identity),
+              result.assignment_policy_id, result.assignment_policy_version, result.selected_assignee,
+              result.bound_reviewer, result.selection_mode.value if result.selection_mode else None),
+        )
+
+    def _get_assignment_state(self, policy_id: str, policy_version: str) -> tuple[tuple[str, ...], str, int] | None:
+        row = self._connection.execute("SELECT * FROM incident_assignment_state WHERE policy_id = ? AND policy_version = ?", (policy_id, policy_version)).fetchone()
+        return None if row is None else _decode_assignment_state(row)
+
+    def _upsert_assignment_state(self, policy_id: str, policy_version: str, engineers: tuple[str, ...], default_reviewer: str, next_cursor: int) -> None:
+        self._connection.execute(
+            """INSERT INTO incident_assignment_state(policy_id,policy_version,state_version,engineers,default_reviewer,next_cursor)
+            VALUES (?,?,?,?,?,?) ON CONFLICT(policy_id,policy_version) DO UPDATE SET
+            state_version=excluded.state_version, engineers=excluded.engineers, default_reviewer=excluded.default_reviewer, next_cursor=excluded.next_cursor""",
+            (policy_id, policy_version, STATE_VERSION, _json(list(engineers)), default_reviewer, next_cursor),
+        )
+
+    def _insert_resolution_submission(self, submission: ResolutionSubmission) -> None:
+        self._connection.execute(
+            """INSERT INTO incident_resolution_submissions(resolution_submission_id,state_version,incident_id,revision,actual_action,resolution_note,sop_followed,additional_note,deviation_reason,submitted_by,submitted_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (submission.resolution_submission_id, STATE_VERSION, submission.incident_id, submission.revision,
+             submission.actual_action, submission.resolution_note, submission.sop_followed.value,
+             submission.additional_note, submission.deviation_reason, submission.submitted_by, _timestamp(submission.submitted_at)),
+        )
+
+    def _list_resolution_submissions(self, incident_id: str) -> tuple[ResolutionSubmission, ...]:
+        rows = self._connection.execute("SELECT * FROM incident_resolution_submissions WHERE incident_id = ? ORDER BY revision", (incident_id,)).fetchall()
+        submissions = tuple(_decode_resolution_submission(row) for row in rows)
+        if [item.revision for item in submissions] != list(range(1, len(submissions) + 1)):
+            raise _workflow_error(WorkflowErrorCode.MALFORMED_WORKFLOW_STATE, "Resolution revisions must be contiguous and never reused")
+        return submissions
+
+    def _insert_review_attempt(self, attempt: ReviewAttempt) -> None:
+        self._connection.execute(
+            """INSERT INTO incident_review_attempts(review_attempt_id,state_version,incident_id,resolution_revision,reviewer,review_approved,review_note,recovery_verified,recovery_note,reviewed_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (attempt.review_attempt_id, STATE_VERSION, attempt.incident_id, attempt.resolution_revision,
+             attempt.reviewer, int(attempt.review_approved), attempt.review_note, int(attempt.recovery_verified),
+             attempt.recovery_note, _timestamp(attempt.reviewed_at)),
+        )
+
+    def _insert_workflow_audit(self, entry: WorkflowAuditEntry) -> None:
+        self._connection.execute(
+            """INSERT INTO incident_workflow_audit(workflow_audit_id,state_version,workflow_operation_id,incident_id,actor,action,occurred_at,old_status,new_status,effects,reference_id,assignment_policy_id,assignment_policy_version)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (entry.workflow_audit_id, STATE_VERSION, entry.workflow_operation_id, entry.incident_id, entry.actor,
+             entry.action.value, _timestamp(entry.occurred_at), entry.old_status.value, entry.new_status.value,
+             _json([effect.value for effect in entry.effects]), entry.reference_id, entry.assignment_policy_id, entry.assignment_policy_version),
+        )
+
 
 class SqliteIncidentStore:
     """Read API plus a package-private atomic unit-of-work boundary."""
@@ -507,11 +745,16 @@ class SqliteIncidentStore:
                     "INSERT INTO incident_store_metadata(singleton, schema_version) VALUES (1, ?)",
                     (SCHEMA_VERSION,),
                 )
-            elif present != _EXPECTED_TABLES:
+                # ``present`` was captured before initialization.  Re-read it
+                # before applying the common migration/validation path so a
+                # newly-created v2 authority is not mistaken for a partial one.
+                present = self._table_names(connection) & _EXPECTED_TABLES
+            elif not _V1_TABLES.issubset(present):
                 raise _domain_error(
                     IncidentErrorCode.INCIDENT_STORE_INTEGRITY_FAILURE,
                     "Incident Store schema is incomplete",
                 )
+            self._migrate_schema(connection, present)
             self._validate_schema_version(connection)
             connection.commit()
         except Exception:
@@ -547,11 +790,44 @@ class SqliteIncidentStore:
                 IncidentErrorCode.INCIDENT_STORE_INTEGRITY_FAILURE,
                 "Incident Store metadata must contain exactly one authority row",
             )
-        if rows[0]["schema_version"] != SCHEMA_VERSION:
+        version = rows[0]["schema_version"]
+        if not isinstance(version, int) or version > SCHEMA_VERSION:
             raise _domain_error(
                 IncidentErrorCode.UNSUPPORTED_INCIDENT_STATE_VERSION,
-                "Incident Store schema version is unsupported",
+                "Incident Store schema version is unsupported or newer than this binary",
             )
+        if version != SCHEMA_VERSION:
+            raise _domain_error(
+                IncidentErrorCode.INCIDENT_STORE_INTEGRITY_FAILURE,
+                "Incident Store schema migration is incomplete",
+            )
+
+    @staticmethod
+    def _migrate_schema(connection: sqlite3.Connection, present: set[str]) -> None:
+        """Apply only forward, additive migrations in the metadata transaction."""
+        row = connection.execute(
+            "SELECT schema_version FROM incident_store_metadata WHERE singleton = 1"
+        ).fetchone()
+        if row is None:
+            raise _domain_error(IncidentErrorCode.INCIDENT_STORE_INTEGRITY_FAILURE, "Incident Store metadata is missing")
+        version = row["schema_version"]
+        if not isinstance(version, int) or version > SCHEMA_VERSION:
+            raise _domain_error(IncidentErrorCode.UNSUPPORTED_INCIDENT_STATE_VERSION, "Incident Store schema version is unsupported or newer than this binary")
+        if version == SCHEMA_VERSION:
+            if present != _EXPECTED_TABLES:
+                raise _domain_error(IncidentErrorCode.INCIDENT_STORE_INTEGRITY_FAILURE, "Incident Store schema is incomplete or contradictory")
+            return
+        if version == 1 and present == _V1_TABLES:
+            # Metadata remains v1 until all additive workflow tables exist.
+            for statement in _SCHEMA_STATEMENTS[7:]:
+                connection.execute(statement)
+        elif version == 2 and present == _EXPECTED_TABLES:
+            # Metadata remains v2 until every receipt provenance column exists.
+            for statement in _V2_TO_V3_STATEMENTS:
+                connection.execute(statement)
+        else:
+            raise _domain_error(IncidentErrorCode.INCIDENT_STORE_INTEGRITY_FAILURE, "Incident Store schema cannot be migrated safely")
+        connection.execute("UPDATE incident_store_metadata SET schema_version = ? WHERE singleton = 1", (SCHEMA_VERSION,))
 
     @contextmanager
     def _transaction(self) -> Iterator[_IncidentStoreTransaction]:
@@ -629,6 +905,78 @@ class SqliteIncidentStore:
             ).fetchone()
             return None if row is None else _decode_receipt(row).result
 
+    def get_workflow_operation_result(self, workflow_operation_id: str) -> WorkflowOperationResult | None:
+        _validate_reference(workflow_operation_id, "workflow_operation_id")
+        with self._read_transaction() as connection:
+            self._validate_read_authority(connection)
+            row = connection.execute("SELECT * FROM incident_workflow_operation_receipts WHERE workflow_operation_id = ?", (workflow_operation_id,)).fetchone()
+            return None if row is None else _decode_workflow_receipt(row).result
+
+    def get_assignment_state(self, policy_id: str, policy_version: str) -> tuple[tuple[str, ...], str, int] | None:
+        _validate_reference(policy_id, "policy_id")
+        _validate_reference(policy_version, "policy_version")
+        with self._read_transaction() as connection:
+            self._validate_read_authority(connection)
+            row = connection.execute("SELECT * FROM incident_assignment_state WHERE policy_id = ? AND policy_version = ?", (policy_id, policy_version)).fetchone()
+            return None if row is None else _decode_assignment_state(row)
+
+    def get_latest_resolution_submission(self, incident_id: str) -> ResolutionSubmission | None:
+        _validate_reference(incident_id, "incident_id")
+        with self._read_transaction() as connection:
+            self._validate_read_authority(connection)
+            # A latest-only query must not hide a malformed or non-monotonic
+            # earlier revision.  It is authoritative workflow state too.
+            _validate_resolution_history(connection, incident_id)
+            row = connection.execute("SELECT * FROM incident_resolution_submissions WHERE incident_id = ? ORDER BY revision DESC LIMIT 1", (incident_id,)).fetchone()
+            return None if row is None else _decode_resolution_submission(row)
+
+    def list_resolution_submissions(self, incident_id: str) -> tuple[ResolutionSubmission, ...]:
+        _validate_reference(incident_id, "incident_id")
+        with self._read_transaction() as connection:
+            self._validate_read_authority(connection)
+            rows = connection.execute("SELECT * FROM incident_resolution_submissions WHERE incident_id = ? ORDER BY revision", (incident_id,)).fetchall()
+            submissions = tuple(_decode_resolution_submission(row) for row in rows)
+            if [item.revision for item in submissions] != list(range(1, len(submissions) + 1)):
+                raise _workflow_error(WorkflowErrorCode.MALFORMED_WORKFLOW_STATE, "Resolution revisions must be contiguous and never reused")
+            return submissions
+
+    def list_review_attempts(self, incident_id: str) -> tuple[ReviewAttempt, ...]:
+        _validate_reference(incident_id, "incident_id")
+        with self._read_transaction() as connection:
+            self._validate_read_authority(connection)
+            rows = connection.execute("SELECT * FROM incident_review_attempts WHERE incident_id = ? ORDER BY reviewed_at, review_attempt_id", (incident_id,)).fetchall()
+            return tuple(_decode_review_attempt(row) for row in rows)
+
+    def list_workflow_audit(self, incident_id: str) -> tuple[WorkflowAuditEntry, ...]:
+        _validate_reference(incident_id, "incident_id")
+        with self._read_transaction() as connection:
+            self._validate_read_authority(connection)
+            rows = connection.execute("SELECT * FROM incident_workflow_audit WHERE incident_id = ? ORDER BY occurred_at, workflow_audit_id", (incident_id,)).fetchall()
+            return tuple(_decode_workflow_audit(row) for row in rows)
+
+    def list_unified_incident_timeline(self, incident_id: str) -> tuple[IncidentTimelineEntry, ...]:
+        _validate_reference(incident_id, "incident_id")
+        with self._read_transaction() as connection:
+            self._validate_read_authority(connection)
+            entries: list[IncidentTimelineEntry] = []
+            for row in connection.execute("SELECT * FROM incident_audit WHERE incident_id = ? ORDER BY audit_id", (incident_id,)).fetchall():
+                audit = _decode_audit(row)
+                entries.append(IncidentTimelineEntry(audit.occurred_at, IncidentTimelineSource.CORRELATION,
+                    f"{row['audit_id']:020d}", correlation_audit=audit))
+            for row in connection.execute("SELECT * FROM incident_workflow_audit WHERE incident_id = ? ORDER BY workflow_audit_id", (incident_id,)).fetchall():
+                audit = _decode_workflow_audit(row)
+                entries.append(IncidentTimelineEntry(audit.occurred_at, IncidentTimelineSource.WORKFLOW,
+                    audit.workflow_audit_id, workflow_audit=audit))
+            return tuple(sorted(entries, key=lambda entry: (entry.occurred_at, 0 if entry.source is IncidentTimelineSource.CORRELATION else 1, entry.source_local_order)))
+
+    def list_incidents_by_workflow_status(self, status: IncidentStatus) -> tuple[IncidentRecord, ...]:
+        if not isinstance(status, IncidentStatus):
+            raise ValueError("status must be an IncidentStatus")
+        with self._read_transaction() as connection:
+            self._validate_read_authority(connection)
+            rows = connection.execute("SELECT incident_id FROM incidents WHERE status = ? ORDER BY incident_id", (status.value,)).fetchall()
+            return tuple(_read_incident(connection, row["incident_id"]) for row in rows)
+
     def get_correlation_view(self, incident_id: str) -> IncidentCorrelationView | None:
         record = self.get_incident(incident_id)
         return None if record is None else _to_view(record)
@@ -650,6 +998,19 @@ class SqliteIncidentStore:
             ).fetchall()
             for row in receipt_rows:
                 _decode_receipt(row)
+            workflow_receipts = connection.execute("SELECT * FROM incident_workflow_operation_receipts ORDER BY workflow_operation_id").fetchall()
+            for row in workflow_receipts:
+                _decode_workflow_receipt(row)
+            for row in connection.execute("SELECT * FROM incident_assignment_state ORDER BY policy_id, policy_version").fetchall():
+                _decode_assignment_state(row)
+            incident_ids = connection.execute("SELECT incident_id FROM incidents ORDER BY incident_id").fetchall()
+            for incident_row in incident_ids:
+                incident_id = incident_row["incident_id"]
+                _validate_resolution_history(connection, incident_id)
+                for row in connection.execute("SELECT * FROM incident_review_attempts WHERE incident_id = ?", (incident_id,)).fetchall():
+                    _decode_review_attempt(row)
+                for row in connection.execute("SELECT * FROM incident_workflow_audit WHERE incident_id = ?", (incident_id,)).fetchall():
+                    _decode_workflow_audit(row)
             contradiction = connection.execute(
                 """
                 SELECT e.event_id
@@ -669,6 +1030,13 @@ class SqliteIncidentStore:
                     IncidentErrorCode.INCIDENT_STORE_INTEGRITY_FAILURE,
                     "Incident evidence, receipt, and audit authorities are incomplete",
                 )
+            workflow_contradiction = connection.execute(
+                """SELECT a.workflow_audit_id FROM incident_workflow_audit AS a
+                JOIN incident_workflow_operation_receipts AS r ON r.workflow_operation_id = a.workflow_operation_id
+                WHERE a.incident_id != r.incident_id OR a.action != r.action LIMIT 1"""
+            ).fetchone()
+            if workflow_contradiction is not None:
+                raise _workflow_error(WorkflowErrorCode.INCIDENT_WORKFLOW_INTEGRITY_FAILURE, "workflow receipt and audit contradict")
 
     def _validate_read_authority(self, connection: sqlite3.Connection) -> None:
         self._validate_physical_separation(self._table_names(connection))
@@ -859,6 +1227,94 @@ def _decode_receipt(row: sqlite3.Row) -> IncidentOperationReceipt:
             IncidentErrorCode.MALFORMED_INCIDENT_RECORD,
             f"malformed persisted operation receipt: {exc}",
         ) from exc
+
+
+def _require_workflow_state_version(row: sqlite3.Row, record_kind: str) -> None:
+    if row["state_version"] != STATE_VERSION:
+        raise _workflow_error(WorkflowErrorCode.MALFORMED_WORKFLOW_STATE, f"unsupported persisted {record_kind} state version")
+
+
+def _decode_workflow_receipt(row: sqlite3.Row) -> WorkflowOperationReceipt:
+    try:
+        _require_workflow_state_version(row, "workflow operation receipt")
+        return WorkflowOperationReceipt(
+            WorkflowOperationResult(row["workflow_operation_id"], row["incident_id"], WorkflowAction(row["action"]),
+                WorkflowCompletion(row["completion_result"]), IncidentStatus(row["resulting_status"]), row["result_reference"],
+                _parse_timestamp(row["completed_at"], "completed_at"), row["assignment_policy_id"],
+                row["assignment_policy_version"], row["selected_assignee"], row["bound_reviewer"],
+                AssignmentSelectionMode(row["selection_mode"]) if row["selection_mode"] is not None else None),
+            _parse_workflow_identity(row["immutable_workflow_identity"]),
+        )
+    except WorkflowDomainError:
+        raise
+    except (KeyError, TypeError, ValueError) as exc:
+        raise _workflow_error(WorkflowErrorCode.MALFORMED_WORKFLOW_STATE, f"malformed persisted workflow receipt: {exc}") from exc
+
+
+def _decode_assignment_state(row: sqlite3.Row) -> tuple[tuple[str, ...], str, int]:
+    try:
+        _require_workflow_state_version(row, "assignment state")
+        engineers = _load_json(row["engineers"], "engineers")
+        if not isinstance(engineers, list) or not engineers or any(not isinstance(item, str) or not item or item != item.strip() for item in engineers) or len(engineers) != len(set(engineers)):
+            raise ValueError("engineers must be a non-empty ordered unique reference list")
+        cursor = row["next_cursor"]
+        if not isinstance(cursor, int) or cursor < 0 or cursor >= len(engineers):
+            raise ValueError("next_cursor must identify a roster position")
+        reviewer = row["default_reviewer"]
+        if not isinstance(reviewer, str) or not reviewer or reviewer != reviewer.strip():
+            raise ValueError("default_reviewer is invalid")
+        return tuple(engineers), reviewer, cursor
+    except (KeyError, TypeError, ValueError) as exc:
+        raise _workflow_error(WorkflowErrorCode.MALFORMED_WORKFLOW_STATE, f"malformed persisted assignment state: {exc}") from exc
+
+
+def _decode_resolution_submission(row: sqlite3.Row) -> ResolutionSubmission:
+    try:
+        _require_workflow_state_version(row, "resolution submission")
+        return ResolutionSubmission(row["resolution_submission_id"], row["incident_id"], row["revision"], row["actual_action"],
+            row["resolution_note"], SopFollowed(row["sop_followed"]), row["additional_note"], row["deviation_reason"],
+            row["submitted_by"], _parse_timestamp(row["submitted_at"], "submitted_at"))
+    except WorkflowDomainError:
+        raise
+    except (KeyError, TypeError, ValueError) as exc:
+        raise _workflow_error(WorkflowErrorCode.MALFORMED_WORKFLOW_STATE, f"malformed persisted resolution submission: {exc}") from exc
+
+
+def _decode_review_attempt(row: sqlite3.Row) -> ReviewAttempt:
+    try:
+        _require_workflow_state_version(row, "review attempt")
+        if row["review_approved"] not in (0, 1) or row["recovery_verified"] not in (0, 1):
+            raise ValueError("review facts must be SQLite booleans")
+        return ReviewAttempt(row["review_attempt_id"], row["incident_id"], row["resolution_revision"], row["reviewer"],
+            bool(row["review_approved"]), row["review_note"], bool(row["recovery_verified"]), row["recovery_note"],
+            _parse_timestamp(row["reviewed_at"], "reviewed_at"))
+    except WorkflowDomainError:
+        raise
+    except (KeyError, TypeError, ValueError) as exc:
+        raise _workflow_error(WorkflowErrorCode.MALFORMED_WORKFLOW_STATE, f"malformed persisted review attempt: {exc}") from exc
+
+
+def _decode_workflow_audit(row: sqlite3.Row) -> WorkflowAuditEntry:
+    try:
+        _require_workflow_state_version(row, "workflow audit")
+        effects = _load_json(row["effects"], "effects")
+        if not isinstance(effects, list):
+            raise ValueError("effects must be a list")
+        return WorkflowAuditEntry(row["workflow_audit_id"], row["workflow_operation_id"], row["incident_id"], row["actor"],
+            WorkflowAction(row["action"]), _parse_timestamp(row["occurred_at"], "occurred_at"), IncidentStatus(row["old_status"]),
+            IncidentStatus(row["new_status"]), tuple(WorkflowAuditEffect(value) for value in effects), row["reference_id"],
+            row["assignment_policy_id"], row["assignment_policy_version"])
+    except WorkflowDomainError:
+        raise
+    except (KeyError, TypeError, ValueError) as exc:
+        raise _workflow_error(WorkflowErrorCode.MALFORMED_WORKFLOW_STATE, f"malformed persisted workflow audit: {exc}") from exc
+
+
+def _validate_resolution_history(connection: sqlite3.Connection, incident_id: str) -> None:
+    rows = connection.execute("SELECT * FROM incident_resolution_submissions WHERE incident_id = ? ORDER BY revision", (incident_id,)).fetchall()
+    submissions = tuple(_decode_resolution_submission(row) for row in rows)
+    if [item.revision for item in submissions] != list(range(1, len(submissions) + 1)):
+        raise _workflow_error(WorkflowErrorCode.MALFORMED_WORKFLOW_STATE, "Resolution revisions must be contiguous and never reused")
 
 
 def _to_view(record: IncidentRecord) -> IncidentCorrelationView:

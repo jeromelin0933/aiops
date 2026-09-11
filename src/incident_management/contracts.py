@@ -558,7 +558,424 @@ class IncidentOperationReceipt:
             _fail(IncidentErrorCode.MALFORMED_INCIDENT_RECORD, "receipt result and immutable identity must agree")
 
 
+# SPEC-009 workflow contracts are deliberately separate from the SPEC-008
+# correlation mutation and receipt namespace.
+class WorkflowAction(str, Enum):
+    AUTO_ASSIGN = "AUTO_ASSIGN"
+    MANUAL_ASSIGN = "MANUAL_ASSIGN"
+    REASSIGN = "REASSIGN"
+    START_WORK = "START_WORK"
+    SUBMIT_RESOLUTION = "SUBMIT_RESOLUTION"
+    REVIEW_ATTEMPT = "REVIEW_ATTEMPT"
+
+
+class AssignmentSelectionMode(str, Enum):
+    AUTO = "AUTO"
+    MANUAL = "MANUAL"
+
+
+class SopFollowed(str, Enum):
+    YES = "YES"
+    NO = "NO"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+
+
+class WorkflowAuditEffect(str, Enum):
+    ASSIGNEE_SET = "ASSIGNEE_SET"
+    REVIEWER_BOUND = "REVIEWER_BOUND"
+    STATUS_CHANGED = "STATUS_CHANGED"
+    RESOLUTION_SUBMITTED = "RESOLUTION_SUBMITTED"
+    REVIEW_RECORDED = "REVIEW_RECORDED"
+    RECOVERY_VERIFIED = "RECOVERY_VERIFIED"
+    INCIDENT_CLOSED = "INCIDENT_CLOSED"
+
+
+class IncidentTimelineSource(str, Enum):
+    CORRELATION = "CORRELATION"
+    WORKFLOW = "WORKFLOW"
+
+
+class WorkflowCompletion(str, Enum):
+    SUCCEEDED = "SUCCEEDED"
+
+
+class WorkflowErrorCode(str, Enum):
+    INVALID_WORKFLOW_MUTATION = "INVALID_WORKFLOW_MUTATION"
+    INCIDENT_NOT_FOUND = "INCIDENT_NOT_FOUND"
+    INVALID_LIFECYCLE_TRANSITION = "INVALID_LIFECYCLE_TRANSITION"
+    INVALID_ASSIGNMENT_TARGET = "INVALID_ASSIGNMENT_TARGET"
+    ASSIGNMENT_NOT_ALLOWED = "ASSIGNMENT_NOT_ALLOWED"
+    WORKFLOW_ACTOR_MISMATCH = "WORKFLOW_ACTOR_MISMATCH"
+    INVALID_RESOLUTION_EVIDENCE = "INVALID_RESOLUTION_EVIDENCE"
+    RESOLUTION_REVISION_CONFLICT = "RESOLUTION_REVISION_CONFLICT"
+    INVALID_REVIEW_ATTEMPT = "INVALID_REVIEW_ATTEMPT"
+    STALE_RESOLUTION_REVISION = "STALE_RESOLUTION_REVISION"
+    CLOSED_INCIDENT_MUTATION_FORBIDDEN = "CLOSED_INCIDENT_MUTATION_FORBIDDEN"
+    WORKFLOW_RECEIPT_CONFLICT = "WORKFLOW_RECEIPT_CONFLICT"
+    WORKFLOW_TIME_REGRESSION = "WORKFLOW_TIME_REGRESSION"
+    MALFORMED_WORKFLOW_STATE = "MALFORMED_WORKFLOW_STATE"
+    UNSUPPORTED_INCIDENT_STORE_VERSION = "UNSUPPORTED_INCIDENT_STORE_VERSION"
+    INCIDENT_WORKFLOW_INTEGRITY_FAILURE = "INCIDENT_WORKFLOW_INTEGRITY_FAILURE"
+    TRANSIENT_INCIDENT_STORE_FAILURE = "TRANSIENT_INCIDENT_STORE_FAILURE"
+
+
+WORKFLOW_ERROR_DISPOSITIONS: Mapping[WorkflowErrorCode, RetryDisposition] = MappingProxyType(
+    {
+        **{code: RetryDisposition.NON_RETRYABLE for code in (
+            WorkflowErrorCode.INVALID_WORKFLOW_MUTATION,
+            WorkflowErrorCode.INCIDENT_NOT_FOUND,
+            WorkflowErrorCode.INVALID_LIFECYCLE_TRANSITION,
+            WorkflowErrorCode.INVALID_ASSIGNMENT_TARGET,
+            WorkflowErrorCode.ASSIGNMENT_NOT_ALLOWED,
+            WorkflowErrorCode.WORKFLOW_ACTOR_MISMATCH,
+            WorkflowErrorCode.INVALID_RESOLUTION_EVIDENCE,
+            WorkflowErrorCode.INVALID_REVIEW_ATTEMPT,
+            WorkflowErrorCode.STALE_RESOLUTION_REVISION,
+            WorkflowErrorCode.CLOSED_INCIDENT_MUTATION_FORBIDDEN,
+            WorkflowErrorCode.WORKFLOW_TIME_REGRESSION,
+        )},
+        **{code: RetryDisposition.REPAIR_REQUIRED for code in (
+            WorkflowErrorCode.RESOLUTION_REVISION_CONFLICT,
+            WorkflowErrorCode.WORKFLOW_RECEIPT_CONFLICT,
+            WorkflowErrorCode.MALFORMED_WORKFLOW_STATE,
+            WorkflowErrorCode.UNSUPPORTED_INCIDENT_STORE_VERSION,
+            WorkflowErrorCode.INCIDENT_WORKFLOW_INTEGRITY_FAILURE,
+        )},
+        WorkflowErrorCode.TRANSIENT_INCIDENT_STORE_FAILURE: RetryDisposition.RETRYABLE,
+    }
+)
+
+
+class WorkflowDomainError(ValueError):
+    """A typed, safe SPEC-009 workflow-contract failure."""
+
+    def __init__(self, code: WorkflowErrorCode, message: str, *, workflow_operation_id: str | None = None,
+                 incident_id: str | None = None, field_path: str | None = None) -> None:
+        if not isinstance(code, WorkflowErrorCode):
+            raise TypeError("code must be a WorkflowErrorCode")
+        super().__init__(message)
+        self.code = code
+        self.retry_disposition = WORKFLOW_ERROR_DISPOSITIONS[code]
+        self.workflow_operation_id = workflow_operation_id
+        self.incident_id = incident_id
+        self.field_path = field_path
+
+
+def _workflow_fail(code: WorkflowErrorCode, message: str, **details: str | None) -> None:
+    raise WorkflowDomainError(code, message, **details)
+
+
+def _workflow_reference(value: object, field_name: str, *, nullable: bool = False,
+                        code: WorkflowErrorCode = WorkflowErrorCode.INVALID_WORKFLOW_MUTATION) -> None:
+    if value is None and nullable:
+        return
+    if not isinstance(value, str) or not value or value != value.strip():
+        _workflow_fail(code, f"{field_name} must be a non-empty reference without surrounding whitespace", field_path=field_name)
+
+
+def _workflow_datetime(value: object, field_name: str, *, code: WorkflowErrorCode) -> datetime:
+    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+        _workflow_fail(code, f"{field_name} must be a timezone-aware datetime", field_path=field_name)
+    return value.astimezone(timezone.utc)
+
+
+def _validate_workflow_semantic_shape(
+    *,
+    action: object,
+    incident_id: object,
+    actor: object,
+    target_assignee: object,
+    resolution: object,
+    review: object,
+) -> None:
+    """Validate the closed caller-supplied projection used for workflow replay."""
+    _workflow_reference(incident_id, "incident_id")
+    _workflow_reference(actor, "actor")
+    if not isinstance(action, WorkflowAction):
+        _workflow_fail(WorkflowErrorCode.INVALID_WORKFLOW_MUTATION, "action must be a WorkflowAction", field_path="action")
+
+    needs_assignee = action in {WorkflowAction.MANUAL_ASSIGN, WorkflowAction.REASSIGN}
+    if needs_assignee:
+        _workflow_reference(target_assignee, "target_assignee")
+    elif target_assignee is not None:
+        _workflow_fail(WorkflowErrorCode.INVALID_WORKFLOW_MUTATION, "target_assignee belongs only to assignment actions", field_path="target_assignee")
+
+    if action is WorkflowAction.SUBMIT_RESOLUTION:
+        if not isinstance(resolution, ResolutionSubmissionPayload):
+            _workflow_fail(WorkflowErrorCode.INVALID_RESOLUTION_EVIDENCE, "SUBMIT_RESOLUTION requires resolution payload", field_path="resolution")
+    elif resolution is not None:
+        _workflow_fail(WorkflowErrorCode.INVALID_WORKFLOW_MUTATION, "resolution belongs only to SUBMIT_RESOLUTION", field_path="resolution")
+
+    if action is WorkflowAction.REVIEW_ATTEMPT:
+        if not isinstance(review, ReviewAttemptPayload):
+            _workflow_fail(WorkflowErrorCode.INVALID_REVIEW_ATTEMPT, "REVIEW_ATTEMPT requires review payload", field_path="review")
+    elif review is not None:
+        _workflow_fail(WorkflowErrorCode.INVALID_WORKFLOW_MUTATION, "review belongs only to REVIEW_ATTEMPT", field_path="review")
+
+
+@dataclass(frozen=True, slots=True)
+class AssignmentPolicyConfig:
+    policy_id: str
+    policy_version: str
+    engineers: tuple[str, ...]
+    default_reviewer: str
+
+    def __post_init__(self) -> None:
+        for name in ("policy_id", "policy_version", "default_reviewer"):
+            _workflow_reference(getattr(self, name), name)
+        try:
+            engineers = tuple(self.engineers)
+        except TypeError:
+            _workflow_fail(WorkflowErrorCode.INVALID_WORKFLOW_MUTATION, "engineers must be an ordered iterable", field_path="engineers")
+        if isinstance(self.engineers, (str, bytes)):
+            _workflow_fail(WorkflowErrorCode.INVALID_WORKFLOW_MUTATION, "engineers must be an ordered collection, not a string", field_path="engineers")
+        if not engineers:
+            _workflow_fail(WorkflowErrorCode.INVALID_WORKFLOW_MUTATION, "engineers must not be empty", field_path="engineers")
+        for engineer in engineers:
+            _workflow_reference(engineer, "engineers")
+        if len(engineers) != len(set(engineers)):
+            _workflow_fail(WorkflowErrorCode.INVALID_WORKFLOW_MUTATION, "engineers must be ordered and unique", field_path="engineers")
+        object.__setattr__(self, "engineers", engineers)
+
+
+@dataclass(frozen=True, slots=True)
+class ResolutionSubmissionPayload:
+    actual_action: str
+    resolution_note: str
+    sop_followed: SopFollowed
+    additional_note: str | None = None
+    deviation_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        _workflow_reference(self.actual_action, "actual_action", code=WorkflowErrorCode.INVALID_RESOLUTION_EVIDENCE)
+        _workflow_reference(self.resolution_note, "resolution_note", code=WorkflowErrorCode.INVALID_RESOLUTION_EVIDENCE)
+        if not isinstance(self.sop_followed, SopFollowed):
+            _workflow_fail(WorkflowErrorCode.INVALID_RESOLUTION_EVIDENCE, "sop_followed must be a SopFollowed value", field_path="sop_followed")
+        _workflow_reference(self.additional_note, "additional_note", nullable=True, code=WorkflowErrorCode.INVALID_RESOLUTION_EVIDENCE)
+        _workflow_reference(self.deviation_reason, "deviation_reason", nullable=True, code=WorkflowErrorCode.INVALID_RESOLUTION_EVIDENCE)
+        if self.sop_followed is SopFollowed.NO and self.deviation_reason is None:
+            _workflow_fail(WorkflowErrorCode.INVALID_RESOLUTION_EVIDENCE, "SOP NO requires deviation_reason", field_path="deviation_reason")
+
+
+@dataclass(frozen=True, slots=True)
+class ResolutionSubmission:
+    resolution_submission_id: str
+    incident_id: str
+    revision: int
+    actual_action: str
+    resolution_note: str
+    sop_followed: SopFollowed
+    additional_note: str | None
+    deviation_reason: str | None
+    submitted_by: str
+    submitted_at: datetime
+
+    def __post_init__(self) -> None:
+        _workflow_reference(self.resolution_submission_id, "resolution_submission_id", code=WorkflowErrorCode.MALFORMED_WORKFLOW_STATE)
+        _workflow_reference(self.incident_id, "incident_id", code=WorkflowErrorCode.MALFORMED_WORKFLOW_STATE)
+        if not isinstance(self.revision, int) or isinstance(self.revision, bool) or self.revision < 1:
+            _workflow_fail(WorkflowErrorCode.MALFORMED_WORKFLOW_STATE, "revision must be a positive integer", field_path="revision")
+        ResolutionSubmissionPayload(self.actual_action, self.resolution_note, self.sop_followed, self.additional_note, self.deviation_reason)
+        _workflow_reference(self.submitted_by, "submitted_by", code=WorkflowErrorCode.MALFORMED_WORKFLOW_STATE)
+        object.__setattr__(self, "submitted_at", _workflow_datetime(self.submitted_at, "submitted_at", code=WorkflowErrorCode.MALFORMED_WORKFLOW_STATE))
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewAttemptPayload:
+    target_resolution_revision: int
+    review_approved: bool
+    review_note: str | None
+    recovery_verified: bool
+    recovery_note: str | None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.target_resolution_revision, int) or isinstance(self.target_resolution_revision, bool) or self.target_resolution_revision < 1:
+            _workflow_fail(WorkflowErrorCode.INVALID_REVIEW_ATTEMPT, "target_resolution_revision must be a positive integer", field_path="target_resolution_revision")
+        if not isinstance(self.review_approved, bool) or not isinstance(self.recovery_verified, bool):
+            _workflow_fail(WorkflowErrorCode.INVALID_REVIEW_ATTEMPT, "review and recovery facts must be bool", field_path="review_approved/recovery_verified")
+        _workflow_reference(self.review_note, "review_note", nullable=True, code=WorkflowErrorCode.INVALID_REVIEW_ATTEMPT)
+        _workflow_reference(self.recovery_note, "recovery_note", nullable=True, code=WorkflowErrorCode.INVALID_REVIEW_ATTEMPT)
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewAttempt:
+    review_attempt_id: str
+    incident_id: str
+    resolution_revision: int
+    reviewer: str
+    review_approved: bool
+    review_note: str | None
+    recovery_verified: bool
+    recovery_note: str | None
+    reviewed_at: datetime
+
+    def __post_init__(self) -> None:
+        _workflow_reference(self.review_attempt_id, "review_attempt_id", code=WorkflowErrorCode.MALFORMED_WORKFLOW_STATE)
+        _workflow_reference(self.incident_id, "incident_id", code=WorkflowErrorCode.MALFORMED_WORKFLOW_STATE)
+        ReviewAttemptPayload(self.resolution_revision, self.review_approved, self.review_note, self.recovery_verified, self.recovery_note)
+        _workflow_reference(self.reviewer, "reviewer", code=WorkflowErrorCode.MALFORMED_WORKFLOW_STATE)
+        object.__setattr__(self, "reviewed_at", _workflow_datetime(self.reviewed_at, "reviewed_at", code=WorkflowErrorCode.MALFORMED_WORKFLOW_STATE))
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowMutationRequest:
+    workflow_operation_id: str
+    incident_id: str
+    actor: str
+    now: datetime
+    action: WorkflowAction
+    target_assignee: str | None = None
+    resolution: ResolutionSubmissionPayload | None = None
+    review: ReviewAttemptPayload | None = None
+
+    def __post_init__(self) -> None:
+        _workflow_reference(self.workflow_operation_id, "workflow_operation_id")
+        object.__setattr__(self, "now", _workflow_datetime(self.now, "now", code=WorkflowErrorCode.INVALID_WORKFLOW_MUTATION))
+        _validate_workflow_semantic_shape(
+            action=self.action,
+            incident_id=self.incident_id,
+            actor=self.actor,
+            target_assignee=self.target_assignee,
+            resolution=self.resolution,
+            review=self.review,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowReceiptSemanticIdentity:
+    action: WorkflowAction
+    incident_id: str
+    actor: str
+    target_assignee: str | None = None
+    resolution: ResolutionSubmissionPayload | None = None
+    review: ReviewAttemptPayload | None = None
+
+    def __post_init__(self) -> None:
+        _validate_workflow_semantic_shape(
+            action=self.action,
+            incident_id=self.incident_id,
+            actor=self.actor,
+            target_assignee=self.target_assignee,
+            resolution=self.resolution,
+            review=self.review,
+        )
+
+    @classmethod
+    def from_request(cls, request: WorkflowMutationRequest) -> "WorkflowReceiptSemanticIdentity":
+        if not isinstance(request, WorkflowMutationRequest):
+            _workflow_fail(WorkflowErrorCode.INVALID_WORKFLOW_MUTATION, "request must be a WorkflowMutationRequest")
+        return cls(request.action, request.incident_id, request.actor, request.target_assignee, request.resolution, request.review)
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowOperationResult:
+    workflow_operation_id: str
+    incident_id: str
+    action: WorkflowAction
+    completion_result: WorkflowCompletion
+    resulting_status: IncidentStatus
+    result_reference: str | None
+    completed_at: datetime
+    assignment_policy_id: str | None = None
+    assignment_policy_version: str | None = None
+    selected_assignee: str | None = None
+    bound_reviewer: str | None = None
+    selection_mode: AssignmentSelectionMode | None = None
+
+    def __post_init__(self) -> None:
+        _workflow_reference(self.workflow_operation_id, "workflow_operation_id", code=WorkflowErrorCode.MALFORMED_WORKFLOW_STATE)
+        _workflow_reference(self.incident_id, "incident_id", code=WorkflowErrorCode.MALFORMED_WORKFLOW_STATE)
+        if not isinstance(self.action, WorkflowAction) or not isinstance(self.resulting_status, IncidentStatus) or self.completion_result is not WorkflowCompletion.SUCCEEDED:
+            _workflow_fail(WorkflowErrorCode.MALFORMED_WORKFLOW_STATE, "result action, completion, and status must be closed domain values")
+        _workflow_reference(self.result_reference, "result_reference", nullable=True, code=WorkflowErrorCode.MALFORMED_WORKFLOW_STATE)
+        assignment_values = (self.assignment_policy_id, self.assignment_policy_version, self.selected_assignee, self.bound_reviewer, self.selection_mode)
+        if self.action in {WorkflowAction.AUTO_ASSIGN, WorkflowAction.MANUAL_ASSIGN}:
+            expected_mode = AssignmentSelectionMode.AUTO if self.action is WorkflowAction.AUTO_ASSIGN else AssignmentSelectionMode.MANUAL
+            if self.selection_mode is not expected_mode:
+                _workflow_fail(WorkflowErrorCode.MALFORMED_WORKFLOW_STATE, "assignment result selection mode contradicts action")
+            for name in ("assignment_policy_id", "assignment_policy_version", "selected_assignee", "bound_reviewer"):
+                _workflow_reference(getattr(self, name), name, code=WorkflowErrorCode.MALFORMED_WORKFLOW_STATE)
+        elif any(value is not None for value in assignment_values):
+            _workflow_fail(WorkflowErrorCode.MALFORMED_WORKFLOW_STATE, "assignment provenance belongs only to initial assignment results")
+        object.__setattr__(self, "completed_at", _workflow_datetime(self.completed_at, "completed_at", code=WorkflowErrorCode.MALFORMED_WORKFLOW_STATE))
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowOperationReceipt:
+    result: WorkflowOperationResult
+    immutable_workflow_identity: WorkflowReceiptSemanticIdentity
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.result, WorkflowOperationResult) or not isinstance(self.immutable_workflow_identity, WorkflowReceiptSemanticIdentity):
+            _workflow_fail(WorkflowErrorCode.MALFORMED_WORKFLOW_STATE, "receipt requires workflow result and semantic identity")
+        identity = self.immutable_workflow_identity
+        if self.result.incident_id != identity.incident_id or self.result.action is not identity.action:
+            _workflow_fail(WorkflowErrorCode.MALFORMED_WORKFLOW_STATE, "receipt result and identity must agree")
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowAuditEntry:
+    workflow_audit_id: str
+    workflow_operation_id: str
+    incident_id: str
+    actor: str
+    action: WorkflowAction
+    occurred_at: datetime
+    old_status: IncidentStatus
+    new_status: IncidentStatus
+    effects: tuple[WorkflowAuditEffect, ...]
+    reference_id: str | None = None
+    assignment_policy_id: str | None = None
+    assignment_policy_version: str | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("workflow_audit_id", "workflow_operation_id", "incident_id", "actor"):
+            _workflow_reference(getattr(self, name), name, code=WorkflowErrorCode.MALFORMED_WORKFLOW_STATE)
+        if not isinstance(self.action, WorkflowAction) or not isinstance(self.old_status, IncidentStatus) or not isinstance(self.new_status, IncidentStatus):
+            _workflow_fail(WorkflowErrorCode.MALFORMED_WORKFLOW_STATE, "audit action and statuses must be closed domain values")
+        try:
+            effects = tuple(self.effects)
+        except TypeError:
+            _workflow_fail(WorkflowErrorCode.MALFORMED_WORKFLOW_STATE, "effects must be an iterable", field_path="effects")
+        if not effects or any(not isinstance(effect, WorkflowAuditEffect) for effect in effects) or len(effects) != len(set(effects)):
+            _workflow_fail(WorkflowErrorCode.MALFORMED_WORKFLOW_STATE, "effects must be non-empty unique WorkflowAuditEffect values", field_path="effects")
+        object.__setattr__(self, "effects", effects)
+        _workflow_reference(self.reference_id, "reference_id", nullable=True, code=WorkflowErrorCode.MALFORMED_WORKFLOW_STATE)
+        policy_values = (self.assignment_policy_id, self.assignment_policy_version)
+        if any(value is not None for value in policy_values):
+            if self.action is not WorkflowAction.AUTO_ASSIGN:
+                _workflow_fail(WorkflowErrorCode.MALFORMED_WORKFLOW_STATE, "only AUTO_ASSIGN audit may carry assignment policy provenance")
+            _workflow_reference(self.assignment_policy_id, "assignment_policy_id", code=WorkflowErrorCode.MALFORMED_WORKFLOW_STATE)
+            _workflow_reference(self.assignment_policy_version, "assignment_policy_version", code=WorkflowErrorCode.MALFORMED_WORKFLOW_STATE)
+        object.__setattr__(self, "occurred_at", _workflow_datetime(self.occurred_at, "occurred_at", code=WorkflowErrorCode.MALFORMED_WORKFLOW_STATE))
+
+
+@dataclass(frozen=True, slots=True)
+class IncidentTimelineEntry:
+    """A source-aware, deterministically ordered Incident timeline entry."""
+
+    occurred_at: datetime
+    source: IncidentTimelineSource
+    source_local_order: str
+    correlation_audit: IncidentAuditEntry | None = None
+    workflow_audit: WorkflowAuditEntry | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "occurred_at", _workflow_datetime(self.occurred_at, "occurred_at", code=WorkflowErrorCode.MALFORMED_WORKFLOW_STATE))
+        if not isinstance(self.source, IncidentTimelineSource) or not isinstance(self.source_local_order, str) or not self.source_local_order:
+            _workflow_fail(WorkflowErrorCode.MALFORMED_WORKFLOW_STATE, "timeline source and stable local order are required")
+        correlation = self.correlation_audit
+        workflow = self.workflow_audit
+        if self.source is IncidentTimelineSource.CORRELATION:
+            if not isinstance(correlation, IncidentAuditEntry) or workflow is not None or correlation.occurred_at != self.occurred_at:
+                _workflow_fail(WorkflowErrorCode.MALFORMED_WORKFLOW_STATE, "correlation timeline entry is malformed")
+        elif not isinstance(workflow, WorkflowAuditEntry) or correlation is not None or workflow.occurred_at != self.occurred_at:
+            _workflow_fail(WorkflowErrorCode.MALFORMED_WORKFLOW_STATE, "workflow timeline entry is malformed")
+
+
 __all__ = [
+    "AssignmentPolicyConfig",
+    "AssignmentSelectionMode",
     "CORRELATION_CLOSED_STATUSES",
     "CORRELATION_OPEN_STATUSES",
     "EventMutationProjection",
@@ -576,7 +993,25 @@ __all__ = [
     "IncidentRecord",
     "IncidentSeverity",
     "IncidentStatus",
+    "IncidentTimelineEntry",
+    "IncidentTimelineSource",
     "OperationReceiptSemanticIdentity",
     "RCA_INITIAL_STATUS",
+    "ResolutionSubmission",
+    "ResolutionSubmissionPayload",
+    "ReviewAttempt",
+    "ReviewAttemptPayload",
+    "SopFollowed",
+    "WorkflowAction",
+    "WorkflowAuditEffect",
+    "WorkflowAuditEntry",
+    "WorkflowCompletion",
+    "WorkflowDomainError",
+    "WorkflowErrorCode",
+    "WorkflowMutationRequest",
+    "WorkflowOperationReceipt",
+    "WorkflowOperationResult",
+    "WorkflowReceiptSemanticIdentity",
+    "WORKFLOW_ERROR_DISPOSITIONS",
     "event_mutation_projection",
 ]

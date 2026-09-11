@@ -11,7 +11,7 @@
 | Document ID | SPEC-009 |
 | Document Name | Lifecycle / Human Workflow |
 | Version | 1.0 |
-| Status | Approved — Implementation In Progress |
+| Status | Implemented |
 | Date | 2026-09-10 |
 | Requirement Authority | PRD-003 v1.0 Final |
 | Overall Product Context | PRD-001 v3.4 |
@@ -28,9 +28,11 @@
 | 0.1 | 2026-09-10 | Initial Draft；定義既有 Incident authority內的strict lifecycle、Assignment、workflow idempotency、Resolution Evidence revisions、Human Review、Recovery Verification、closure、audit、concurrency及additive persistence upgrade工程契約。 |
 | 0.1 | 2026-09-10 | Revision Round 2；凍結`REVIEW_ATTEMPT`／closure operation model、per-action replay identity、Unified Incident Timeline cross-source ordering、typed workflow time regression、`IncidentCorrelationView` lifecycle propagation及Acceptance Criteria coverage；Version與Draft status不變。 |
 | 1.0 | 2026-09-10 | PM Final Approval completed；D1～D12 frozen for implementation，Revision Round 1 R1～R5與Revision Round 2 R2-009-01～06均已納入。Status更新為`Approved — Implementation Pending`；Implementation Owner為夜羽。 |
-| 1.0 | 2026-09-10 | Implementation Status Reconciliation；PM implementation authorization與Implementation Work Instructions已於v1.0 approval後issued，Status更新為`Approved — Implementation In Progress`。Owner維持夜羽，current authorized phase為Phase 1 — Workflow Domain Contracts；Engineering Contract semantics未變更。 |
+| 1.0 | 2026-09-10 | Implementation Status Reconciliation（historical）；PM implementation authorization與Implementation Work Instructions已於v1.0 approval後issued，Status更新為`Approved — Implementation In Progress`。Owner維持夜羽；當時首先授權Phase 1 — Workflow Domain Contracts；Engineering Contract semantics未變更。 |
+| 1.0 | 2026-09-11 | Final Implementation Progress Reconciliation；Phase 1～6均已完成並PASS，Current Gate更新為`Final Full Contract Audit / PM Final Review`，Implementation Candidate State為`COMPLETE — PM FINAL REVIEW PENDING`。Status、Version、Owner及Engineering Contract semantics未變更。 |
+| 1.0 | 2026-09-11 | Implementation Closure；SPEC-009 v1.0 implementation completed。Phase 1～6 implementation及audit gates、Final Full Contract Re-Audit與PM Final Review均PASS。Regression evidence：SPEC-009 targeted 56 passed；SPEC-006 relevant 172 passed；SPEC-007 relevant 78 passed；SPEC-008 relevant 131 passed；SPEC-010 relevant 55 passed；full repository 921 passed / 0 failed；Syntax / Import PASS。D1～D12與AC coverage為contract basis，test count不是correctness定義。Implementation deviation：NONE。Status由`Approved — Implementation In Progress`升級為`Implemented`；Version、Owner與Engineering Contract semantics未變更。 |
 
-> **Implementation Status Honesty：Approved — Implementation In Progress ≠ Implemented。** SPEC-009 v1.0已完成PM Final Approval；PM implementation authorization及Implementation Work Instructions均已issued，Implementation Owner夜羽已在approved feature branch進入phase-gated implementation。Current authorization只涵蓋Phase 1 — Workflow Domain Contracts，不表示Phase 1已implemented、audited或PASS，也不自動授權Phase 2～6。只有在全部受治理implementation、targeted validation、cross-SPEC regression、documentation closure與PM-controlled Git closure完成後，Status才可更新為`Implemented`。本狀態不表示Production Ready、Runtime Complete或full downstream E2E完成。
+> **Implementation Status Honesty：SPEC-009 Implemented = YES。** 此狀態僅表示SPEC-009 v1.0定義並已核准的Lifecycle／Human Workflow engineering contract已實作並驗證。它不表示SPEC-011 Implemented、Full AIOps Runtime Complete、full platform E2E Complete、RCA workflow Implemented、Shadow Review Implemented、Knowledge workflow Implemented或Production Ready。
 
 ---
 
@@ -1163,7 +1165,7 @@ Full downstream Docker Runtime E2E defer至SPEC-011，不是SPEC-009 blocking im
 | Phase 5 — Concurrency / Integrity / Timeline | Races、fresh-read protection、readiness、reads及timeline。 |
 | Phase 6 — Integration / Regression | SPEC-008 integration、cross-SPEC relevant suites及full regression。 |
 
-PM implementation authorization及Implementation Work Instructions已issued；目前只授權`Phase 1 — Workflow Domain Contracts`。Phase 1 authorized不等於implemented、audited或PASS。Phase 2～6仍須由對應implementation report、read-only phase audit與PM-controlled progression逐階授權，不得自動開始。
+PM implementation authorization及Implementation Work Instructions已issued；Phase 1～6、Final Full Contract Audit與PM Final Review均已PASS。SPEC-009 v1.0 implementation state為`IMPLEMENTED`。這不表示Production Ready、SPEC-011或full downstream E2E完成。
 
 ---
 
@@ -1247,9 +1249,7 @@ Architecture redesign         NOT REQUIRED
 
 Implementation發現問題須分類`MUST PATCH / NOTE ONLY / DEFER`及`NO IMPACT / REFINE DOWNSTREAM / BLOCKING CONFLICT`。不得先改code semantics再讓SPEC配合。Requirement change才考慮PRD；contract conflict先停止、保存evidence並交PM。
 
-Implementation closure後檢查PRD-001、DDS-001、README及architecture/status diagrams的backward status consistency。AI coding agent不得自行destructive reset／cleanup。
-
-目前其他文件若仍有較舊的SPEC-008／010 implementation-status references，分類為`BACKWARD DOCUMENTATION GOVERNANCE — NON-BLOCKING`；依既有治理於SPEC-009 implementation closure後或另行授權的documentation reconciliation處理，本次approval不修改其他文件。
+Backward Documentation Governance：`PENDING / NON-BLOCKING`。PRD-001、DDS-001、README及architecture/status diagrams的backward status consistency，以及其他文件可能存在的舊implementation-status wording，留待另行授權的documentation reconciliation處理；本次不修改其他文件。AI coding agent不得自行destructive reset／cleanup。
 
 ---
 
@@ -1259,8 +1259,8 @@ Implementation Owner：**夜羽**。
 
 ```text
 Version 1.0
-Approved — Implementation In Progress
-Implementation authorized and in progress
+Implemented
+SPEC-009 implementation completed and verified
 ```
 
 ## 26.1 Approval closure record
@@ -1274,11 +1274,19 @@ Implementation authorized and in progress
 | Final PM Approval | PASS |
 | Implementation Authorization | ISSUED |
 | Implementation Work Instructions | ISSUED |
-| Current Authorized Phase | Phase 1 — Workflow Domain Contracts |
+| Phase 1 — Workflow Domain Contracts | PASS |
+| Phase 2 — Persistence / Additive Schema Migration | PASS |
+| Phase 3 — Assignment / Reassignment / Start Work | PASS |
+| Phase 4 — Resolution Evidence / Review / Closure | PASS |
+| Phase 5 — Replay / Concurrency / Integrity / Reads / Unified Timeline | PASS |
+| Phase 6 — Acceptance / Integration / Regression | PASS |
+| Final Full Contract Audit | PASS |
+| PM Final Review | PASS |
+| Implementation State | IMPLEMENTED |
 
 SPEC-009 v1.0是Lifecycle／Human Workflow implementation的approved Engineering Contract。Implementation必須遵守D1～D12及本文件normative contracts；文件明示為Implementation Choice的技術細節不因此被凍結。若implementation發現與PRD-003、SPEC-008或其他active authority衝突，必須停止受影響範圍、保存evidence並交由PM裁定，不得靜默改寫semantics。
 
-## 26.2 Implementation authorization state
+## 26.2 Implementation closure state
 
 ```text
 Final PM Approval:
@@ -1299,28 +1307,43 @@ a68e717dbe4672c55004eabf9d94d985cbaf00ac
 Implementation Work Instructions:
 ISSUED
 
-Current Authorized Phase:
-Phase 1 — Workflow Domain Contracts
+Implementation Progress:
+Phase 1 — Workflow Domain Contracts: PASS
+Phase 2 — Persistence / Additive Schema Migration: PASS
+Phase 3 — Assignment / Reassignment / Start Work: PASS
+Phase 4 — Resolution Evidence / Review / Closure: PASS
+Phase 5 — Replay / Concurrency / Integrity / Reads / Unified Timeline: PASS
+Phase 6 — Acceptance / Integration / Regression: PASS
+
+Final Full Contract Audit:
+PASS
+
+PM Final Review:
+PASS
+
+Implementation State:
+IMPLEMENTED
 ```
 
-PM implementation authorization已issued，Implementation Work Instructions已交付Owner夜羽；SPEC-009目前在approved feature branch下進行phase-gated implementation。Later phases仍須完成相應implementation report、read-only audit並取得PM-controlled progression，不得因Phase 1已授權而視為自動授權。
+PM implementation authorization已issued，Implementation Work Instructions已交付Owner夜羽；Phase 1～6、Final Full Contract Audit與PM Final Review均已PASS。SPEC-009 v1.0的approved Lifecycle／Human Workflow engineering contract已實作並驗證。
 
 Current governed handoff state：
 
 ```text
-SPEC-009 v1.0 Approved — Implementation In Progress
-→ Phase 1 — Workflow Domain Contracts authorized
-→ implementation report and read-only phase audit
-→ PM-controlled next-phase decision
+SPEC-009 v1.0 Implemented
+→ Phase 1～6 implementation PASS
+→ Final Full Contract Audit PASS
+→ PM Final Review PASS
+→ IMPLEMENTED
 ```
 
-本文件只記錄已由PM授權的Phase 1 implementation狀態；不自行授權Phase 2～6、Git mutation、upstream rewrite或downstream scope expansion。
+本文件記錄SPEC-009 v1.0的formal implementation closure；不授權Git mutation、upstream rewrite、SPEC-011或downstream scope expansion。
 
 ---
 
 # 27. PM Review／Approval Checklist
 
-- [x] Metadata為SPEC-009 v1.0 `Approved — Implementation In Progress`／2026-09-10，Owner夜羽。
+- [x] Metadata為SPEC-009 v1.0 `Implemented`／2026-09-10，Owner夜羽。
 - [x] Authority正確引用PRD-003、PRD-001、PRD-002及SPEC-006/007/008/010。
 - [x] D1～D12對齊並保持single Incident authority。
 - [x] Strict lifecycle、invalid skip、no backward及no reopen完整。
@@ -1344,4 +1367,4 @@ SPEC-009 v1.0 Approved — Implementation In Progress
 - [x] SPEC-011 Runtime/Docker E2E保持out of scope。
 - [x] Error mapping、integrity、retention及reads完整。
 - [x] AC-009-A～L及test layers完整，coverage不依固定count。
-- [x] Status honesty維持`Approved — Implementation In Progress ≠ Implemented`；Phase 1只標示authorized，未宣稱Implemented、Production Ready或完整Runtime。
+- [x] Status honesty：SPEC-009已Implemented；Phase 1～6、Final Full Contract Audit及PM Final Review均標示PASS；未宣稱SPEC-011 Implemented、Production Ready或完整Runtime。

@@ -9,6 +9,8 @@ from uuid import uuid4
 from src.alert_correlation import AnchorStrength, AnchorTransition, DecisionType
 
 from .contracts import (
+    AssignmentPolicyConfig,
+    AssignmentSelectionMode,
     CORRELATION_OPEN_STATUSES,
     RCA_INITIAL_STATUS,
     IncidentAuditAction,
@@ -24,6 +26,18 @@ from .contracts import (
     IncidentRecord,
     OperationReceiptSemanticIdentity,
     IncidentStatus,
+    WorkflowAction,
+    WorkflowAuditEffect,
+    WorkflowAuditEntry,
+    WorkflowCompletion,
+    WorkflowDomainError,
+    WorkflowErrorCode,
+    WorkflowMutationRequest,
+    WorkflowOperationReceipt,
+    WorkflowOperationResult,
+    WorkflowReceiptSemanticIdentity,
+    ResolutionSubmission,
+    ReviewAttempt,
 )
 from .sqlite_store import SqliteIncidentStore, _IncidentStoreTransaction
 
@@ -103,6 +117,181 @@ class IncidentManager:
                 "decision does not belong to SPEC-008",
                 request,
             )
+
+    def auto_assign_incident(self, request: WorkflowMutationRequest, policy: AssignmentPolicyConfig) -> WorkflowOperationResult:
+        return self._assign(request, policy, automatic=True)
+
+    def assign_incident(self, request: WorkflowMutationRequest, policy: AssignmentPolicyConfig) -> WorkflowOperationResult:
+        return self._assign(request, policy, automatic=False)
+
+    def reassign_incident(self, request: WorkflowMutationRequest, policy: AssignmentPolicyConfig) -> WorkflowOperationResult:
+        self._require_workflow_request(request, WorkflowAction.REASSIGN)
+        self._require_policy(policy)
+        with self._store._transaction() as transaction:
+            replay = self._workflow_replay(transaction, request)
+            if replay is not None:
+                return replay
+            incident = self._fresh_workflow_incident(transaction, request)
+            if incident.status is IncidentStatus.CLOSED:
+                self._workflow_fail(WorkflowErrorCode.CLOSED_INCIDENT_MUTATION_FORBIDDEN, "closed Incident cannot be reassigned", request)
+            if incident.status not in {IncidentStatus.ASSIGNED, IncidentStatus.IN_PROGRESS}:
+                self._workflow_fail(WorkflowErrorCode.ASSIGNMENT_NOT_ALLOWED, "Incident cannot be reassigned in its current status", request)
+            if request.target_assignee not in policy.engineers:
+                self._workflow_fail(WorkflowErrorCode.INVALID_ASSIGNMENT_TARGET, "target assignee is not configured", request)
+            updated = replace(incident, assignee=request.target_assignee, updated_at=request.now)
+            return self._persist_workflow(transaction, request, updated, None, (WorkflowAuditEffect.ASSIGNEE_SET,))
+
+    def start_work(self, request: WorkflowMutationRequest) -> WorkflowOperationResult:
+        self._require_workflow_request(request, WorkflowAction.START_WORK)
+        with self._store._transaction() as transaction:
+            replay = self._workflow_replay(transaction, request)
+            if replay is not None:
+                return replay
+            incident = self._fresh_workflow_incident(transaction, request)
+            if incident.status is IncidentStatus.CLOSED:
+                self._workflow_fail(WorkflowErrorCode.CLOSED_INCIDENT_MUTATION_FORBIDDEN, "closed Incident cannot start work", request)
+            if incident.status is not IncidentStatus.ASSIGNED:
+                self._workflow_fail(WorkflowErrorCode.INVALID_LIFECYCLE_TRANSITION, "START_WORK requires ASSIGNED Incident", request)
+            if request.actor != incident.assignee:
+                self._workflow_fail(WorkflowErrorCode.WORKFLOW_ACTOR_MISMATCH, "only current assignee may start work", request)
+            updated = replace(incident, status=IncidentStatus.IN_PROGRESS, updated_at=request.now)
+            return self._persist_workflow(transaction, request, updated, None, (WorkflowAuditEffect.STATUS_CHANGED,))
+
+    def submit_resolution(self, request: WorkflowMutationRequest) -> WorkflowOperationResult:
+        self._require_workflow_request(request, WorkflowAction.SUBMIT_RESOLUTION)
+        with self._store._transaction() as transaction:
+            replay = self._workflow_replay(transaction, request)
+            if replay is not None:
+                return replay
+            incident = self._fresh_workflow_incident(transaction, request)
+            if incident.status is IncidentStatus.CLOSED:
+                self._workflow_fail(WorkflowErrorCode.CLOSED_INCIDENT_MUTATION_FORBIDDEN, "closed Incident cannot accept Resolution", request)
+            if incident.status not in {IncidentStatus.IN_PROGRESS, IncidentStatus.AWAITING_REVIEW}:
+                self._workflow_fail(WorkflowErrorCode.INVALID_LIFECYCLE_TRANSITION, "Resolution requires IN_PROGRESS or AWAITING_REVIEW Incident", request)
+            if request.actor != incident.assignee:
+                self._workflow_fail(WorkflowErrorCode.WORKFLOW_ACTOR_MISMATCH, "only current assignee may submit Resolution", request)
+            history = transaction._list_resolution_submissions(incident.incident_id)
+            submission = ResolutionSubmission(f"RES-{uuid4()}", incident.incident_id, len(history) + 1,
+                request.resolution.actual_action, request.resolution.resolution_note, request.resolution.sop_followed,
+                request.resolution.additional_note, request.resolution.deviation_reason, request.actor, request.now)
+            updated = replace(incident, status=IncidentStatus.AWAITING_REVIEW, updated_at=request.now)
+            effects = (WorkflowAuditEffect.RESOLUTION_SUBMITTED,)
+            if incident.status is not updated.status:
+                effects += (WorkflowAuditEffect.STATUS_CHANGED,)
+            transaction._insert_resolution_submission(submission)
+            return self._persist_workflow(transaction, request, updated, None, effects, submission.resolution_submission_id)
+
+    def review_incident(self, request: WorkflowMutationRequest) -> WorkflowOperationResult:
+        self._require_workflow_request(request, WorkflowAction.REVIEW_ATTEMPT)
+        with self._store._transaction() as transaction:
+            replay = self._workflow_replay(transaction, request)
+            if replay is not None:
+                return replay
+            incident = self._fresh_workflow_incident(transaction, request)
+            if incident.status is IncidentStatus.CLOSED:
+                self._workflow_fail(WorkflowErrorCode.CLOSED_INCIDENT_MUTATION_FORBIDDEN, "closed Incident cannot be reviewed", request)
+            if incident.status is not IncidentStatus.AWAITING_REVIEW:
+                self._workflow_fail(WorkflowErrorCode.INVALID_LIFECYCLE_TRANSITION, "review requires AWAITING_REVIEW Incident", request)
+            if request.actor != incident.reviewer:
+                self._workflow_fail(WorkflowErrorCode.WORKFLOW_ACTOR_MISMATCH, "only current reviewer may review", request)
+            history = transaction._list_resolution_submissions(incident.incident_id)
+            if not history or request.review.target_resolution_revision != history[-1].revision:
+                self._workflow_fail(WorkflowErrorCode.STALE_RESOLUTION_REVISION, "review target is not latest Resolution revision", request)
+            attempt = ReviewAttempt(f"REV-{uuid4()}", incident.incident_id, request.review.target_resolution_revision,
+                request.actor, request.review.review_approved, request.review.review_note,
+                request.review.recovery_verified, request.review.recovery_note, request.now)
+            closes = request.review.review_approved and request.review.recovery_verified
+            updated = replace(incident, status=IncidentStatus.CLOSED if closes else incident.status,
+                closed_at=request.now if closes else incident.closed_at, updated_at=request.now)
+            effects = (WorkflowAuditEffect.REVIEW_RECORDED,)
+            if request.review.recovery_verified:
+                effects += (WorkflowAuditEffect.RECOVERY_VERIFIED,)
+            if closes:
+                effects += (WorkflowAuditEffect.STATUS_CHANGED, WorkflowAuditEffect.INCIDENT_CLOSED)
+            transaction._insert_review_attempt(attempt)
+            return self._persist_workflow(transaction, request, updated, None, effects, attempt.review_attempt_id)
+
+    def _assign(self, request: WorkflowMutationRequest, policy: AssignmentPolicyConfig, *, automatic: bool) -> WorkflowOperationResult:
+        expected_action = WorkflowAction.AUTO_ASSIGN if automatic else WorkflowAction.MANUAL_ASSIGN
+        self._require_workflow_request(request, expected_action)
+        self._require_policy(policy)
+        with self._store._transaction() as transaction:
+            replay = self._workflow_replay(transaction, request)
+            if replay is not None:
+                return replay
+            incident = self._fresh_workflow_incident(transaction, request)
+            if incident.status is IncidentStatus.CLOSED:
+                self._workflow_fail(WorkflowErrorCode.CLOSED_INCIDENT_MUTATION_FORBIDDEN, "closed Incident cannot be assigned", request)
+            if incident.status is not IncidentStatus.OPEN or incident.assignee is not None:
+                self._workflow_fail(WorkflowErrorCode.ASSIGNMENT_NOT_ALLOWED, "initial assignment requires unassigned OPEN Incident", request)
+            if automatic:
+                state = transaction._get_assignment_state(policy.policy_id, policy.policy_version)
+                if state is None:
+                    engineers, reviewer, cursor = policy.engineers, policy.default_reviewer, 0
+                else:
+                    engineers, reviewer, cursor = state
+                    if engineers != policy.engineers or reviewer != policy.default_reviewer:
+                        self._workflow_fail(WorkflowErrorCode.INCIDENT_WORKFLOW_INTEGRITY_FAILURE, "durable assignment policy state contradicts configured policy", request)
+                assignee = engineers[cursor]
+                transaction._upsert_assignment_state(policy.policy_id, policy.policy_version, engineers, reviewer, (cursor + 1) % len(engineers))
+                mode = AssignmentSelectionMode.AUTO
+            else:
+                if request.target_assignee not in policy.engineers:
+                    self._workflow_fail(WorkflowErrorCode.INVALID_ASSIGNMENT_TARGET, "target assignee is not configured", request)
+                assignee, reviewer, mode = request.target_assignee, policy.default_reviewer, AssignmentSelectionMode.MANUAL
+            updated = replace(incident, status=IncidentStatus.ASSIGNED, assignee=assignee, reviewer=reviewer, updated_at=request.now)
+            provenance = (policy.policy_id, policy.policy_version, assignee, reviewer, mode)
+            return self._persist_workflow(transaction, request, updated, provenance,
+                (WorkflowAuditEffect.ASSIGNEE_SET, WorkflowAuditEffect.REVIEWER_BOUND, WorkflowAuditEffect.STATUS_CHANGED))
+
+    @staticmethod
+    def _require_policy(policy: AssignmentPolicyConfig) -> None:
+        if not isinstance(policy, AssignmentPolicyConfig):
+            raise WorkflowDomainError(WorkflowErrorCode.INVALID_WORKFLOW_MUTATION, "policy must be an AssignmentPolicyConfig")
+
+    @staticmethod
+    def _require_workflow_request(request: WorkflowMutationRequest, action: WorkflowAction) -> None:
+        if not isinstance(request, WorkflowMutationRequest) or request.action is not action:
+            raise WorkflowDomainError(WorkflowErrorCode.INVALID_WORKFLOW_MUTATION, "request action does not match workflow capability")
+
+    @staticmethod
+    def _workflow_fail(code: WorkflowErrorCode, message: str, request: WorkflowMutationRequest) -> None:
+        raise WorkflowDomainError(code, message, workflow_operation_id=request.workflow_operation_id, incident_id=request.incident_id)
+
+    def _workflow_replay(self, transaction: _IncidentStoreTransaction, request: WorkflowMutationRequest) -> WorkflowOperationResult | None:
+        identity = WorkflowReceiptSemanticIdentity.from_request(request)
+        receipt = transaction._get_workflow_receipt(request.workflow_operation_id)
+        if receipt is None:
+            return None
+        if receipt.immutable_workflow_identity != identity:
+            self._workflow_fail(WorkflowErrorCode.WORKFLOW_RECEIPT_CONFLICT, "workflow operation has contradictory identity", request)
+        return receipt.result
+
+    def _fresh_workflow_incident(self, transaction: _IncidentStoreTransaction, request: WorkflowMutationRequest) -> IncidentRecord:
+        incident = transaction._get_incident(request.incident_id)
+        if incident is None:
+            self._workflow_fail(WorkflowErrorCode.INCIDENT_NOT_FOUND, "Incident does not exist", request)
+        if request.now < incident.updated_at:
+            self._workflow_fail(WorkflowErrorCode.WORKFLOW_TIME_REGRESSION, "workflow time predates Incident updated_at", request)
+        return incident
+
+    def _persist_workflow(self, transaction: _IncidentStoreTransaction, request: WorkflowMutationRequest, updated: IncidentRecord,
+                          provenance: tuple[str, str, str, str, AssignmentSelectionMode] | None,
+                          effects: tuple[WorkflowAuditEffect, ...], result_reference: str | None = None) -> WorkflowOperationResult:
+        policy_id = policy_version = selected = reviewer = mode = None
+        if provenance is not None:
+            policy_id, policy_version, selected, reviewer, mode = provenance
+        result = WorkflowOperationResult(request.workflow_operation_id, updated.incident_id, request.action,
+            WorkflowCompletion.SUCCEEDED, updated.status, result_reference, request.now, policy_id, policy_version, selected, reviewer, mode)
+        receipt = WorkflowOperationReceipt(result, WorkflowReceiptSemanticIdentity.from_request(request))
+        audit = WorkflowAuditEntry(f"WFA-{uuid4()}", request.workflow_operation_id, updated.incident_id, request.actor,
+            request.action, request.now, transaction._get_incident(updated.incident_id).status, updated.status, effects,
+            result_reference, policy_id if request.action is WorkflowAction.AUTO_ASSIGN else None,
+            policy_version if request.action is WorkflowAction.AUTO_ASSIGN else None)
+        transaction._replace_incident_state(updated)
+        transaction._insert_workflow_receipt(receipt)
+        transaction._insert_workflow_audit(audit)
+        return result
 
     @staticmethod
     def _validate_event_fingerprint_coherence(
