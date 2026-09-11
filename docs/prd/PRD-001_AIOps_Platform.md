@@ -2,7 +2,7 @@
 ## 產品需求文件（PRD）v3.4
 
 > **文件狀態**：執行中
-> **最後更新**：2026-08-29
+> **最後審閱**：2026-09-11
 > **適用對象**：東吳大學資管系專題四人組
 > **對應文件**：SDD v0.1、ADR-001（均由 Google Drive 管理）
 
@@ -12,6 +12,7 @@
 | 3.2 | 2026-08-12 | Post-SPEC-005 Cross-Document Governance Batch 2B：依 PRD-002 v1.3 與 SPEC-001～004 正式契約同步 S1、S3、S6、模組二驗收與 G3 里程碑；補充 SPEC-005 v1.2 非規範性驗證證據及相關文件。整體平台狀態維持執行中。 |
 | 3.3 | 2026-08-16 | 擴充 downstream Incident Lifecycle 產品方向；調和 Dashboard、Jira、Discord、Email 角色；加入 human-in-the-loop workflow、retention 與 knowledge feedback 方向，並修正過時治理與部署文字。Event Detection authoritative contract 不變。 |
 | 3.4 | 2026-08-29 | Post-PRD-003 backward governance reconciliation：對齊 correlation authority、Incident lifecycle eligibility、RCA persistence boundary、external interface authority、retention／reset wording與 current document references；不宣稱 downstream implementation 完成。 |
+| 3.4 | 2026-09-11 | DC-2 documentation-only reconciliation：同步SPEC-006～010個別Implemented、SPEC-011／complete Runtime E2E pending及current references；不變更Requirement、ownership或frozen Engineering Contract semantics。 |
 
 ---
 
@@ -202,7 +203,7 @@ EventStore／Events → Alert Correlation → correlated Incident creation trigg
 |---|---|
 | 六大劇本支援 | 支援 evidence-driven Strong／Known Weak／Shadow policy；不得以 scenario、generator 或 validator expected answer 作 runtime correlation decision。 |
 | 概念邊界 | Detector Cooldown、Correlation Window、Pending Grace 與 RCA invocation protection／suppression 是不同概念。任何舊「60 秒內同類 Event 不重複觸發 LLM」敘述僅表示 RCA invocation protection intent，不是 Correlation Window，也不是 detector cooldown。 |
-| 詳細權威 | `PRD-003 v1.0 Final` 是 Correlation Window、Strong／Weak policies、Pending、Shadow、fingerprints、Incident creation、ownership／dedup／recovery等 detailed requirements 的 authoritative source；後續 Engineering SPEC 負責 implementation contract。PRD Final 不代表 implementation complete。 |
+| 詳細權威 | `PRD-003 v1.0 Final` 是 Correlation Window、Strong／Weak policies、Pending、Shadow、fingerprints、Incident creation、ownership／dedup／recovery等 detailed requirements 的 authoritative source；SPEC-006～010已完成各自核准的implementation scope，SPEC-011與完整Runtime整合仍pending。PRD Final不代表implementation complete。 |
 
 ### G5 Incident Management
 
@@ -420,11 +421,11 @@ PM 負責 integration review、merge／integration decision，以及將 stable m
 | Completed | 已完成 | Event Detection。 |
 | Completed | 已完成 | Event Runner。 |
 | Completed | 已完成 | Scenario／E2E validation。 |
-| Next | Requirements Final／Implementation Pending | Alert Correlation（PRD-003 v1.0 Final；Engineering SPEC待建立）。 |
-| Next | Requirements Final／Implementation Pending | Incident Manager／lifecycle（PRD-003 v1.0 Final；Engineering SPEC待建立）。 |
+| In progress | Individual Engineering SPECs Implemented／Runtime Pending | Alert Correlation（PRD-003 v1.0 Final；SPEC-006 Policy Engine、SPEC-007 Correlation State、SPEC-008 Incident Core及SPEC-010 Shadow各自Implemented；SPEC-011與complete Runtime／Docker E2E pending）。 |
+| In progress | Individual Engineering SPECs Implemented／Integration Pending | Incident Manager／lifecycle（PRD-003 v1.0 Final；SPEC-008 Incident Core與SPEC-009 Lifecycle／Human Workflow各自Implemented；complete downstream integrations仍pending）。 |
 | Planned downstream | 規劃中 | RAG／LLM RCA、Dashboard、Jira、Discord／ChatOps、Email fallback／escalation、full integration／Demo。 |
 
-Event Detection 與 Event Runner 的完成不代表 Alert Correlation、Incident、RCA 或整體平台已完成。既有產品目標維持資服盃截止 2026/11/07 與系上專題發表預計 2026/11 中旬。
+SPEC-006～010各自依核准scope Implemented不代表SPEC-011、complete Runtime／Docker E2E、RCA／RAG、external operational integrations或整體平台已完成。既有產品目標維持資服盃截止 2026/11/07 與系上專題發表預計 2026/11 中旬。
 
 ---
 
@@ -513,7 +514,7 @@ Event Detection 與 Event Runner 的完成不代表 Alert Correlation、Incident
 
 ## 13. 相關文件與驗證證據
 
-正式文件依domain分工：PRD-001 v3.4為執行中的overall platform direction；PRD-002 v1.5為Approved Event Detection authority；SPEC-001 v2.3、SPEC-002 v1.4、SPEC-003 v1.1、SPEC-004 v1.1為Implemented engineering contracts；PRD-003 v1.0是Final Alert Correlation／Incident Management detailed requirements，但implementation仍pending。
+正式文件依domain分工：PRD-001 v3.4為執行中的overall platform direction；PRD-002 v1.5 Approved為Event Detection authority；SPEC-001 v2.3、SPEC-002 v1.4、SPEC-003 v1.1、SPEC-004 v1.1為Implemented engineering contracts；PRD-003 v1.0維持Final Alert Correlation／Incident Management detailed requirement authority。SPEC-006 v1.0、SPEC-007 v1.0、SPEC-008 v1.1、SPEC-009 v1.0及SPEC-010 v1.0已依各自核准scope Implemented；SPEC-011、complete Runtime／Docker E2E與完整downstream integrations仍pending。
 
 SPEC-005 v1.3為Implemented implementation／validation evidence（non-normative），S3 Identity Revalidation PASS；它不取代PRD-002或SPEC-001～004 detector authority，也不將observed E2E values升級為永久門檻。
 

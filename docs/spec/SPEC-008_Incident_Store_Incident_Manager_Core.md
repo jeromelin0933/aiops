@@ -26,7 +26,7 @@
 | 1.1 | 2026-09-09 | Narrow additive read-capability refinement：新增public、read-only semantic capability，用於判斷Event是否已有authoritative Incident ownership。不改Incident ownership authority、mutation semantics、persistence topology、PRD requirements或既有D1～D12 behavior。Status維持 Approved — Implementation Pending。 |
 | 1.1 | 2026-09-09 | Implementation completed and PM Final Review PASS；Incident Store／Incident Manager Core、Event ownership、operation replay、Late Strong-Anchor Promotion、audit、public read-only Event→Incident ownership capability、restart／integrity／concurrency behavior及AC-008-A～K均已實作並完成驗證。Status更新為 Implemented；Engineering semantics與approved v1.1 contract一致，無implementation deviation。 |
 
-> **Implementation Status Honesty：SPEC-008 v1.1已完成implementation，Status為`Implemented`。** 此狀態只表示SPEC-008 Incident Store／Incident Manager Core及其public read-only Event→Incident ownership capability已完成並通過PM Final Review；不代表SPEC-009 Incident Lifecycle／Human Workflow、SPEC-010 Shadow／Unclassified Store final integration、SPEC-011 Runtime Orchestration、full downstream Docker E2E、RCA／RAG、Jira／Discord／Dashboard workflow或完整AIOps closed loop已完成，亦不表示整體平台Production Ready。
+> **Implementation Status Honesty：SPEC-008 v1.1已完成implementation，Status為`Implemented`。** SPEC-009 Incident Lifecycle／Human Workflow與SPEC-010 Shadow／Unclassified Store已依各自核准scope Implemented；SPEC-011 Runtime Orchestration、full downstream Docker E2E、RCA／RAG、Jira／Discord／Dashboard workflow及完整AIOps closed loop仍Pending，整體平台亦非Production Ready。SPEC-008本身仍不實作SPEC-009、SPEC-010或SPEC-011的責任；其Incident authority與既有scope boundary不變。
 
 ---
 
@@ -42,7 +42,7 @@
 4. `SPEC-007 v1.0 Implemented — 2026-09-07`是`CorrelationMutationIntent`、Pending／Processed／Blocked／Claim與recovery handoff authority。
 5. SPEC-009、SPEC-010、SPEC-011分別保留Lifecycle／Human Workflow、Shadow／Unclassified Store與Runtime Orchestration／downstream E2E責任。
 
-PRD-003 metadata仍引用PRD-002 v1.4；current upstream Event authority為PRD-002 v1.5。此差異是既有non-blocking reference reconciliation，不改變Event schema或本SPEC authority，也不授權修改PRD-003。
+PRD-003 current metadata已引用PRD-002 v1.5 Approved；此reference reconciliation不改變Event schema或本SPEC authority，也不授權SPEC-008修改PRD-003。
 
 若後續發現本文件與active upstream contract無法同時滿足，必須停止受影響範圍並回報PM，不得自行改寫upstream authority。
 

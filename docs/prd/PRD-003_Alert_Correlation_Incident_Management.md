@@ -12,14 +12,14 @@
 | Status | Final |
 | Date | 2026-08-29 |
 | Author | 林子豪（PM） |
-| Upstream Authority | PRD-002 v1.4／EventStore normalized Runtime Event evidence |
+| Upstream Authority | PRD-002 v1.5 Approved／EventStore normalized Runtime Event evidence |
 | Target | Product、Engineering SPEC、QA／Validation、Operations |
 
 | Version | Date | Change |
 |---|---|---|
 | 1.0 | 2026-08-29 | Initial Final requirements for evidence-driven Alert Correlation, Incident lifecycle/state, Pending/Dedup recovery, Shadow routing, and persistence governance. |
 
-> **Implementation Status Honesty：**本文件是 Final Requirements，不代表 implementation complete。Alert Correlation Engine、Correlation State persistence、Incident Store／Incident Manager、Shadow persistence、lifecycle workflow與downstream integrations仍待後續Engineering SPEC與implementation；不得將本文件解讀為Implemented、Production Ready或Completed。
+> **Implementation Status Honesty：**本文件是 Final Requirements，不代表implementation complete。SPEC-006 Policy Engine、SPEC-007 Correlation State、SPEC-008 Incident Core、SPEC-009 Lifecycle／Human Workflow與SPEC-010 Shadow／Unclassified Store已依各自核准scope Implemented；SPEC-011 Runtime／Orchestration、complete downstream integrations與full Runtime／Docker E2E仍Pending。不得將本文件解讀為Implemented、Production Ready或Completed。
 
 ---
 
@@ -398,14 +398,13 @@ S3正式PoC validation是單一OOM-origin service。同一Window若有多個不�
 
 ## 22. Backward Documentation Governance Note（Non-blocking）
 
-PRD-003 Final後須進行backward documentation consistency review，至少re-check PRD-001、PRD-002、DDS與README；本次不修改上述文件。
+DC-2 backward documentation consistency reconciliation已於2026-09-11執行，並re-check README、PRD-001、PRD-002、DDS-001及相關SPEC current-state wording。此為documentation-only reconciliation，不修改本PRD requirement、Event authority或frozen Engineering Contract semantics。
 
-後續重點：
+本次reconciliation確認：
 
 1. RCA persistence wording：Incident只保存RCA relationship／current state；完整RCA artifact可由independent persistence authority保存。
 2. Jira CLOSED wording：Jira等interface只能送intent；Incident Manager是authoritative lifecycle mutator。
 3. Lifecycle／retention／reset wording：三者不同；destructive reset／cleanup不得由normal runtime、validator或AI agent自動執行。
-4. Re-check舊correlation rules、Cooldown vs Correlation Window、Event→Incident relationship與legacy lifecycle wording。
+4. 舊correlation rules、Cooldown vs Correlation Window、Event→Incident relationship與legacy lifecycle wording已完成re-check；未改變既有requirement semantics。
 
-此governance review是非阻塞follow-up，不改變本PRD v1.0 Final status，也不得被解讀為downstream implementation已完成。
-
+此governance review已完成且不改變本PRD v1.0 Final status。SPEC-006～010 individually Implemented不表示SPEC-011、complete Runtime／Docker E2E、RCA／RAG、external operational integrations、Knowledge workflow或automatic remediation已完成。

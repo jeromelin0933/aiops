@@ -25,7 +25,7 @@
 | 1.0 | 2026-09-04 | Second PM Review completed；D1～D12、D2 narrow clarification、D12 Time／Phase Ownership amendment、state／recovery／crash consistency contracts與 AC-007-A～I通過 PM Review。Status更新為 Approved — Implementation Pending；Engineering Contract frozen for implementation。尚未開始 implementation。 |
 | 1.0 | 2026-09-07 | Implementation completed and PM Final Review PASS；Correlation State Store／Pending Recovery已合併至develop，Status更新為 Implemented。Engineering Contract未變更。 |
 
-> **Implementation Status Honesty：** SPEC-007 v1.0 已完成 implementation；Correlation State Store、Pending continuity、Blocked failure durability、MutationIntent、Processed／Dedup、Claim／fencing、restart／recovery及 retention／integrity guards均已通過對應測試與 PM Final Review，Status已更新為 `Implemented`。此狀態只表示 SPEC-007範圍完成，不代表完整 Alert Correlation Runtime完成；SPEC-008 Incident Store／Manager、SPEC-009 Lifecycle／Human Workflow、SPEC-010 Shadow／Unclassified Store、SPEC-011 Runtime Orchestration及 full downstream Docker Correlation E2E仍未完成。
+> **Implementation Status Honesty：** SPEC-007 v1.0 已完成 implementation；Correlation State Store、Pending continuity、Blocked failure durability、MutationIntent、Processed／Dedup、Claim／fencing、restart／recovery及 retention／integrity guards均已通過對應測試與 PM Final Review，Status已更新為 `Implemented`。此狀態只表示 SPEC-007範圍完成，不代表完整 Alert Correlation Runtime完成；SPEC-008 Incident Store／Manager、SPEC-009 Lifecycle／Human Workflow與SPEC-010 Shadow／Unclassified Store已依各自核准scope Implemented，SPEC-011 Runtime Orchestration及full downstream Docker Correlation E2E仍Pending。
 
 ---
 
@@ -40,7 +40,7 @@
 3. `SPEC-006 v1.0 Implemented` 是 correlation decision、logical type、enum、exact policy reference、Pending evaluation phase與 failure contract authority。
 4. SPEC-008、SPEC-010、SPEC-011 目前是 downstream handoff boundary；本 SPEC 不預先實作其 domain side effects或 orchestration。
 
-PRD-003 metadata仍引用 PRD-002 v1.4；PRD-002 v1.5只做 downstream-reference reconciliation，明確保留 Event schema與 detector semantics。本 SPEC 因此引用 current authority PRD-002 v1.5；此 metadata差異不是 semantic blocker，也不授權修改 PRD-003。
+PRD-003 current metadata已引用PRD-002 v1.5 Approved；該reference reconciliation明確保留Event schema與detector semantics。本SPEC持續引用current authority PRD-002 v1.5，且不因此取得修改PRD-003或Event authority的權限。
 
 若 implementation 發現最新 authority、既有 production contract與本文件無法同時滿足的 active conflict，必須停止受影響範圍並回報 PM，不得自行修改 upstream authority或重設計。
 
@@ -977,7 +977,7 @@ Implementation acceptance至少需要：
 5. Crash-injection tests：第9.3 A～D及 repeated recovery crash。
 6. Full repository regression：`python -m pytest -q`或 Repository正式 equivalent command。
 
-不得用固定 test數量取代 contract coverage。完整 downstream Docker Correlation E2E待 SPEC-008～011整合完成後執行。
+不得用固定 test數量取代 contract coverage。SPEC-008～010已依各自核准scope Implemented；完整 downstream Docker Correlation E2E仍待 SPEC-011 integration完成後執行。
 
 ---
 

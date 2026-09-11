@@ -18,6 +18,7 @@
 | Upstream Correlation Contract | SPEC-006 v1.0 Implemented |
 | Upstream Correlation State Contract | SPEC-007 v1.0 Implemented |
 | Related Incident Contract | SPEC-008 v1.1 Implemented |
+| Related Lifecycle Contract | SPEC-009 v1.0 Implemented |
 | Implementation Owner | 夜羽 |
 
 | Version | Date | Change |
@@ -26,7 +27,7 @@
 | 1.0 | 2026-09-08 | Draft Review #1、Revision Round #1 與 PM Review #2 完成；D1～D12、010-R1～R5、ShadowReason semantics、Shadow／Incident ownership boundary、operation replay／crash recovery、closed Shadow error contract、Acceptance Criteria 與 cross-SPEC boundaries 完成 final review。Status 更新為 Approved — Implementation Pending；Engineering Contract frozen for implementation。 |
 | 1.0 | 2026-09-09 | Implementation completed and PM Final Review PASS；SPEC-010 Phase 1～6、Shadow persistence、ownership、operation replay／crash recovery、SPEC-008 public ownership integration及AC-010-A～J均已實作並完成驗證。Status更新為 Implemented；Engineering semantics與approved v1.0 contract一致，無implementation deviation。 |
 
-> **Implementation Status Honesty：SPEC-010 v1.0已完成implementation，Status為`Implemented`。** 此狀態只表示Shadow／Unclassified Store及其與SPEC-008 public read-only Event→Incident ownership capability的integration已完成並通過PM Final Review；不代表SPEC-009 lifecycle／human workflow、SPEC-011 Runtime Orchestration、full downstream Docker E2E、RCA／RAG、ChatOps或完整AIOps closed loop已完成，亦不表示整體平台Production Ready。
+> **Implementation Status Honesty：SPEC-010 v1.0已完成implementation，Status為`Implemented`。** SPEC-009 v1.0 Lifecycle／Human Workflow亦已依其核准scope Implemented；SPEC-011 Runtime Orchestration、full downstream Docker E2E、RCA／RAG、ChatOps或完整AIOps closed loop仍Pending，整體平台亦非Production Ready。SPEC-010的Shadow semantics與ownership authority不因downstream狀態而改變。
 
 ---
 
@@ -40,10 +41,11 @@
 2. `PRD-002 v1.5 Approved`是15-field immutable Runtime Event與EventStore authority。
 3. `SPEC-006 v1.0 Implemented`是UNKNOWN classification、`ROUTE_SHADOW`、reason、policy identity與`NormalizedFingerprint` authority。
 4. `SPEC-007 v1.0 Implemented`是`CorrelationMutationIntent`、Processed／Blocked／Claim與recovery execution state authority。
-5. `SPEC-008 v1.0 Approved — Implementation Pending`是related Incident domain與Event→Incident ownership contract；不成為Shadow authority。
-6. SPEC-010只在上述authority內定義Shadow domain；SPEC-011 future Runtime負責end-to-end orchestration。
+5. `SPEC-008 v1.1 Implemented`是related Incident domain與Event→Incident ownership contract；不成為Shadow authority。
+6. `SPEC-009 v1.0 Implemented`是Incident Lifecycle／Human Workflow contract；不成為Shadow authority。
+7. SPEC-010只在上述authority內定義Shadow domain；SPEC-011 future Runtime負責end-to-end orchestration。
 
-PRD-003 metadata仍引用PRD-002 v1.4，而current Event authority為PRD-002 v1.5。此差異是既知non-blocking metadata drift，不改變Event schema或本SPEC authority，亦不授權修改PRD-003。
+PRD-003 current metadata已引用PRD-002 v1.5 Approved。此reference reconciliation不改變Event schema或本SPEC authority，亦不授權SPEC-010修改PRD-003。
 
 若本文件與active upstream authority無法同時滿足，必須停止受影響範圍並回報PM，不得自行patch upstream或讓implementation反向改寫contract。
 
@@ -376,15 +378,15 @@ Exact protocol name、method name、adapter location及implementation technique�
 CROSS-SPEC IMPACT:
 REFINE DOWNSTREAM
 
-Blocking current SPEC-008 implementation? NO
-Blocking SPEC-010 drafting? NO
-Blocking SPEC-010 domain implementation? NO
-Must be resolved before SPEC-011 full runtime integration? YES
+SPEC-008 v1.1 public read-only capability available? YES
+Current SPEC-010 implementation consumes capability? YES
+Cross-store atomicity provided? NO
+SPEC-011 sequencing / reconciliation still required? YES
 ```
 
-SPEC-008目前不得因此被reopen或停止。若future SPEC-008 implementation自然提供等價read-only capability，直接以adapter／public API reuse；若沒有，於SPEC-008 closure或SPEC-011 integration前以minimum-impact governance補足。
+SPEC-008 v1.1已提供public read-only `event_has_incident_owner(...)` capability，SPEC-010 current implementation已透過public semantic API使用該capability。此reconciliation不reopen SPEC-008、不新增second ownership authority，也不重新設計ownership protocol。
 
-在full runtime integration前，SPEC-011必須協調single terminal ownership sequencing及必要read-only adapters。若屆時仍無法可靠排除Incident ownership，該Event的Shadow mutation必須Fail Closed，不得猜測。
+此capability不提供cross-store atomicity。Incident ownership仍由SPEC-008 authority管理，Shadow ownership仍由SPEC-010 authority管理；在full runtime integration前，SPEC-011仍必須協調single terminal ownership sequencing與reconciliation。若無法可靠排除Incident ownership，該Event的Shadow mutation必須Fail Closed，不得猜測。
 
 ---
 
