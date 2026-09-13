@@ -1,5 +1,5 @@
 # SPEC-001：Log Event Detection
-## Software Design Specification v2.3（Hybrid Pipeline 版）
+## Software Design Specification v2.4（Hybrid Pipeline 版）
 
 ---
 
@@ -7,11 +7,11 @@
 
 | 欄位 | 內容 |
 |---|---|
-| Document ID | SPEC-001 v2.3 |
+| Document ID | SPEC-001 v2.4 |
 | Document Name | Log Event Detection — Hybrid Pipeline |
-| Version | 2.3 |
+| Version | 2.4 |
 | Status | Implemented |
-| Date | 2026-08-29 |
+| Date | 2026-09-13 |
 | Related PRD | PRD-001、PRD-002 |
 | Related DDS | DDS-001 |
 | Implements | PRD-002 FR-01、FR-03、FR-04、FR-05、FR-06 |
@@ -22,6 +22,7 @@
 | 2.1 | 2026-07-14 | 定義 Hybrid Window-level Log Event Detection Pipeline。 |
 | 2.2 | 2026-08-12 | 與 SPEC-005 Phase 6 calibration 對齊；完成 training-flow reconciliation、deterministic fixture 文件化與 calibration limitation 文件化。 |
 | 2.3 | 2026-08-29 | S3 OOM-origin service metadata repair：`oom_crash_detected.service_name` 改由完整 Window 的實際 OOM evidence 推導；implementation、automated regression 與 Runtime E2E identity validation 均已完成。不改 Isolation Forest feature vector、classifier priority 或 Event Schema shape。 |
+| 2.4 | 2026-09-13 | 新增 downstream authoritative Event enumeration/read-integrity capability；保留 `read_all()` compatibility，對 authoritative representation 的 malformed JSON與non-object JSON採 typed Fail Closed。Event schema、immutability、Detector write ownership及JSONL persistence均不變。 |
 
 ---
 
@@ -1622,15 +1623,25 @@ class EventBuilder:
 #
 # 職責：
 #   將 Event dict 以 JSONL 格式寫入 events/event_store.jsonl。
-#   確保目錄存在，提供讀取所有 Event 的介面（供驗收腳本）。
+#   確保目錄存在，提供 legacy validation read 與 downstream authoritative read。
 #
 # 每個 function 的職責：
 #   EventStore.__init__()  確認目錄存在，設定路徑
 #   EventStore.write()     單筆 Event 寫入（append 模式）
 #   EventStore.read_all()  讀取全部 Event（供 validate 腳本）
+#   EventStore.read_all_authoritative()
+#                           完整讀取 authoritative Events；representation不完整時Fail Closed
 
 import json
 from pathlib import Path
+
+
+class EventStoreReadIntegrityError(RuntimeError):
+    """The authoritative Event representation cannot be read completely."""
+
+    def __init__(self, message: str, *, line_number: int | None = None):
+        super().__init__(message)
+        self.line_number = line_number
 
 
 class EventStore:
@@ -1671,11 +1682,57 @@ class EventStore:
             if not line:
                 continue
             try:
-                results.append(json.loads(line))
+                value = json.loads(line)
             except json.JSONDecodeError:
-                pass
+                continue
+            if isinstance(value, dict):
+                results.append(value)
         return results
+
+    def read_all_authoritative(self) -> list[dict]:
+        """完整讀取 authoritative Events；不得回傳不完整的成功結果。"""
+        if not self.path.exists():
+            return []
+        try:
+            lines = self.path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeError) as exc:
+            raise EventStoreReadIntegrityError(
+                "authoritative EventStore representation cannot be read"
+            ) from exc
+
+        events = []
+        for line_number, line in enumerate(lines, start=1):
+            if not line.strip():
+                continue
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise EventStoreReadIntegrityError(
+                    f"authoritative EventStore record at line {line_number} is malformed JSON",
+                    line_number=line_number,
+                ) from exc
+            if not isinstance(value, dict):
+                raise EventStoreReadIntegrityError(
+                    f"authoritative EventStore record at line {line_number} is not a JSON object",
+                    line_number=line_number,
+                )
+            events.append(value)
+        return events
 ```
+
+### 11.1 Read Surface Boundary
+
+`read_all()` 是既有 validation／legacy compatibility surface；它維持既有行為，略過空白行、malformed JSON與non-object JSON，只回傳有效的JSON objects。既有caller不得因本次refinement被迫改用新semantics。
+
+`read_all_authoritative()` 是 downstream authoritative Event consumption surface。它具有以下規範：
+
+- EventStore不存在或為空時，回傳reliable empty result。
+- 空白行依既有JSONL representation semantics忽略。
+- 每個非空白record必須是可解析的JSON object，並以原payload內容回傳，不得修改Event。
+- malformed JSON、non-object JSON、UTF-8 decode failure或representation read failure必須raise `EventStoreReadIntegrityError`。
+- 發現任一integrity failure時不得回傳partial-success result，不得跳過該record後宣稱scan complete，亦不得自動修復、刪除或重寫EventStore。
+
+此capability只建立可靠、public、Fail-Closed的authoritative enumeration boundary；它不是Queue、ACK、consumer cursor、retry queue、offset persistence或exactly-once delivery。Event仍由Detector建立並透過`EventStore.write()` append，Event schema與immutable ownership均不變。
 
 ---
 
