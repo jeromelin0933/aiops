@@ -1,8 +1,8 @@
 # AIOps Incident-driven Platform
 
-Last reviewed against current governance baseline: 2026-09-11
+Last reviewed against current governance baseline: 2026-09-14
 
-本repository目前已實作Mock Data generation、Observability foundation、Event Detection、Event Detection Runner、Scenario runtime／validation，以及SPEC-006～010各自核准範圍內的Policy Engine、Correlation State、Incident Core、Lifecycle／Human Workflow與Shadow／Unclassified Store。PRD-003 v1.0是Alert Correlation／Incident Management Final Requirements authority，但**SPEC-006～010 individually Implemented ≠ 完整Alert Correlation Runtime完成**；SPEC-011 Runtime Orchestration與full downstream E2E仍待後續工作，PRD-001 v3.4整體狀態維持「執行中」。
+本repository目前已實作Mock Data generation、Observability foundation、Event Detection、Event Detection Runner、Scenario runtime／validation，以及SPEC-006～010各自核准範圍內的Policy Engine、Correlation State、Incident Core、Lifecycle／Human Workflow與Shadow／Unclassified Store。PRD-003 v1.0是Alert Correlation／Incident Management Final Requirements authority；SPEC-011 Runtime Orchestration／E2E v1.0工程契約已核准，目前狀態為`Approved — Implementation Pending`。Repository尚未包含正式SPEC-011 Runtime Worker implementation，完整Runtime／Docker E2E亦未完成；PRD-001 v3.4整體狀態維持「執行中」。
 
 ## Current implementation
 
@@ -21,20 +21,42 @@ Last reviewed against current governance baseline: 2026-09-11
 
 Current PoC implementation uses Python stdlib `sqlite3` for the Correlation State Store. This is an implementation detail，不是platform、production database或future implementation requirement。
 
-Not yet implemented / downstream platform scope：SPEC-011 Runtime Orchestration、complete Runtime／Docker E2E、RCA／RAG workflow、Jira／Discord／ChatOps／Dashboard／Email等external operational adapters／integrations、Knowledge workflow、automatic remediation，以及complete closed loop。請勿將SPEC-006～010各自完成解讀為完整Alert Correlation Runtime、完整平台或production-ready狀態；RAG framework仍為future architecture／TBD。
+Not yet implemented / downstream platform scope：SPEC-011 Runtime Worker、complete Runtime／Docker E2E、RCA／RAG workflow、Jira／Discord／ChatOps／Dashboard／Email等external operational adapters／integrations、Knowledge workflow、automatic remediation，以及complete closed loop。SPEC-011 v1.0 contract已核准不等於Runtime implementation存在；請勿將SPEC-006～010各自完成或target architecture已核准解讀為完整Alert Correlation Runtime、完整平台或production-ready狀態。RAG framework仍為future architecture／TBD。
+
+Current implemented capabilities（不表示已由production Runtime串接）：
 
 ```text
 Logs / Metrics
 → Event Detection                ✅ implemented
 → EventStore                     ✅ implemented
-→ SPEC-006 Policy Engine         ✅ implemented
-→ SPEC-007 Correlation State     ✅ implemented
-→ SPEC-008 Incident Core         ✅ implemented
-→ SPEC-009 Lifecycle / Workflow  ✅ implemented
-→ SPEC-010 Shadow Store          ✅ implemented
-→ SPEC-011 Runtime / E2E         pending
-→ RCA / integrations             future downstream implementation
+
+SPEC-006 Policy Engine            ✅ individually implemented
+SPEC-007 Correlation State        ✅ individually implemented
+SPEC-008 Incident Core            ✅ individually implemented
+SPEC-009 Lifecycle / Workflow     ✅ individually implemented
+SPEC-010 Shadow Store             ✅ individually implemented
+SPEC-011 Runtime Worker           ❌ not implemented
+Runtime / Docker E2E              ❌ not verified
 ```
+
+Approved Target Logical Flow（SPEC-011 v1.0；Implementation Pending）：
+
+```text
+Event Detection
+      │
+      ▼
+Durable EventStore
+      │
+      ▼
+SPEC-011 Runtime Orchestration Worker
+      ├── SPEC-006 Policy Engine
+      ├── SPEC-007 Correlation State
+      ├── SPEC-008 Incident Management
+      ├── SPEC-009 Lifecycle / Workflow
+      └── SPEC-010 Shadow / Unclassified
+```
+
+此圖是approved target logical architecture，不是current deployed topology。Runtime負責coordination；各Domain保留其side-effect與business authority。實際Runtime package、CLI、config、persistence adapter與Docker service須待implementation完成後依repository reality補充。
 
 ## Current repository layout
 
@@ -96,7 +118,7 @@ models/log_isolation_forest.pkl
 models/metrics_isolation_forest.pkl
 ```
 
-Repository 不提供／不提交這些 runtime artifacts；artifact 未提交不等同 defect。若本機已有 Metrics model，可直接使用，不需每次執行都重新訓練。需建立 artifact 時，repository 確實提供 `scripts/train_log_model.py` 與 `scripts/train_metrics_model.py`；Log model 的正式行為與訓練邊界請依 SPEC-001 v2.3。本文不複製 Isolation Forest contract。
+Repository 不提供／不提交這些 runtime artifacts；artifact 未提交不等同 defect。若本機已有 Metrics model，可直接使用，不需每次執行都重新訓練。需建立 artifact 時，repository 確實提供 `scripts/train_log_model.py` 與 `scripts/train_metrics_model.py`；Log model 的正式行為與訓練邊界請依 SPEC-001 v2.4。本文不複製 Isolation Forest contract。
 
 ## Observability deployment notes
 
@@ -146,14 +168,14 @@ __pycache__/
 
 ## Authoritative documents / governance
 
-治理依domain分工：PRD-002與SPEC-001～004治理Event Detection；PRD-003 v1.0 Final治理Alert Correlation／Incident Management detailed requirements；PRD-001治理overall platform direction；DDS-001治理repository-level Mock Data／Observability reference；README只提供入口與索引。SPEC-005提供implementation／validation evidence，不是detector authority。
+治理依domain分工：PRD-002與SPEC-001～004治理Event Detection；PRD-003 v1.0 Final治理Alert Correlation／Incident Management detailed requirements；SPEC-006～010治理各自domain semantics，SPEC-011 v1.0治理Runtime orchestration／sequencing／scheduling／recovery與retry timing；PRD-001治理overall platform direction；DDS-001治理repository-level design reference；README只提供入口與索引。SPEC-005提供implementation／validation evidence，不是detector authority。
 
 | Document | Role |
 |---|---|
 | PRD-001 v3.4 | 執行中的overall platform requirement |
 | PRD-002 v1.5 | Approved；Event Detection authoritative PRD |
 | PRD-003 v1.0 | Final Requirements；Alert Correlation／Incident Management requirement authority；不以PRD狀態表示implementation完成 |
-| SPEC-001 v2.3 | Implemented；Log Event Detection contract |
+| SPEC-001 v2.4 | Implemented；Log Event Detection contract；包含authoritative Event enumeration/read-integrity capability |
 | SPEC-002 v1.4 | Implemented；Metrics Threshold Detection contract |
 | SPEC-003 v1.1 | Implemented；Metrics Isolation Forest Detection contract |
 | SPEC-004 v1.1 | Implemented；Event Detection Runner contract |
@@ -163,8 +185,8 @@ __pycache__/
 | SPEC-008 v1.1 | Implemented；Incident Store／Incident Manager Core contract |
 | SPEC-009 v1.0 | Implemented；Lifecycle／Human Workflow contract |
 | SPEC-010 v1.0 | Implemented；Shadow／Unclassified Store contract |
-| SPEC-011 | Pending；Runtime orchestration與full downstream E2E |
-| DDS-001 v1.3 | Repository-level Mock Data／Observability reference |
+| SPEC-011 v1.0 | Approved — Implementation Pending；Runtime orchestration engineering contract已核准，Runtime Worker與full downstream E2E尚未實作 |
+| DDS-001 v1.4 | Repository-level Mock Data／Observability及approved target Runtime architecture reference |
 
 PRD-002與SPEC-001～SPEC-004提供正式Event Detection contract；PRD-003 v1.0 Final提供Alert Correlation／Incident Management detailed requirements。DDS／README不重新定義其schema、threshold、semantics、ownership、generator behavior、model parameters或correlation policy。
 
@@ -174,6 +196,6 @@ SDD、ADR-001 與 PM team instructions 是由 Google Drive 管理的 external go
 
 - Grafana datasource provisioning 與 dashboard import 尚未自動化。
 - Model artifacts 是 local runtime prerequisites。
-- SPEC-006～010已依各自核准scope完成，但完整Alert Correlation Runtime尚未完成；SPEC-011 Runtime orchestration及complete Runtime／Docker E2E仍為pending。
+- SPEC-006～010已依各自核准scope完成；SPEC-011 v1.0 engineering contract已核准，但Runtime Worker、deployment integration及complete Runtime／Docker E2E仍未實作／驗證。
 - SPEC-006～010的個別implementation evidence不證明PRD-001 v3.4整體平台或PRD-003 v1.0所有downstream integrations已完成；RCA／RAG、Jira、Discord／ChatOps、complete Dashboard workflow、Email fallback／escalation、Knowledge workflow、automatic remediation與complete closed loop仍未完成。
 - Demo / E2E validation controller 與其 validation-specific behavior 不構成 production architecture requirement。
