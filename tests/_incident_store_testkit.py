@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from src.incident_management import (
+from incident_management import (
     IncidentOperationReceipt,
     IncidentRecord,
     SqliteIncidentStore,

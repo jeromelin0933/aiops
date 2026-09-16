@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from src.alert_correlation import (
+from alert_correlation import (
     AnchorStrength,
     AnchorTransition,
     CorrelationDecision,
@@ -12,8 +12,8 @@ from src.alert_correlation import (
     DecisionType,
     NormalizedFingerprint,
 )
-from src.alert_correlation.state import CorrelationMutationIntent
-from src.incident_management import (
+from alert_correlation.state import CorrelationMutationIntent
+from incident_management import (
     IncidentAuditEffect,
     IncidentDomainError,
     IncidentErrorCode,

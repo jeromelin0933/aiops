@@ -4,14 +4,14 @@ from datetime import datetime, timezone
 
 import pytest
 
-from src.alert_correlation import (
+from alert_correlation import (
     AlertCorrelationPolicyEngine,
     CorrelationEvaluationContext,
     CorrelationEvaluationSuccess,
     EvaluationPhase,
 )
-from src.alert_correlation.state import CorrelationMutationIntent as Spec008MutationIntent
-from src.incident_management import (
+from alert_correlation.state import CorrelationMutationIntent as Spec008MutationIntent
+from incident_management import (
     IncidentDomainError,
     IncidentErrorCode,
     IncidentManager,

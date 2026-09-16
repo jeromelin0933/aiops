@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from src.alert_correlation import (
+from alert_correlation import (
     DEFAULT_POLICY_REGISTRY,
     AnchorStrength,
     AnchorTransition,
@@ -15,7 +15,7 @@ from src.alert_correlation import (
     EvaluationPhase,
     NormalizedFingerprint,
 )
-from src.alert_correlation.state import (
+from alert_correlation.state import (
     ActivePendingRecord,
     BlockedCorrelationRecord,
     CorrelationMutationIntent,

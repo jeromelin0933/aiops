@@ -1,7 +1,7 @@
 import pytest
 from concurrent.futures import ThreadPoolExecutor
 
-from src.incident_management import AssignmentPolicyConfig, IncidentManager, IncidentStatus, IncidentTimelineSource, SqliteIncidentStore, WorkflowAction, WorkflowDomainError, WorkflowErrorCode
+from incident_management import AssignmentPolicyConfig, IncidentManager, IncidentStatus, IncidentTimelineSource, SqliteIncidentStore, WorkflowAction, WorkflowDomainError, WorkflowErrorCode
 from test_incident_workflow_assignment import POLICY, _request, _seed
 from test_incident_workflow_resolution import _bootstrap, _resolution
 from test_incident_manager import _attach_request

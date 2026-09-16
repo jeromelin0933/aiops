@@ -14,7 +14,7 @@ from enum import Enum, IntEnum
 from types import MappingProxyType
 from typing import TypeAlias
 
-from src.alert_correlation import (
+from alert_correlation import (
     AnchorStrength,
     AnchorTransition,
     CorrelationDecision,
@@ -23,7 +23,7 @@ from src.alert_correlation import (
     DecisionType,
     NormalizedFingerprint,
 )
-from src.alert_correlation.state import (
+from alert_correlation.state import (
     CorrelationMutationIntent,
     RetryDisposition,
     TerminalOutcome,

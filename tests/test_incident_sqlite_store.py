@@ -5,7 +5,7 @@ import sqlite3
 
 import pytest
 
-from src.alert_correlation import (
+from alert_correlation import (
     AnchorStrength,
     CorrelationDecision,
     CorrelationFamily,
@@ -13,9 +13,9 @@ from src.alert_correlation import (
     DecisionType,
     NormalizedFingerprint,
 )
-from src.alert_correlation.state import CorrelationMutationIntent, RetryDisposition
-from src.alert_correlation.state.sqlite_store import SqliteCorrelationStateStore
-from src.incident_management import (
+from alert_correlation.state import CorrelationMutationIntent, RetryDisposition
+from alert_correlation.state.sqlite_store import SqliteCorrelationStateStore
+from incident_management import (
     DEFAULT_DATABASE_PATH,
     RCA_INITIAL_STATUS,
     SCHEMA_VERSION,

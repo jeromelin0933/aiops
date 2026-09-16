@@ -7,7 +7,7 @@ import re
 
 import pytest
 
-from src.alert_correlation import (
+from alert_correlation import (
     AlertCorrelationPolicyEngine,
     CorrelationEvaluationContext,
     CorrelationEvaluationSuccess,
@@ -15,14 +15,14 @@ from src.alert_correlation import (
     EvaluationPhase,
     IncidentCorrelationView,
 )
-from src.alert_correlation.state import (
+from alert_correlation.state import (
     CorrelationMutationIntent,
     RetryDisposition,
     StateDomainErrorCode,
     StateDomainValidationError,
     TerminalOutcome,
 )
-from src.incident_management import (
+from incident_management import (
     IncidentDomainError,
     IncidentErrorCode,
     IncidentManager,
@@ -31,9 +31,9 @@ from src.incident_management import (
     IncidentStatus,
     SqliteIncidentStore,
 )
-import src.incident_management.contracts as incident_contracts
-import src.incident_management.manager as incident_manager_module
-import src.incident_management.sqlite_store as incident_store_module
+import incident_management.contracts as incident_contracts
+import incident_management.manager as incident_manager_module
+import incident_management.sqlite_store as incident_store_module
 
 
 NOW = datetime(2026, 9, 9, 12, 0, tzinfo=timezone.utc)
@@ -266,4 +266,3 @@ def test_spec_008_has_no_spec_007_store_or_processing_claim_coupling():
         re.IGNORECASE,
     )
     assert direct_state_table_access.search(store_source) is None
-

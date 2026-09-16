@@ -2,8 +2,8 @@ import sqlite3
 
 import pytest
 
-from src.incident_management import IncidentDomainError, IncidentErrorCode, SCHEMA_VERSION, SqliteIncidentStore
-from src.incident_management.sqlite_store import _SCHEMA_STATEMENTS
+from incident_management import IncidentDomainError, IncidentErrorCode, SCHEMA_VERSION, SqliteIncidentStore
+from incident_management.sqlite_store import _SCHEMA_STATEMENTS
 from test_incident_sqlite_store import _seed
 
 

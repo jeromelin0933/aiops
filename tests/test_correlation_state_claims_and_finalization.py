@@ -5,11 +5,11 @@ import pytest
 
 from _state_store_testkit import seed_block, seed_pending
 
-from src.alert_correlation import (
+from alert_correlation import (
     AnchorStrength, AnchorTransition, CorrelationDecision, CorrelationFamily,
     DecisionReasonCode, DecisionType, NormalizedFingerprint,
 )
-from src.alert_correlation.state import (
+from alert_correlation.state import (
     ActivePendingRecord, BlockedCorrelationRecord, ClaimAbandonmentProof,
     CorrelationMutationIntent, CorrelationPolicyKind, FailureKind, PendingReason,
     ProcessedCorrelationRecord, ResolvedState, RetryDisposition,

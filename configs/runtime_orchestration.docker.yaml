@@ -1,0 +1,26 @@
+version: "1.0"
+event_intake_poll_seconds: 1.0
+pending_scan_seconds: 1.0
+retry:
+  limit: 4
+  delays_seconds: [1.0, 2.0, 4.0, 8.0]
+work_store:
+  adapter: sqlite3
+  path: var/runtime_orchestration/runtime_work.sqlite3
+authority_stores:
+  event_store_path: events/event_store.jsonl
+  correlation_state_path: var/runtime_orchestration/correlation_state.sqlite3
+  incident_store_path: var/runtime_orchestration/incidents.sqlite3
+  shadow_store_path: var/runtime_orchestration/shadows.sqlite3
+loop:
+  mode: continuous
+  idle_poll_seconds: 1.0
+automation_actor: runtime-auto-assign
+assignment:
+  policy_id: POC-ROUND-ROBIN
+  policy_version: "1.0"
+  engineers: [engineer-a, engineer-b, engineer-c]
+  default_reviewer: supervisor
+telemetry:
+  logger_name: runtime_orchestration
+  level: INFO

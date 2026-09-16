@@ -4,11 +4,11 @@ import pytest
 
 from _state_store_testkit import seed_block, seed_pending
 
-from src.alert_correlation import (
+from alert_correlation import (
     DEFAULT_POLICY_REGISTRY, CorrelationDecision, CorrelationErrorCode,
     CorrelationFamily, DecisionReasonCode, DecisionType, EvaluationPhase,
 )
-from src.alert_correlation.state import (
+from alert_correlation.state import (
     BlockRetryStatus, BlockedCorrelationRecord, CorrelationPolicyKind,
     FailureKind, PendingGraceConfig, PendingPolicyUnavailableError,
     PendingReason, PendingStateService, ResolvedState, RetryDisposition,
@@ -94,7 +94,7 @@ def test_pending_replay_and_restart_keep_original_absolute_expiry(tmp_path):
 def test_pending_policy_mismatch_fails_closed(tmp_path):
     store = SqliteCorrelationStateStore(tmp_path / "state.sqlite")
     # This direct persisted record represents integrity damage, not a normal entry path.
-    from src.alert_correlation.state import ActivePendingRecord
+    from alert_correlation.state import ActivePendingRecord
     seed_pending(store, ActivePendingRecord("EVT-1", NOW, NOW + timedelta(seconds=30), CorrelationPolicyKind.WEAK_SUPPORTING_KNOWN, "POLICY-BRUTE-FORCE-DETECTED", "1.0", PendingReason.NO_COMPATIBLE_CANDIDATE))
     with pytest.raises(StateDomainValidationError):
         _service(store).resolve_pending_phase("EVT-1", now=NOW + timedelta(seconds=1))

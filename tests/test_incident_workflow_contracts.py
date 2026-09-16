@@ -4,9 +4,9 @@ from types import MappingProxyType
 
 import pytest
 
-import src.incident_management.contracts as contracts
-from src.alert_correlation.state import RetryDisposition
-from src.incident_management import (
+import incident_management.contracts as contracts
+from alert_correlation.state import RetryDisposition
+from incident_management import (
     AssignmentPolicyConfig,
     IncidentStatus,
     ResolutionSubmission,

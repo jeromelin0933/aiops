@@ -13,7 +13,7 @@ import json
 import sqlite3
 from typing import Iterator, Mapping
 
-from src.alert_correlation import (
+from alert_correlation import (
     AnchorStrength,
     AnchorTransition,
     CorrelationFamily,
@@ -22,7 +22,7 @@ from src.alert_correlation import (
     IncidentCorrelationView,
     NormalizedFingerprint,
 )
-from src.alert_correlation.state import TerminalOutcome
+from alert_correlation.state import TerminalOutcome
 
 from .contracts import (
     AssignmentSelectionMode,
