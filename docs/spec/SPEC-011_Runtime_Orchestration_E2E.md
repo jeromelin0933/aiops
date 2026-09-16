@@ -11,7 +11,7 @@
 | Document ID | SPEC-011 |
 | Document Name | Runtime Orchestration / E2E |
 | Version | 1.0 |
-| Status | Approved — Implementation Pending |
+| Status | Implemented |
 | Approval Date | 2026-09-13 |
 | Requirement Authority | PRD-003 v1.0 Final |
 | Upstream Event Contract | PRD-002 v1.5 + SPEC-001 v2.4 EventStore authoritative enumeration |
@@ -20,7 +20,7 @@
 | Incident Contract | SPEC-008 v1.1 Implemented |
 | Lifecycle / Human Workflow Contract | SPEC-009 v1.0 Implemented |
 | Shadow Contract | SPEC-010 v1.0 Implemented |
-| Planned Implementation Owner | 富裕 |
+| Implementation Owner | 富裕 |
 
 ### Change History
 
@@ -28,14 +28,26 @@
 |---|---|---|---|
 | 0.1 | 2026-09-13 | Draft | 建立SPEC-011 Engineering Contract及D1～D8 normative contract；納入PM semantic review corrections，包括AUTO_ASSIGN zero-record recovery、Runtime Work integrity、Runtime Clock、crash/restart matrix及cross-section wording reconciliation。 |
 | 1.0 | 2026-09-13 | Approved — Implementation Pending | PM完成final semantic review並核准；D1～D8凍結為implementation baseline；不需upstream semantic revision，implementation尚未開始。 |
+| 1.0 | 2026-09-16 | Implemented | SPEC-011 Phase 1～7與PM-authorized corrective fixes完成；Final Full Contract Audit及PM Final Review均PASS。Implementation commit：`cd481e8a1ed6b390d51bd81a519da43914b0b786`。D1～D8與architecture semantics未變更。 |
 
 ### Implementation Status Honesty
 
-> **Draft ≠ Approved；Approved ≠ Implemented。**
+> **Draft ≠ Approved；Approved ≠ Implemented。** SPEC-011現已另以implementation及verification evidence滿足Implemented gate。
 
-**SPEC-011 v1.0 is the approved engineering contract for Runtime Orchestration / E2E implementation.** D1～D8是FROZEN IMPLEMENTATION BASELINE。
+**SPEC-011 v1.0 is the implemented engineering contract for Runtime Orchestration / E2E.** D1～D8仍是FROZEN IMPLEMENTATION BASELINE。
 
-**Implementation Status: PENDING。** 本次approval不表示SPEC-011 Runtime、Correlation E2E、Docker E2E、RCA／RAG、external adapters、完整AIOps closed loop或production readiness已完成。
+**Implementation Status: IMPLEMENTED。** Independent Runtime Worker、D2 SQLite Runtime Work Store、startup recovery barrier、Pending與AUTO_ASSIGN recovery、bounded retry、Runtime clock、structured telemetry、host CLI及Docker Runtime service已實作並驗證。此狀態不表示RCA／RAG、external adapters、HA／distributed runtime、完整AIOps closed loop或production readiness已完成。
+
+Implementation closure evidence：
+
+- Implementation commit：`cd481e8a1ed6b390d51bd81a519da43914b0b786`
+- Final Full Contract Audit：PASS
+- PM Final Review：PASS
+- Runtime Phase 1～7 + cross-SPEC：123 passed
+- Real SPEC-006／007／008／009／010 integrations：309 passed
+- Full regression：1053 passed, 1 skipped
+- Opt-in Docker E2E（獨立執行）：1 passed
+- `git diff --check`：PASS
 
 ---
 
@@ -139,7 +151,7 @@ Runtime依賴public Event、Policy、State、Incident、Workflow與Shadow ports�
 
 ## 2.3 Current Deployment Reality
 
-本文件定義target logical process boundary，不宣稱current Docker Compose已存在Runtime service。Docker integration是implementation closure gate之一，不是Phase 1已完成事實；host CLI correctness亦不等於Docker E2E完成。
+Repository目前包含independent Runtime Worker、config-driven host CLI、SQLite D2 Runtime Work Store及Docker Compose `runtime` service。Host與Docker共用同一Runtime core；checked-in host config使用`run-until-idle`，Docker config使用`continuous`。Docker service透過named volumes保存authoritative EventStore與Runtime相關SQLite state，並已驗證controlled shutdown、restart continuity及opt-in Docker E2E。這是single-process／single-node PoC topology，不表示HA、distributed coordination或production readiness。
 
 ---
 
@@ -871,7 +883,7 @@ Mode只能改變loop/lifecycle，不得分叉policy、ownership、retry或recove
 
 Graceful stop須停止取得新work，讓已取得work依安全boundary完成或留下durable recovery evidence；不得為關機清除claim、Pending、Intent、Processed或Runtime work。
 
-Docker Compose Runtime integration是SPEC-011 implementation closure前的target，但Docker不是唯一correctness environment。Phase 1不建立service或修改deployment files。Multi-node、HA及active-active不在PoC requirement。
+Docker不是唯一correctness environment；host與Docker使用相同core orchestration semantics。Implementation closure已建立Compose `runtime` service、Docker config與named-volume restart continuity，並完成獨立opt-in Docker E2E。Multi-node、HA及active-active仍不在PoC requirement。
 
 ---
 
@@ -1000,7 +1012,7 @@ Repair-required與ownership contradiction只能進入future governed repair流�
 - Runtime不重定義Event、Policy、State、Incident、Lifecycle或Shadow。
 - 所有domain action只使用public semantic APIs。
 - Runtime Execution Store與telemetry均不成為business authority。
-- `Approved ≠ Implemented`狀態誠實維持，Implementation Status仍為PENDING。
+- `Approved ≠ Implemented`治理區別仍維持；本文件另以closure evidence將Implementation Status標示為IMPLEMENTED。
 
 ## AC-011-B — Authoritative Event Intake
 
@@ -1166,15 +1178,15 @@ Kafka、HA、multi-node workers、message broker、distributed scheduler、produ
 
 # 28. Documentation Reconciliation Impact
 
-本Phase不修改其他文件。**Post-Approval Documentation Reconciliation：REQUIRED BEFORE／DURING IMPLEMENTATION HANDOFF；目前狀態為PENDING。** 至少需評估／同步：
+Post-Implementation Documentation Reconciliation已於2026-09-16執行，並同步：
 
 - README：Runtime status、CLI及honesty boundary。
 - DDS-001：independent worker、D2 persistence及cross-store protocol。
 - Architecture diagram：Detector→EventStore→Runtime→domain stores。
 - Runtime/process topology與setup documentation。
-- Docker topology：只有實際service整合後更新。
+- Docker topology：依已實作的Compose `runtime` service、Docker config與named volumes更新。
 
-D1～D8是既有approved product requirements的engineering orchestration contract，現階段不預設PRD revision。SPEC-006～010 semantics未被改動，現階段亦無upstream SPEC revision requirement。
+D1～D8是既有approved product requirements的engineering orchestration contract；本次reconciliation不修改其semantics，也不預設PRD revision。SPEC-006～010 semantics未被改動，亦無upstream SPEC revision requirement。
 
 ---
 
@@ -1198,25 +1210,25 @@ D1～D8是既有approved product requirements的engineering orchestration contra
 
 # 30. PM Review Checklist
 
-- [ ] Status為Approved — Implementation Pending，未宣稱Implemented。
-- [ ] D1只使用`read_all_authoritative()`且維持durable Event-first。
-- [ ] D2只保存orchestration continuity，未建立第二business truth。
-- [ ] D2 missing／stale／corrupt／contradictory work均依authoritative evidence處理，retry budget不reset。
-- [ ] D3為Processed-first及獨立AUTO_ASSIGN，zero-record crash可由Processed destination與domain/workflow evidence重建，未合併SPEC-008/009 transaction。
-- [ ] D4為recovery-first barrier，但不要求empty backlog。
-- [ ] D5 phase/expiry/exact policy仍由SPEC-007 authority決定。
-- [ ] D6具symmetric precheck/post-reconcile，沒有2PC、winner guessing或automatic repair。
-- [ ] D7維持independent worker及shared core semantics。
-- [ ] D8只對RETRYABLE執行1／2／4／8 bounded retry且保留domain taxonomy。
-- [ ] Runtime Clock接受timezone-aware absolute now；durable Runtime timestamps為canonical UTC，monotonic與upstream timestamps邊界清楚。
-- [ ] 四條E2E path及human workflow boundary清楚。
-- [ ] No scenario answer leakage、RCA或external adapter scope creep。
-- [ ] Retention/reset章節禁止destructive recovery。
-- [ ] AC-011-A～K可直接轉成tests。
-- [ ] Architecture／README／Docker impact只列future reconciliation，未宣稱已完成。
+- [x] Status為Implemented，並記錄implementation commit、Final Full Contract Audit及PM Final Review evidence。
+- [x] D1只使用`read_all_authoritative()`且維持durable Event-first。
+- [x] D2只保存orchestration continuity，未建立第二business truth。
+- [x] D2 missing／stale／corrupt／contradictory work均依authoritative evidence處理，retry budget不reset。
+- [x] D3為Processed-first及獨立AUTO_ASSIGN，zero-record crash可由Processed destination與domain/workflow evidence重建，未合併SPEC-008/009 transaction。
+- [x] D4為recovery-first barrier，但不要求empty backlog。
+- [x] D5 phase/expiry/exact policy仍由SPEC-007 authority決定。
+- [x] D6具symmetric precheck/post-reconcile，沒有2PC、winner guessing或automatic repair。
+- [x] D7維持independent worker及shared core semantics。
+- [x] D8只對RETRYABLE執行1／2／4／8 bounded retry且保留domain taxonomy。
+- [x] Runtime Clock接受timezone-aware absolute now；durable Runtime timestamps為canonical UTC，monotonic與upstream timestamps邊界清楚。
+- [x] 四條E2E path及human workflow boundary清楚。
+- [x] No scenario answer leakage、RCA或external adapter scope creep。
+- [x] Retention/reset章節禁止destructive recovery。
+- [x] AC-011-A～K已有對應contract verification evidence。
+- [x] Architecture／README／Docker documentation已按implementation reality reconciliation，未作超額宣稱。
 
 ---
 
 ## Approval Freeze Gate
 
-本文件已由PM核准為v1.0，D1～D8凍結為implementation baseline；Implementation Status仍為PENDING。任何implementation、Docker integration或documentation reconciliation completion均不屬本次Approval Freeze交付。
+本文件已由PM核准為v1.0，D1～D8持續凍結且未因implementation closure改變。Implementation、Docker integration、Final Full Contract Audit及PM Final Review均已完成；Implementation Status為IMPLEMENTED。RCA／RAG、external adapters、HA／distributed runtime、production hardening與完整AIOps closed loop仍不在本SPEC implementation closure範圍內。

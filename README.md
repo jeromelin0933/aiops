@@ -1,8 +1,8 @@
 # AIOps Incident-driven Platform
 
-Last reviewed against current governance baseline: 2026-09-14
+Last reviewed against current governance baseline: 2026-09-16
 
-本repository目前已實作Mock Data generation、Observability foundation、Event Detection、Event Detection Runner、Scenario runtime／validation，以及SPEC-006～010各自核准範圍內的Policy Engine、Correlation State、Incident Core、Lifecycle／Human Workflow與Shadow／Unclassified Store。PRD-003 v1.0是Alert Correlation／Incident Management Final Requirements authority；SPEC-011 Runtime Orchestration／E2E v1.0工程契約已核准，目前狀態為`Approved — Implementation Pending`。Repository尚未包含正式SPEC-011 Runtime Worker implementation，完整Runtime／Docker E2E亦未完成；PRD-001 v3.4整體狀態維持「執行中」。
+本repository目前已實作Mock Data generation、Observability foundation、Event Detection、Event Detection Runner、Scenario runtime／validation，以及SPEC-006～011核准範圍內的Policy Engine、Correlation State、Incident Core、Lifecycle／Human Workflow、Shadow／Unclassified Store與Runtime Orchestration／E2E。PRD-003 v1.0是Alert Correlation／Incident Management Final Requirements authority；SPEC-011 v1.0狀態為`Implemented`，正式implementation commit為`cd481e8a1ed6b390d51bd81a519da43914b0b786`。PRD-001 v3.4整體狀態仍維持「執行中」。
 
 ## Current implementation
 
@@ -18,12 +18,13 @@ Last reviewed against current governance baseline: 2026-09-14
 - SPEC-008 Incident Store / Incident Manager Core
 - SPEC-009 Lifecycle / Human Workflow
 - SPEC-010 Shadow / Unclassified Store
+- SPEC-011 independent Runtime Orchestration Worker、host CLI與Docker Compose runtime service
 
-Current PoC implementation uses Python stdlib `sqlite3` for the Correlation State Store. This is an implementation detail，不是platform、production database或future implementation requirement。
+Current PoC implementation uses Python stdlib `sqlite3` for the Correlation State Store及independent D2 Runtime Work Store。D2只保存orchestration continuity，不是Event、Pending、Processed、Intent、Incident、Shadow或Workflow authority；SQLite是current implementation reality，不是platform或production database requirement。
 
-Not yet implemented / downstream platform scope：SPEC-011 Runtime Worker、complete Runtime／Docker E2E、RCA／RAG workflow、Jira／Discord／ChatOps／Dashboard／Email等external operational adapters／integrations、Knowledge workflow、automatic remediation，以及complete closed loop。SPEC-011 v1.0 contract已核准不等於Runtime implementation存在；請勿將SPEC-006～010各自完成或target architecture已核准解讀為完整Alert Correlation Runtime、完整平台或production-ready狀態。RAG framework仍為future architecture／TBD。
+Not yet implemented / downstream platform scope：RCA／RAG workflow、Jira／Discord／ChatOps／Dashboard／Email等external operational adapters／integrations、Knowledge workflow、automatic remediation、HA／distributed runtime、production hardening，以及complete closed loop。SPEC-011完成不等於完整平台或production-ready；RAG framework仍為future architecture／TBD。
 
-Current implemented capabilities（不表示已由production Runtime串接）：
+Current implemented capabilities：
 
 ```text
 Logs / Metrics
@@ -35,11 +36,12 @@ SPEC-007 Correlation State        ✅ individually implemented
 SPEC-008 Incident Core            ✅ individually implemented
 SPEC-009 Lifecycle / Workflow     ✅ individually implemented
 SPEC-010 Shadow Store             ✅ individually implemented
-SPEC-011 Runtime Worker           ❌ not implemented
-Runtime / Docker E2E              ❌ not verified
+SPEC-011 Runtime Worker           ✅ implemented and verified
+Host Runtime E2E                  ✅ verified
+Docker Runtime E2E                ✅ verified (opt-in test executed separately)
 ```
 
-Approved Target Logical Flow（SPEC-011 v1.0；Implementation Pending）：
+Current Runtime Logical Flow（SPEC-011 v1.0）：
 
 ```text
 Event Detection
@@ -56,11 +58,25 @@ SPEC-011 Runtime Orchestration Worker
       └── SPEC-010 Shadow / Unclassified
 ```
 
-此圖是approved target logical architecture，不是current deployed topology。Runtime負責coordination；各Domain保留其side-effect與business authority。實際Runtime package、CLI、config、persistence adapter與Docker service須待implementation完成後依repository reality補充。
+Event Detection與Runtime是independent process boundaries；Runtime不屬於`EventDetectionRunner`。Runtime從durable authoritative EventStore intake，負責coordination、startup recovery、Pending／AUTO_ASSIGN orchestration與bounded retry；各Domain保留business authority及side effects。Engine decides. State remembers. Runtime orchestrates. Domain stores own the side effects.
+
+Startup不提供合法READY bypass：
+
+```text
+STARTING
+→ authoritative discovery
+→ RECOVERY
+→ unresolved Intent reconciliation
+→ expired Pending handling
+→ retry restoration
+→ AUTO_ASSIGN reconstruction / reconciliation
+→ READY
+→ normal intake
+```
 
 ## Current repository layout
 
-以下項目已於 2026-09-11 implementation baseline確認存在：
+以下項目已於 2026-09-16 implementation baseline確認存在：
 
 ```text
 configs/scenarios.yaml
@@ -74,26 +90,40 @@ src/alert_correlation/state/      # state contracts, SQLite PoC adapter,
                                   # pending state service, recovery service
 src/incident_management/          # SPEC-008 incident core and SPEC-009 lifecycle workflow
 src/shadow_management/            # SPEC-010 shadow / unclassified store
+src/runtime_orchestration/         # SPEC-011 independent Runtime core and D2 SQLite store
 
 scripts/run_mock_runtime.py
+scripts/run_correlation_runtime.py
 scripts/validate_scenarios.py
 scripts/train_log_model.py
 scripts/train_metrics_model.py
 
+configs/runtime_orchestration.yaml
+configs/runtime_orchestration.docker.yaml
+
 docker/prometheus/
 docker/promtail/
 docker/grafana/
+docker/runtime/Dockerfile
 ```
 
 ## Quick start and verified commands
 
-在已取得 repository 並進入專案目錄後，啟動目前 Compose 定義的 observability services：
+Host Runtime以checked-in `run-until-idle` config啟動：
+
+```bash
+python scripts/run_correlation_runtime.py --config configs/runtime_orchestration.yaml
+```
+
+Compose中的`runtime` service使用相同Runtime core及`continuous` Docker config；下列命令會同時啟動Runtime與既有observability services：
 
 ```bash
 docker compose up -d
 ```
 
-此命令不是「啟動完整平台／所有服務」。目前 Compose 啟動 Prometheus、Loki、Promtail 與 Grafana。Scenario runtime 是另一個程序；以下參數已由 script 原始碼靜態確認：
+Runtime service使用`runtime-events`與`runtime-state` named volumes，支援controlled drain、graceful stop及restart continuity。其READY是startup recovery barrier完成後的structured telemetry event，不是network healthcheck。詳細啟動與opt-in Docker E2E命令見`docs/runtime_orchestration.md`。此Compose topology仍不是「完整平台／所有服務」或production-ready deployment。
+
+Scenario runtime 是另一個程序；以下參數已由 script 原始碼靜態確認：
 
 ```bash
 python scripts/run_mock_runtime.py --config configs/scenarios.yaml
@@ -185,8 +215,8 @@ __pycache__/
 | SPEC-008 v1.1 | Implemented；Incident Store／Incident Manager Core contract |
 | SPEC-009 v1.0 | Implemented；Lifecycle／Human Workflow contract |
 | SPEC-010 v1.0 | Implemented；Shadow／Unclassified Store contract |
-| SPEC-011 v1.0 | Approved — Implementation Pending；Runtime orchestration engineering contract已核准，Runtime Worker與full downstream E2E尚未實作 |
-| DDS-001 v1.4 | Repository-level Mock Data／Observability及approved target Runtime architecture reference |
+| SPEC-011 v1.0 | Implemented；Runtime Orchestration／E2E contract；Final Full Contract Audit與PM Final Review PASS |
+| DDS-001 v1.5 | Repository-level Mock Data／Observability及current implemented Runtime architecture reference |
 
 PRD-002與SPEC-001～SPEC-004提供正式Event Detection contract；PRD-003 v1.0 Final提供Alert Correlation／Incident Management detailed requirements。DDS／README不重新定義其schema、threshold、semantics、ownership、generator behavior、model parameters或correlation policy。
 
@@ -196,6 +226,6 @@ SDD、ADR-001 與 PM team instructions 是由 Google Drive 管理的 external go
 
 - Grafana datasource provisioning 與 dashboard import 尚未自動化。
 - Model artifacts 是 local runtime prerequisites。
-- SPEC-006～010已依各自核准scope完成；SPEC-011 v1.0 engineering contract已核准，但Runtime Worker、deployment integration及complete Runtime／Docker E2E仍未實作／驗證。
-- SPEC-006～010的個別implementation evidence不證明PRD-001 v3.4整體平台或PRD-003 v1.0所有downstream integrations已完成；RCA／RAG、Jira、Discord／ChatOps、complete Dashboard workflow、Email fallback／escalation、Knowledge workflow、automatic remediation與complete closed loop仍未完成。
+- SPEC-006～011已依各自核准scope完成；SPEC-011的Host與Docker Runtime E2E已驗證，但目前Runtime仍是single-process／single-node PoC，沒有HA、distributed coordination、Kafka／broker、exactly-once transport infrastructure或cross-store 2PC。
+- SPEC-006～011的implementation evidence不證明PRD-001 v3.4整體平台或PRD-003 v1.0所有downstream integrations已完成；RCA／RAG、Jira、Discord／ChatOps、complete Dashboard workflow、Email fallback／escalation、Knowledge workflow、automatic remediation、production DB migration program、automatic repair tooling與complete closed loop仍未完成。
 - Demo / E2E validation controller 與其 validation-specific behavior 不構成 production architecture requirement。
