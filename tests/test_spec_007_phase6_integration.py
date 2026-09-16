@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from src.alert_correlation import (
+from alert_correlation import (
     AlertCorrelationPolicyEngine,
     CorrelationErrorCode,
     CorrelationEvaluationContext,
@@ -18,7 +18,7 @@ from src.alert_correlation import (
     DecisionType,
     EvaluationPhase,
 )
-from src.alert_correlation.state import (
+from alert_correlation.state import (
     BlockedCorrelationRecord,
     ClaimAbandonmentProof,
     CorrelationMutationIntent,

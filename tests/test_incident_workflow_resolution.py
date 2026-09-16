@@ -2,7 +2,7 @@ from datetime import timedelta
 
 import pytest
 
-from src.incident_management import (
+from incident_management import (
     IncidentManager, IncidentStatus, ResolutionSubmissionPayload, SopFollowed,
     SqliteIncidentStore, WorkflowAction, WorkflowDomainError, WorkflowErrorCode, WorkflowMutationRequest,
 )

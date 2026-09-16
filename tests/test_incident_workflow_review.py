@@ -3,7 +3,7 @@ from datetime import timedelta
 
 import pytest
 
-from src.incident_management import ReviewAttemptPayload, SopFollowed, SqliteIncidentStore, WorkflowAction, WorkflowDomainError, WorkflowErrorCode, WorkflowMutationRequest
+from incident_management import ReviewAttemptPayload, SopFollowed, SqliteIncidentStore, WorkflowAction, WorkflowDomainError, WorkflowErrorCode, WorkflowMutationRequest
 from test_incident_workflow_resolution import _bootstrap, _resolution
 from test_incident_workflow_assignment import POLICY
 from test_incident_sqlite_store import NOW

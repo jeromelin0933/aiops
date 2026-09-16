@@ -7,7 +7,7 @@ import sqlite3
 
 import pytest
 
-from src.alert_correlation import (
+from alert_correlation import (
     AnchorStrength,
     AnchorTransition,
     CorrelationDecision,
@@ -17,8 +17,8 @@ from src.alert_correlation import (
     IncidentCorrelationView,
     NormalizedFingerprint,
 )
-from src.alert_correlation.state import CorrelationMutationIntent, RetryDisposition
-from src.incident_management import (
+from alert_correlation.state import CorrelationMutationIntent, RetryDisposition
+from incident_management import (
     IncidentDomainError,
     IncidentErrorCode,
     IncidentManager,
@@ -26,7 +26,7 @@ from src.incident_management import (
     IncidentSeverity,
     SqliteIncidentStore,
 )
-import src.incident_management.sqlite_store as sqlite_store_module
+import incident_management.sqlite_store as sqlite_store_module
 
 
 NOW = datetime(2026, 9, 9, 12, 0, tzinfo=timezone.utc)

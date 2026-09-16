@@ -4,12 +4,12 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from src.alert_correlation import (
+from alert_correlation import (
     DEFAULT_POLICY_REGISTRY, CorrelationDecision, CorrelationErrorCode,
     CorrelationEvaluationError, CorrelationEvaluationFailure, CorrelationFamily,
     DecisionReasonCode, DecisionType, EvaluationPhase,
 )
-from src.alert_correlation.state import (
+from alert_correlation.state import (
     ClaimAbandonmentProof, PendingGraceConfig, PendingReason,
     PendingStateService, ResolvedState, RetryDisposition,
     SqliteCorrelationStateStore, StateDomainValidationError,

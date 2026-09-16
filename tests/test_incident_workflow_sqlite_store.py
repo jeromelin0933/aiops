@@ -3,8 +3,8 @@ import sqlite3
 
 import pytest
 
-from src.alert_correlation import AnchorStrength, CorrelationFamily, DecisionReasonCode, NormalizedFingerprint
-from src.incident_management import (
+from alert_correlation import AnchorStrength, CorrelationFamily, DecisionReasonCode, NormalizedFingerprint
+from incident_management import (
     RCA_INITIAL_STATUS, IncidentAuditAction, IncidentAuditEffect, IncidentAuditEntry,
     IncidentCorrelationContext, IncidentDomainError, IncidentRecord, IncidentSeverity,
     IncidentStatus, ResolutionSubmission, ResolutionSubmissionPayload, ReviewAttempt,

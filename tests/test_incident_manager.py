@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from src.alert_correlation import (
+from alert_correlation import (
     AnchorStrength,
     AnchorTransition,
     CorrelationDecision,
@@ -12,12 +12,12 @@ from src.alert_correlation import (
     DecisionType,
     NormalizedFingerprint,
 )
-from src.alert_correlation.state import (
+from alert_correlation.state import (
     CorrelationMutationIntent,
     RetryDisposition,
     StateDomainValidationError,
 )
-from src.incident_management import (
+from incident_management import (
     RCA_INITIAL_STATUS,
     IncidentAuditAction,
     IncidentAuditEffect,
@@ -29,7 +29,7 @@ from src.incident_management import (
     IncidentStatus,
     SqliteIncidentStore,
 )
-from src.incident_management.sqlite_store import _IncidentStoreTransaction
+from incident_management.sqlite_store import _IncidentStoreTransaction
 
 from _incident_store_testkit import execute_controlled_sql
 

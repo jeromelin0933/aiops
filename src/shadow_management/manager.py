@@ -7,8 +7,8 @@ from datetime import datetime
 from uuid import uuid4
 
 from alert_correlation.state.contracts import CorrelationMutationIntent
-from src.incident_management import IncidentDomainError
-from src.incident_management.contracts import IncidentErrorCode
+from incident_management import IncidentDomainError
+from incident_management.contracts import IncidentErrorCode
 
 from .contracts import (
     ExactPolicyLookup,

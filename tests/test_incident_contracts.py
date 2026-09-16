@@ -4,8 +4,8 @@ from types import MappingProxyType
 
 import pytest
 
-import src.incident_management.contracts as incident_contracts
-from src.alert_correlation import (
+import incident_management.contracts as incident_contracts
+from alert_correlation import (
     AnchorStrength,
     AnchorTransition,
     CorrelationDecision,
@@ -14,14 +14,14 @@ from src.alert_correlation import (
     DecisionType,
     NormalizedFingerprint,
 )
-from src.alert_correlation.state import (
+from alert_correlation.state import (
     CorrelationMutationIntent,
     RetryDisposition,
     StateDomainErrorCode,
     StateDomainValidationError,
     TerminalOutcome,
 )
-from src.incident_management import (
+from incident_management import (
     CORRELATION_CLOSED_STATUSES,
     CORRELATION_OPEN_STATUSES,
     INCIDENT_ERROR_DISPOSITIONS,

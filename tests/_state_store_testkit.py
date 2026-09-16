@@ -4,8 +4,8 @@ This deliberately writes serialized records directly.  It is not a production
 state-store API and therefore cannot grant normal mutation authority.
 """
 
-from src.alert_correlation.state.contracts import ActivePendingRecord, BlockedCorrelationRecord
-from src.alert_correlation.state.sqlite_store import _encode_blocked, _encode_pending, _json
+from alert_correlation.state.contracts import ActivePendingRecord, BlockedCorrelationRecord
+from alert_correlation.state.sqlite_store import _encode_blocked, _encode_pending, _json
 
 
 def seed_pending(store, record: ActivePendingRecord) -> None:

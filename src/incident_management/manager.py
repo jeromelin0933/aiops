@@ -6,7 +6,7 @@ from dataclasses import replace
 from typing import Callable
 from uuid import uuid4
 
-from src.alert_correlation import AnchorStrength, AnchorTransition, DecisionType
+from alert_correlation import AnchorStrength, AnchorTransition, DecisionType
 
 from .contracts import (
     AssignmentPolicyConfig,

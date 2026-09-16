@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from src.alert_correlation import (
+from alert_correlation import (
     DEFAULT_POLICY_REGISTRY,
     POC_V1_POLICIES,
     AlertCorrelationPolicyEngine,
