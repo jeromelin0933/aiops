@@ -149,6 +149,7 @@ class WindowSummary:
     max_duration_ms: float = 0.0
     mean_duration_ms: float = 0.0
     max_memory_pct: float = 0.0
+    oom_origin_service: Optional[str] = None
     source_ip_401_counts: dict = field(default_factory=dict)
     trace_error_services: dict = field(default_factory=dict)
     trace_downstreams: dict = field(default_factory=dict)

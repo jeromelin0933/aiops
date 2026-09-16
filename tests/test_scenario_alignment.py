@@ -22,6 +22,7 @@ from scripts.validate_scenarios import (
     ScenarioValidator,
     ValidationFailure,
     event_boundary,
+    log_detector_checkpoint_ready,
     read_events_after,
     validate_event_schema,
     validate_input_evidence,
@@ -188,6 +189,59 @@ def test_scenario_input_evidence_contracts_are_deterministic():
     assert validate_input_evidence("S6", [{"target_service": "sms", "status_code": 429}] * 55, {"target_service": "sms", "rate_limit_log_count": 55})[0]
 
 
+def test_s3_log_detector_readiness_rejects_one_log_below_configured_minimum():
+    records = [{"error_type": "OutOfMemoryError", "service_name": "payment-api"}]
+    assert not log_detector_checkpoint_ready("S3", records, min_log_count=5)
+
+
+def test_s3_log_detector_readiness_requires_count_even_with_oom_evidence():
+    records = [
+        {"error_type": "OutOfMemoryError", "service_name": "payment-api"},
+        {"level": "INFO", "service_name": "other-service"},
+        {"level": "INFO", "service_name": "other-service"},
+        {"level": "INFO", "service_name": "other-service"},
+    ]
+    assert not log_detector_checkpoint_ready("S3", records, min_log_count=5)
+
+
+def test_s3_log_detector_readiness_accepts_enough_logs_and_valid_oom_identity():
+    records = [
+        {"error_type": "OutOfMemoryError", "service_name": "payment-api"},
+        *[{"level": "INFO", "service_name": "other-service"} for _ in range(4)],
+    ]
+    assert log_detector_checkpoint_ready("S3", records, min_log_count=5)
+
+
+def test_s3_log_detector_readiness_rejects_enough_logs_without_oom_evidence():
+    records = [{"level": "INFO", "service_name": "payment-api"} for _ in range(5)]
+    assert not log_detector_checkpoint_ready("S3", records, min_log_count=5)
+
+
+def test_log_detector_readiness_uses_supplied_config_value_not_hardcoded_five():
+    records = [
+        {"error_type": "OutOfMemoryError", "service_name": "payment-api"},
+        {"level": "INFO", "service_name": "other-service"},
+        {"level": "INFO", "service_name": "other-service"},
+    ]
+    assert log_detector_checkpoint_ready("S3", records, min_log_count=3)
+    assert not log_detector_checkpoint_ready("S3", records, min_log_count=4)
+
+
+def test_log_detector_readiness_timeout_is_bounded_without_real_sleep(monkeypatch):
+    validator = object.__new__(ScenarioValidator)
+    validator.timeout_seconds = 1.0
+    validator.poll_seconds = 0.0
+    validator.sleeper = lambda _: None
+    values = iter([0.0, 0.5, 2.0])
+    monkeypatch.setattr(validation_module.time, "monotonic", lambda: next(values))
+    with pytest.raises(ValidationFailure, match="timed out") as error:
+        validator._wait(
+            lambda: log_detector_checkpoint_ready("S3", [], min_log_count=7),
+            "S3 Log detector checkpoint",
+        )
+    assert error.value.category == "TIMEOUT"
+
+
 def test_dual_source_contracts_allow_both_events_and_keep_non_matching_events_unexpected():
     validator = _validator_for_event_tests()
     s2 = [
@@ -285,6 +339,7 @@ def test_s6_runner_waits_for_formal_prometheus_readiness_before_running(monkeypa
     validator.event_store_path = store
     validator.log_path = tmp_path / "aiops.json.log"
     validator.config = SimpleNamespace(scenarios={ScenarioId.S6: {"target_service": "sms-gateway", "rate_limit_log_count": 55}})
+    validator.log_min_log_count = 5
     validator.iforest = {"classification": {"request_spike_ratio": 3.0}, "window": {"min_sample_count": 3}}
     validator._qps_samples = lambda: [10.0, 10.0, 10.0]
     qps_values = iter([11.0, 40.0, 10.0, 10.0])
@@ -371,6 +426,7 @@ def test_validator_primes_runner_before_scenario_boundary_trigger_and_evidence(m
     validator.event_store_path = store
     validator.log_path = tmp_path / "aiops.json.log"
     validator.config = SimpleNamespace(scenarios={ScenarioId.S1: {"source_ip": "192.0.2.10", "unauthorized_count": 50}})
+    validator.log_min_log_count = 5
     validator.iforest = {"classification": {"request_spike_ratio": 3.0}}
     validator.poll_seconds = 0.0
     validator.prerequisites = lambda: order.append("prerequisites")
@@ -440,6 +496,7 @@ def test_validator_uses_formal_cycle_failure_count_and_event_store_evidence(monk
         validator.event_store_path = store
         validator.log_path = tmp_path / "aiops.json.log"
         validator.config = SimpleNamespace(scenarios={ScenarioId.S1: {"source_ip": "192.0.2.10", "unauthorized_count": 50}})
+        validator.log_min_log_count = 5
         validator.iforest = {"classification": {"request_spike_ratio": 3.0}}
         validator._wait = lambda condition, description: None
 

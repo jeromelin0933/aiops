@@ -1,6 +1,18 @@
-version: "3.8"
-
 services:
+
+  runtime:
+    build:
+      context: .
+      dockerfile: docker/runtime/Dockerfile
+    command:
+      - python
+      - scripts/run_correlation_runtime.py
+      - --config
+      - configs/runtime_orchestration.docker.yaml
+    volumes:
+      - runtime-events:/app/events
+      - runtime-state:/app/var/runtime_orchestration
+    stop_grace_period: 30s
 
   prometheus:
     image: prom/prometheus:v2.51.0
@@ -48,3 +60,5 @@ services:
 
 volumes:
   grafana-storage:
+  runtime-events:
+  runtime-state:

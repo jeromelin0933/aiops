@@ -1,6 +1,6 @@
 # SPEC-005：Mock Data Generator Validation and Scenario Alignment
 
-## Software Design Specification v1.2
+## Software Design Specification v1.3
 
 ---
 
@@ -11,15 +11,15 @@
 | Document ID | SPEC-005 |
 | Document Name | Mock Data Generator Validation and Scenario Alignment |
 | 中文名稱 | 模擬資料產生器驗證與六大情境對齊 |
-| Version | 1.2 |
-| Status | Implemented — PASS WITH KNOWN LIMITATIONS |
-| Date | 2026-08-05 |
+| Version | 1.3 |
+| Status | Implemented |
+| Date | 2026-08-29 |
 | Author | 林子豪（PM） |
 | Assignee | 夜雨 |
 | Branch Metadata | `feature/mock-data-validation` |
-| Related PRD | PRD-001 v3.2、PRD-002 v1.3 |
+| Related PRD | PRD-001 v3.2、PRD-002 v1.4 |
 | Related DDS | DDS-001 v1.1 |
-| Related SPEC | SPEC-001 v2.2、SPEC-002 v1.4、SPEC-003 v1.1、SPEC-004 v1.1 |
+| Related SPEC | SPEC-001 v2.3、SPEC-002 v1.4、SPEC-003 v1.1、SPEC-004 v1.1 |
 | Implements | SPEC-001 Phase 4、SPEC-003 Deferred Integration、SPEC-004 Deferred Follow-up |
 | Target | Developer／AI Coding Agent |
 
@@ -28,6 +28,7 @@
 | 1.0 | 2026-08-05 | 建立 Generator Audit、Scenario Runtime、Log／Metrics Generator 對齊、Prometheus／Grafana 驗證、SPEC-001～004 真實整合與六大情境 E2E Gate；明確定義持續 Baseline、有限 Scenario Injection、Recovery、同 Runtime 重複觸發、受控隨機性、Docker 修改核准與 Model Artifact 邊界。 |
 | 1.1 | 2026-08-05 | 對齊 PRD-002 v1.2；確認 S2 Latency 與 S3 Memory Threshold 邊界為大於或等於，並將上游文字修訂狀態更新為已完成。 |
 | 1.2 | 2026-08-12 | 記錄 Phase 5／6 implementation completion evidence、Phase 7 final read-only audit、Log IForest calibration、runner priming、EventStore evidence isolation 與已知限制；不變更既有 normative contract。 |
+| 1.3 | 2026-08-29 | S3 identity contract follow-up closure：完成 Validator readiness alignment、S3 OOM-origin identity Runtime revalidation、S1～S6 E2E regression 與 final automated regression。既有 2026-08-12 Phase 6 S3 PASS 歷史紀錄維持不變。 |
 
 > 本文件是 SPEC-005 的正式工程契約。Git 操作、Codex 安裝方式、虛擬環境建立指令及完整 AI Coding Agent Prompt 不屬於本 SPEC，由 PM 透過獨立工作指示提供。
 
@@ -557,6 +558,8 @@ Audit 必須輸出 Scenario Gap Matrix，至少包含：
 | Phase 6 — S5 | PASS |
 | Phase 6 — S6 | PASS |
 | E2E Exit Code | 0 |
+
+上述 `Phase 6 — S3 PASS` 發生於本次 S3 identity contract strengthening 之前，因此只能證明當時的 S3 Event Type／Severity／Metrics acceptance；不構成 `oom_crash_detected.service_name == actual OOM-origin service` 的新驗證證據。新 identity contract 必須待 SPEC-001 v2.3 implementation 完成後另行 revalidate；該follow-up revalidation現已完成，closure evidence見13.8，且不回溯改寫本歷史結果。
 
 ### 3.8 Phase 7：Final Read-only Audit
 
@@ -1231,6 +1234,7 @@ Log 必須至少包含：
 ```text
 error_type = OutOfMemoryError
 level = ERROR
+service_name = 合法且非空的 OOM-origin service 名稱
 ```
 
 可補：
@@ -1634,6 +1638,18 @@ Fail Fast
 runner.run_once()
 ```
 
+在正式 scenario detection cycle呼叫 `EventDetectionRunner.run_once()` 前，Scenario Validator必須使用 bounded、data-driven readiness polling；polling沿用正式 validation timeout／poll interval，timeout後明確 FAIL，不得以固定 sleep或無限等待判斷 readiness。
+
+Log Detector checkpoint的 minimum Log count必須從 Event Runner所引用的正式 Log Detector config之 `window.min_log_count` 取得，Validator不得 hardcode。對S3，除本輪 boundary後有效 Log count達到該值外，還必須確認本輪 Runtime evidence已存在至少一筆 `error_type == "OutOfMemoryError"` 且 `service_name`為合法非空字串的Log。若Scenario已完成Recovery而required checkpoint從未成立，validation必須失敗，不得降低標準。
+
+上述evidence只可用於readiness判斷與Event產生後的validation comparison；不得注入Detector、`WindowSummary`、`EventBuilder`或Runtime Event，也不得以validator-only expected service取代實際Runtime Log evidence。本alignment不修改Production Runner scheduler、`run_due_once()`或`start()`。
+
+Readiness alignment automated evidence：
+
+- Targeted Validator tests：`29 passed`。
+- SPEC-005 automated set：`71 passed`。
+- Final repository regression：`429 passed, 0 failed`。
+
 ### Pre-scenario Runner Priming（Implementation Evidence）
 
 Runtime／runner 啟動後、任何 scenario evidence 產生前，Controller 先呼叫一次 `runner.run_once()`，用以建立 `LogReader` initial EOF／offset state。Priming pipeline failure 必須使 validation fail。
@@ -1750,7 +1766,84 @@ Validation Metadata 只存在 ScenarioValidationResult。
 ### S3
 
 - `oom_crash_detected.severity=CRITICAL`。
+- `oom_crash_detected.service_name` 必須等於本輪 S3 注入的 `OutOfMemoryError` Log 的 `service_name`。
 - `high_memory_detected.event_source=metrics_threshold_detection`。
+
+Validator 可以基於本輪 test input／evidence 驗證 expected identity，但不得將 `scenario_id`、`expected_event_type` 或 validator-only metadata 注入 Detector、Event Schema 或 Runtime Correlation。EventStore evidence isolation 繼續使用既有 byte boundary／append 後新增內容；本次驗證不要求清空 EventStore。
+
+## 13.8 S3 Identity Revalidation（PASS）
+
+正式 Runtime command：
+
+```powershell
+python scripts/validate_scenarios.py --config configs/scenarios.yaml --runner-config configs/event_runner.yaml --scenario S3
+```
+
+Result：`PASS`。
+
+本輪 Runtime evidence：
+
+- New Logs：`63`。
+- OOM Logs：`1`。
+- Actual OOM-origin service：`payment-api`。
+- Persisted Event Types：`oom_crash_detected`、`high_memory_detected`。
+
+Persisted OOM Event：
+
+```text
+event_type = oom_crash_detected
+service_name = payment-api
+severity = CRITICAL
+event_source = log_event_detection
+detection_method = isolation_forest
+```
+
+Identity validation：
+
+```text
+persisted oom_crash_detected.service_name
+== actual OutOfMemoryError Log.service_name
+Result = PASS
+```
+
+Runner output／EventStore consistency：`PASS`。Metrics `high_memory_detected` contract：`PASS`。`payment-api`只代表本次Runtime evidence，不是產品固定service或validator expected answer。
+
+本次follow-up不改寫2026-08-12 `Phase 6 — S3 PASS`；該歷史結果仍只證明當時的Event Type／Severity／Metrics acceptance，本節才是strengthened identity contract的正式revalidation evidence。
+
+### 13.9 S1～S6 Follow-up Runtime Regression Evidence
+
+正式command：
+
+```powershell
+python scripts/validate_scenarios.py --config configs/scenarios.yaml --runner-config configs/event_runner.yaml --all
+```
+
+結果：
+
+- S1 PASS — `brute_force_detected`。
+- S2 PASS — `cross_service_failure` + `high_latency_detected`。
+- S3 PASS — `oom_crash_detected` + `high_memory_detected`。
+- S4 PASS — `external_dependency_failure`。
+- S5 PASS — `downstream_cascade_failure`。
+- S6 PASS — `rate_limit_storm` + `request_spike_detected`。
+
+本次S3 repair未造成其他Scenario detection contract regression。額外 `general_log_anomaly`／`general_metrics_anomaly` evidence可以保留，但不得取代required Scenario Events。
+
+### 13.10 Retained Runtime Evidence
+
+本次E2E使用EventStore／Log byte-boundary validation，不要求EventStore為空，亦未執行reset或cleanup。Runtime evidence保留於：
+
+- `logs/aiops.json.log`。
+- `events/event_store.jsonl`。
+
+Local Model artifacts：
+
+- `models/log_isolation_forest.pkl`。
+- `models/metrics_isolation_forest.pkl`。
+
+上述皆為local Runtime Artifacts，不宣稱已提交Repository。
+
+Closure確認：Event Schema仍為15個top-level fields；Log `WindowFeatureVector`仍為23維且順序不變；Metrics IForest contract、Model、Threshold、classifier priority、`high_memory_detected` semantics及S1／S2／S4／S5／S6 Event Detection contract均未改變。PRD-003未因此次Closure修改或標記Final。
 
 ### S4
 
@@ -2285,6 +2378,7 @@ __pycache__/
 - [ ] S1 Expected Event 通過。
 - [ ] S2 兩筆 Expected Event 通過。
 - [ ] S3 兩筆 Expected Event 通過。
+- [x] SPEC-001 v2.3 S3 identity revalidation 通過：`oom_crash_detected.service_name == OutOfMemoryError Log.service_name`。
 - [ ] S4 Expected Event 通過。
 - [ ] S5 Expected Event 通過。
 - [ ] S6 兩筆 Expected Event 通過。
@@ -2497,6 +2591,7 @@ Log Event Detection 的 authoritative detector contract 仍由 SPEC-001 v2.2 定
 | S2 跨服務 Trace | PRD-002 S2 | Log Contract Test／E2E |
 | S2 Latency | PRD-002 S2、SPEC-002 | Prometheus Instant Query／E2E |
 | S3 OOM／Memory | PRD-002 S3、SPEC-002 | Log＋Metrics E2E |
+| S3 OOM-origin service identity | PRD-002 v1.4 S3、SPEC-001 v2.3 | 本輪 Log／Event evidence revalidation PASS（見13.8） |
 | S4 External Failure | PRD-002 S4 | Log Contract Test／E2E |
 | S5 Downstream Cascade | PRD-002 S5 | Service Diversity Test／E2E |
 | S6 429 Storm | PRD-002 S6 | Log Contract Test／E2E |

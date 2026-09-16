@@ -1,5 +1,5 @@
 # SPEC-001：Log Event Detection
-## Software Design Specification v2.2（Hybrid Pipeline 版）
+## Software Design Specification v2.4（Hybrid Pipeline 版）
 
 ---
 
@@ -7,10 +7,11 @@
 
 | 欄位 | 內容 |
 |---|---|
-| Document ID | SPEC-001 v2.2 |
+| Document ID | SPEC-001 v2.4 |
 | Document Name | Log Event Detection — Hybrid Pipeline |
+| Version | 2.4 |
 | Status | Implemented |
-| Date | 2026-07-14 |
+| Date | 2026-09-13 |
 | Related PRD | PRD-001、PRD-002 |
 | Related DDS | DDS-001 |
 | Implements | PRD-002 FR-01、FR-03、FR-04、FR-05、FR-06 |
@@ -20,6 +21,8 @@
 |---|---|---|
 | 2.1 | 2026-07-14 | 定義 Hybrid Window-level Log Event Detection Pipeline。 |
 | 2.2 | 2026-08-12 | 與 SPEC-005 Phase 6 calibration 對齊；完成 training-flow reconciliation、deterministic fixture 文件化與 calibration limitation 文件化。 |
+| 2.3 | 2026-08-29 | S3 OOM-origin service metadata repair：`oom_crash_detected.service_name` 改由完整 Window 的實際 OOM evidence 推導；implementation、automated regression 與 Runtime E2E identity validation 均已完成。不改 Isolation Forest feature vector、classifier priority 或 Event Schema shape。 |
+| 2.4 | 2026-09-13 | 新增 downstream authoritative Event enumeration/read-integrity capability；保留 `read_all()` compatibility，對 authoritative representation 的 malformed JSON與non-object JSON採 typed Fail Closed。Event schema、immutability、Detector write ownership及JSONL persistence均不變。 |
 
 ---
 
@@ -576,6 +579,7 @@ class WindowSummary:
     max_duration_ms:                  float = 0.0
     mean_duration_ms:                 float = 0.0
     max_memory_pct:                   float = 0.0
+    oom_origin_service:               Optional[str] = None
     top_source_ip:                    Optional[str] = None
     top_source_ip_count:              int   = 0
     top_downstream:                   Optional[str] = None
@@ -588,6 +592,8 @@ class WindowSummary:
     def to_dict(self) -> dict:
         return asdict(self)
 ```
+
+`oom_origin_service` 只屬於 `WindowSummary` metadata。不得加入 `WindowFeatureVector.to_list()` 或 `feature_names()`，不得改變 Model input dimension，亦不得新增為 Event Schema top-level field。
 
 ---
 
@@ -1528,6 +1534,10 @@ class EventBuilder:
         return "general_log_anomaly"
 
     def _pick_service(self, s: WindowSummary, event_type: str) -> str:
+        # S3 identity contract：OOM Event 必須使用完整 Window evidence 所得 metadata；
+        # 不得落入 unique_services[0] 的一般 service selection fallback。
+        if event_type == "oom_crash_detected":
+            return s.oom_origin_service or "unknown"
         if event_type == "downstream_cascade_failure":
             return "multiple"
         return s.unique_services[0] if s.unique_services else "unknown"
@@ -1590,6 +1600,9 @@ class EventBuilder:
             base["max_memory_pct"] = s.max_memory_pct
         return base
 
+# Contract: max_memory_pct 仍只屬於 diagnostic／RCA-supporting evidence，
+# 不得用作 service identity。本次修正不要求新增 Event top-level field。
+
     @staticmethod
     def _make_event_id() -> str:
         ts  = int(datetime.now(timezone.utc).timestamp() * 1000)
@@ -1610,15 +1623,25 @@ class EventBuilder:
 #
 # 職責：
 #   將 Event dict 以 JSONL 格式寫入 events/event_store.jsonl。
-#   確保目錄存在，提供讀取所有 Event 的介面（供驗收腳本）。
+#   確保目錄存在，提供 legacy validation read 與 downstream authoritative read。
 #
 # 每個 function 的職責：
 #   EventStore.__init__()  確認目錄存在，設定路徑
 #   EventStore.write()     單筆 Event 寫入（append 模式）
 #   EventStore.read_all()  讀取全部 Event（供 validate 腳本）
+#   EventStore.read_all_authoritative()
+#                           完整讀取 authoritative Events；representation不完整時Fail Closed
 
 import json
 from pathlib import Path
+
+
+class EventStoreReadIntegrityError(RuntimeError):
+    """The authoritative Event representation cannot be read completely."""
+
+    def __init__(self, message: str, *, line_number: int | None = None):
+        super().__init__(message)
+        self.line_number = line_number
 
 
 class EventStore:
@@ -1659,11 +1682,57 @@ class EventStore:
             if not line:
                 continue
             try:
-                results.append(json.loads(line))
+                value = json.loads(line)
             except json.JSONDecodeError:
-                pass
+                continue
+            if isinstance(value, dict):
+                results.append(value)
         return results
+
+    def read_all_authoritative(self) -> list[dict]:
+        """完整讀取 authoritative Events；不得回傳不完整的成功結果。"""
+        if not self.path.exists():
+            return []
+        try:
+            lines = self.path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeError) as exc:
+            raise EventStoreReadIntegrityError(
+                "authoritative EventStore representation cannot be read"
+            ) from exc
+
+        events = []
+        for line_number, line in enumerate(lines, start=1):
+            if not line.strip():
+                continue
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise EventStoreReadIntegrityError(
+                    f"authoritative EventStore record at line {line_number} is malformed JSON",
+                    line_number=line_number,
+                ) from exc
+            if not isinstance(value, dict):
+                raise EventStoreReadIntegrityError(
+                    f"authoritative EventStore record at line {line_number} is not a JSON object",
+                    line_number=line_number,
+                )
+            events.append(value)
+        return events
 ```
+
+### 11.1 Read Surface Boundary
+
+`read_all()` 是既有 validation／legacy compatibility surface；它維持既有行為，略過空白行、malformed JSON與non-object JSON，只回傳有效的JSON objects。既有caller不得因本次refinement被迫改用新semantics。
+
+`read_all_authoritative()` 是 downstream authoritative Event consumption surface。它具有以下規範：
+
+- EventStore不存在或為空時，回傳reliable empty result。
+- 空白行依既有JSONL representation semantics忽略。
+- 每個非空白record必須是可解析的JSON object，並以原payload內容回傳，不得修改Event。
+- malformed JSON、non-object JSON、UTF-8 decode failure或representation read failure必須raise `EventStoreReadIntegrityError`。
+- 發現任一integrity failure時不得回傳partial-success result，不得跳過該record後宣稱scan complete，亦不得自動修復、刪除或重寫EventStore。
+
+此capability只建立可靠、public、Fail-Closed的authoritative enumeration boundary；它不是Queue、ACK、consumer cursor、retry queue、offset persistence或exactly-once delivery。Event仍由Detector建立並透過`EventStore.write()` append，Event schema與immutable ownership均不變。
 
 ---
 
@@ -1946,6 +2015,7 @@ class WindowBuffer:
           - top_error_types：出現最多次的 error_type（前 5 名）
           - max/mean duration_ms
           - max_memory_pct
+          - oom_origin_service：從完整 Window 中 `error_type == "OutOfMemoryError"` 的真實 Log evidence 取得其合法、非空 `service_name`
           - top_source_ip / top_source_ip_count：出現最多次的 source_ip
           - top_downstream / affected_services_for_downstream：
               最多服務指向的 downstream_service，及指向它的不同服務清單
@@ -1971,6 +2041,13 @@ class WindowBuffer:
             for l in logs
             if l.get("error_type")
         ]
+
+        oom_logs = [
+            l for l in logs
+            if l.get("error_type") == "OutOfMemoryError"
+            and l.get("service_name")
+        ]
+        oom_origin_service = oom_logs[0]["service_name"] if oom_logs else None
 
         memory_vals = [
             float(l.get("memory_usage_pct", 0.0))
@@ -2026,6 +2103,7 @@ class WindowBuffer:
             max_duration_ms=float(max(durations)) if durations else 0.0,
             mean_duration_ms=float(sum(durations) / len(durations)) if durations else 0.0,
             max_memory_pct=float(max(memory_vals)) if memory_vals else 0.0,
+            oom_origin_service=oom_origin_service,
             top_source_ip=top_ip,
             top_source_ip_count=top_ip_cnt,
             top_downstream=top_ds,
@@ -2037,6 +2115,13 @@ class WindowBuffer:
                 for s in sample
             ],
         )
+
+# Contract: oom_origin_service 必須由完整 Log Window 的真實 OutOfMemoryError evidence 推導，
+# 不得由 unique_services[0] 推導，也不得只依賴最多 3 筆的 raw_log_sample；
+# 該 sample 並非完整 Window evidence。目前 PoC S3 acceptance 為單一 OOM-origin service。
+# 若未來同一 Window 有多個不同 OOM-origin service，不得藉本次 repair 自行擴張為
+# multi-Incident／multi-Event redesign；必須先回報 PM，再決定 future enhancement，
+# 且不得自行新增 Event Schema 或改寫 Correlation contract。
 
 
 class LogEventDetectionRunner:
@@ -2257,6 +2342,46 @@ Phase 6 calibration 與 Phase 7 final audit 的 implementation evidence 詳見 S
 | 無法分類但明顯異常 Window | 產生 `general_log_anomaly` |
 
 若現有 Log Generator 無法完整產生上述資料，允許使用 `tests/fixtures/` 中的人工測試資料進行驗收。
+
+### S3 OOM-origin Identity Regression Contract
+
+至少必須建立 mixed-service Window：`payment-service` 具有一般或其他 Error Log，而只有 `order-service` 的 Log 包含 `OutOfMemoryError`。即使 `payment-service` 排在 `unique_services` 前面，也必須驗證：
+
+- `WindowSummary.oom_origin_service == "order-service"`。
+- 產生的 Event 為 `event_type == "oom_crash_detected"` 且 `service_name == "order-service"`。
+- `WindowFeatureVector` 的欄位數與順序完全不變。
+- S1、S2、S4、S5、S6 的既有 `EventBuilder` 行為 regression-compatible。
+
+本修正不得改變 Isolation Forest feature vector、classifier priority、其他 Event Type 的 service selection 行為或 15-field Event Schema shape。
+
+### S3 OOM-origin Identity Implementation／Validation Evidence
+
+S3 identity repair 已完成 implementation 與 regression validation：
+
+- `WindowSummary.oom_origin_service` 由完整 Log Window evidence 推導，只接受 `error_type == "OutOfMemoryError"` 且具有合法非空 `service_name` 的 Log。
+- `oom_crash_detected.service_name` 使用 `oom_origin_service`，不再以 `unique_services[0]` 作為 OOM identity fallback。
+- 同一 Window 若出現多個不同 OOM-origin services，仍屬未定義 contract；現行 implementation fail closed 並 raise explicit error，不自行擴張為 multi-Event／multi-Incident behavior。
+- `oom_origin_service` 僅為 Window metadata，不進入固定 23-dimensional `WindowFeatureVector`；feature count、names 與 ordering 均未改變。
+
+Automated evidence：
+
+| Gate | Result |
+|---|---|
+| Phase 2A targeted tests | `39 passed` |
+| Phase 2A full regression | `423 passed` |
+| Readiness Integration Fix 後 final repository regression | `429 passed, 0 failed` |
+
+最終 S3 Runtime E2E evidence：
+
+```text
+Actual OutOfMemoryError Log.service_name = payment-api
+Persisted event_type = oom_crash_detected
+Persisted service_name = payment-api
+Persisted severity = CRITICAL
+Identity comparison = PASS
+```
+
+`payment-api` 僅為本次 Runtime E2E 的 validation evidence，不是產品固定 service或分類常數。
 
 ### 14.2 驗收腳本
 
