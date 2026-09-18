@@ -1,8 +1,8 @@
 # AIOps 智慧維運平台
-## 產品需求文件（PRD）v3.4
+## 產品需求文件（PRD）v3.5
 
 > **文件狀態**：執行中
-> **最後審閱**：2026-09-11
+> **最後審閱**：2026-09-18
 > **適用對象**：東吳大學資管系專題四人組
 > **對應文件**：SDD v0.1、ADR-001（均由 Google Drive 管理）
 
@@ -13,6 +13,7 @@
 | 3.3 | 2026-08-16 | 擴充 downstream Incident Lifecycle 產品方向；調和 Dashboard、Jira、Discord、Email 角色；加入 human-in-the-loop workflow、retention 與 knowledge feedback 方向，並修正過時治理與部署文字。Event Detection authoritative contract 不變。 |
 | 3.4 | 2026-08-29 | Post-PRD-003 backward governance reconciliation：對齊 correlation authority、Incident lifecycle eligibility、RCA persistence boundary、external interface authority、retention／reset wording與 current document references；不宣稱 downstream implementation 完成。 |
 | 3.4 | 2026-09-11 | DC-2 documentation-only reconciliation：同步SPEC-006～010個別Implemented、SPEC-011／complete Runtime E2E pending及current references；不變更Requirement、ownership或frozen Engineering Contract semantics。 |
+| 3.5 | 2026-09-18 | Post-PRD-004 v1.0 backward reconciliation：對齊Logical RCA Aggregate、immutable published version history、Assignment-independent RCA eligibility、Incident／RCA lifecycle separation、refresh與PRD-005 boundary；同步current authority／implementation status。此為narrow clarification，不變更Event、Correlation、Incident lifecycle或Runtime frozen behavior。 |
 
 ---
 
@@ -20,7 +21,7 @@
 
 ### 1.1 一句話定義
 
-建立一套 AIOps Prototype，自動完成 Detection → Correlation → Incident creation → Assignment → RCA generation → technical presentation／operational delivery，並透過 Dashboard、Jira、Discord 與 conditional Email 支援人機協作的 Incident handling closed loop；remediation、review 與 closure 保留 human-in-the-loop，以降低 MTTR 並提升處理可追溯性。
+建立一套 AIOps Prototype，自動完成 Detection → Correlation → durable Incident creation，之後由彼此獨立、可並行的Assignment與RCA obligations銜接technical presentation／operational delivery，並透過 Dashboard、Jira、Discord 與 conditional Email 支援人機協作的 Incident handling closed loop；remediation、review 與 closure 保留 human-in-the-loop，以降低 MTTR 並提升處理可追溯性。Assignment不是RCA eligibility gate。
 
 ### 1.2 目標用途
 
@@ -88,7 +89,7 @@ Incident Manager／Incident Record 是平台內 Incident lifecycle 與 persisten
 
 ## 3. 六大模擬劇本
 
-這六個劇本是系統的核心展示內容。各劇本的 Event Detection threshold、Event Type、approved Demo／E2E input 與 detector semantics 維持 frozen；共同 downstream 方向為 Events → Correlation → one Incident → Assignment → RCA → operational workflow → review／closure。
+這六個劇本是系統的核心展示內容。各劇本的 Event Detection threshold、Event Type、approved Demo／E2E input 與 detector semantics 維持 frozen；共同 downstream 方向為 Events → Correlation → one durable Incident，之後Assignment與initial RCA obligations可獨立並行，再銜接operational workflow → review／closure。
 
 ### 劇本一：單點爆破與帳號鎖定（垂直收斂）
 
@@ -151,7 +152,7 @@ Incident Manager／Incident Record 是平台內 Incident lifecycle 與 persisten
 | Approved Demo／E2E Input | 同一 `target_service` 在 60 秒內 exactly 55 筆 `status_code=429`；exactly 55 是核准的驗證輸入，不是 Detector 門檻。 |
 | Metrics IForest 契約 | Isolation Forest 判定 QPS Window 異常，且 `current_qps / baseline_mean >= configured request_spike_ratio`，分類為 `request_spike_detected`；ratio 維持 config-driven，3.0 與 SPEC-005 的 4x scenario generation value 均不是不可變 algorithm requirement。 |
 | Event Detection 預期證據 | `rate_limit_storm` + `request_spike_detected`。 |
-| 收斂邏輯 | downstream correlation／RCA invocation suppression 將高頻同質 Event 靜默折疊，避免重複分析；不重新定義 detector cooldown。 |
+| 收斂邏輯 | downstream correlation／RCA invocation suppression 將高頻同質 Event 靜默折疊，避免重複分析；不重新定義 detector cooldown，且不得以duplicate-invocation suppression忽略PRD-004所認定的新Material Evidence refresh obligation。 |
 | 展示價值 | 展示「高頻同質性垃圾告警的靜默與折疊」，保護 LLM API 成本。 |
 | 涉及欄位 | `status_code=429`、`target_service`、`rate_limit_quota`。 |
 
@@ -203,7 +204,7 @@ EventStore／Events → Alert Correlation → correlated Incident creation trigg
 |---|---|
 | 六大劇本支援 | 支援 evidence-driven Strong／Known Weak／Shadow policy；不得以 scenario、generator 或 validator expected answer 作 runtime correlation decision。 |
 | 概念邊界 | Detector Cooldown、Correlation Window、Pending Grace 與 RCA invocation protection／suppression 是不同概念。任何舊「60 秒內同類 Event 不重複觸發 LLM」敘述僅表示 RCA invocation protection intent，不是 Correlation Window，也不是 detector cooldown。 |
-| 詳細權威 | `PRD-003 v1.0 Final` 是 Correlation Window、Strong／Weak policies、Pending、Shadow、fingerprints、Incident creation、ownership／dedup／recovery等 detailed requirements 的 authoritative source；SPEC-006～010已完成各自核准的implementation scope，SPEC-011與完整Runtime整合仍pending。PRD Final不代表implementation complete。 |
+| 詳細權威 | `PRD-003 v1.1 Final` 是 Correlation Window、Strong／Weak policies、Pending、Shadow、fingerprints、Incident creation、ownership／dedup／recovery等 detailed requirements 的 authoritative source；SPEC-006～011已完成各自既有核准scope的implementation。PRD Final與個別SPEC Implemented均不代表RCA／RAG或完整AIOps closed loop完成。 |
 
 ### G5 Incident Management
 
@@ -217,13 +218,15 @@ Incident Manager／Incident Record 是平台內 Incident lifecycle 與 persisten
 
 RCA processing status 不屬於 Incident lifecycle state，兩者必須分離。
 
-Lifecycle view 的 Active 與 correlation eligibility 也必須分離。依 `PRD-003 v1.0 Final`，只有 `OPEN`、`ASSIGNED`、`IN_PROGRESS` 是 correlation-open；`AWAITING_REVIEW` 雖仍可顯示於 Active operational view，但已 correlation-closed；`CLOSED` 是 correlation-closed／terminal。
+Lifecycle view 的 Active 與 correlation eligibility 也必須分離。依 `PRD-003 v1.1 Final`，只有 `OPEN`、`ASSIGNED`、`IN_PROGRESS` 是 correlation-open；`AWAITING_REVIEW` 雖仍可顯示於 Active operational view，但已 correlation-closed；`CLOSED` 是 correlation-closed／terminal。
 
-`ASSIGNED`／`IN_PROGRESS` 可繼續接受 compatible evidence並進行 evidence enrichment或 severity escalation，但不得 reset lifecycle、assignee、reviewer、替換 Incident identity、重新啟動 assignment workflow或 silent overwrite既有RCA。Material evidence所需的RCA refresh／supersede／versioning或等價auditable update機制，留後續RCA PRD／SPEC定義。
+`ASSIGNED`／`IN_PROGRESS` 可繼續接受 compatible evidence並進行 evidence enrichment或 severity escalation，但不得 reset lifecycle、assignee、reviewer、替換 Incident identity、重新啟動 assignment workflow或 silent overwrite既有RCA。何者構成Material Evidence、何時使Current RCA成為STALE，以及refresh／new published version semantics，由`PRD-004 v1.0 Approved`定義；本PRD不建立第二套materiality規則。
 
 #### G5.3 Assignment Policy
 
 PoC 採單一 Operations Team：Supervisor、Engineer A、Engineer B、Engineer C。新 Incident 自動以 Round Robin 方向 A → B → C → A 指派，並保留 manual override。本節只定義產品行為，不固定演算法或 index implementation。
+
+Incident一旦durable，AUTO_ASSIGN obligation與initial RCA obligation即可各自成立並可並行。Assignment failure不得rollback Incident、阻止initial RCA或改變RCA eligibility；此澄清不修改既有AUTO_ASSIGN policy、cursor或workflow behavior。
 
 #### G5.4 Engineer／Reviewer Workflow
 
@@ -257,7 +260,7 @@ Incident Manager 追蹤 Jira、Discord 與 Email delivery／synchronization refe
 
 #### G5.10 Preliminary Product Data Shape
 
-Incident 的 concept-level data needs 包含 identity、timestamps、lifecycle status、severity、assignee、reviewer、correlated Events、RCA relationship／current state、resolution evidence、Knowledge Improvement Candidate 與 external interface references。Detailed authoritative Incident Schema與correlation／persistence contract由`PRD-003 v1.0 Final`定義；本節preliminary shape不是authoritative schema。
+Incident 的 concept-level data needs 包含 identity、timestamps、lifecycle status、severity、assignee、reviewer、correlated Events、RCA relationship／current state、resolution evidence、Knowledge Improvement Candidate 與 external interface references。Detailed authoritative Incident Schema與correlation／persistence contract由`PRD-003 v1.1 Final`定義；本節preliminary shape不是authoritative schema。
 
 既有 `incidents/incident_store.jsonl` 僅可視為目前 Prototype／proposed persistence direction，不是不可變 storage contract；本文件不定義 database class 或 store implementation。
 
@@ -265,13 +268,15 @@ Incident 的 concept-level data needs 包含 identity、timestamps、lifecycle s
 
 | 項目 | 說明 |
 |---|---|
-| 知識來源 | 六大劇本對應 SOP，供 RAG 召回。 |
+| 知識來源 | 經核准且具manifest／version治理的SOP corpus，供RAG召回；劇本或`scenario_id`不得成為production retrieval key。 |
 | 輸入概念 | Incident、相關 Logs／Metrics evidence 與召回的 SOP。 |
 | 輸出概念 | Incident summary、severity assessment、ranked root-cause hypotheses、evidence、SOP reference、remediation steps 與 prevention measures。此為產品輸出概念，不是不可變 schema。 |
-| Cardinality | Processing 期間 `1 Incident : 0..1 RCA`；successful RCA completion 後 `1 Incident : 1 RCA`。 |
-| Processing state | `PENDING／GENERATING`、`COMPLETED`、`FAILED`；這些不是 Incident lifecycle states。 |
-| Persistence | Incident只保存RCA relationship／current state，例如`rca_status`、`rca_ref`；完整RCA Artifact未來可由獨立RCA persistence authority保存。PRD-001不鎖定physical persistence，Incident不得duplicate完整RCA Artifact；Dashboard只是View，Jira／Discord只接收摘要、reference或presentation。 |
-| Failure／Fallback | LLM 失敗時 RCA processing 標記 `FAILED`，不把 mock／fallback RCA 當成 successful generated RCA。Demo 可使用 availability／presentation fallback 維持畫面可用，但它不是 successful RCA evidence，也不自動關閉 Incident。 |
+| Cardinality | `1 Incident : 0..1 Logical RCA Aggregate`；Aggregate可有immutable published version history，且任一時點至多一個Current version。這是platform-level statement，詳細semantics由`PRD-004 v1.0 Approved`定義。 |
+| Processing／Lifecycle | RCA processing lifecycle與Incident lifecycle互相獨立。RCA failure不得rollback Incident、阻止Assignment，亦不是Review／Closure的automatic hard gate；完整RCA state model與lifecycle-aware refresh policy由PRD-004定義。 |
+| Refresh／Versioning | PRD-004所定義的Material Evidence可使Current RCA成為STALE，並在成功驗證與publication後形成新的immutable published version；不得將RCA描述為一次性static answer。 |
+| Persistence | Incident只保存coarse RCA availability／Current relationship，例如`rca_status`、`rca_ref`；完整Logical RCA Aggregate、Artifact與history由RCA persistence authority保存。PRD-001不鎖定physical persistence，Incident不得duplicate完整RCA Artifact；Dashboard只是View，Jira／Discord只接收授權projection、reference或presentation。 |
+| Failure／Fallback | 首次RCA尚未成功時可呈現`PENDING／GENERATING／FAILED` coarse availability；一旦已有Current，後續refresh pending／generating／failed不得抹除last-known-good Current。Mock／fallback RCA不是successful published RCA，也不自動關閉 Incident。 |
+| Requirement Authority／Status | RCA detailed product semantics由`PRD-004 v1.0 Approved`唯一擁有；目前為Approved Requirement／Implementation Pending，不得解讀為RCA／RAG Implemented。 |
 
 ### G7 Dashboard — Technical View／Team Visibility
 
@@ -280,6 +285,8 @@ Dashboard 支援 Active Incidents、Incident History 與 Incident Detail。Detai
 Dashboard 是 technical view／team visibility，不是 persistence authority 或 workflow gate；Supervisor 不需先登入 Dashboard 才能完成指派或其他 lifecycle action。
 
 ### G8 Operational Integrations and Notification
+
+`PRD-004 v1.0 Approved`擁有RCA semantic truth；未來`PRD-005`只承接Dashboard、Discord、Jira、Email等presentation／delivery／operational interface requirements。任何interface不得直接成為RCA authority、繞過授權projection或建立第二條LLM／RAG pipeline；本節不提前設計PRD-005。
 
 #### G8.1 Jira — Incident Work Management
 
@@ -359,20 +366,20 @@ Event Schema 是 Event Detection、Event Runner、Alert Correlation 與 Incident
 
 > **Event Schema 的唯一 authoritative definition 是 `PRD-002：Event Detection` 第 5 章。**
 
-PRD-001 僅描述 Event 在整體系統中的產品角色，不重複定義完整欄位。SPEC-001 Log Event Detection、SPEC-002 Metrics Threshold Detection、SPEC-003 Metrics Isolation Forest Detection 與 SPEC-004 Event Runner 均遵守 PRD-002 第 5 章。任何模組不得由 PRD-001 v3.4 自行新增、刪除或重新命名 Event Schema 欄位。
+PRD-001 僅描述 Event 在整體系統中的產品角色，不重複定義完整欄位。SPEC-001 Log Event Detection、SPEC-002 Metrics Threshold Detection、SPEC-003 Metrics Isolation Forest Detection 與 SPEC-004 Event Runner 均遵守 PRD-002 第 5 章。任何模組不得由 PRD-001 v3.5 自行新增、刪除或重新命名 Event Schema 欄位。
 
 SPEC-003／SPEC-004／SPEC-005 中的 PRD-001 v3.2 references 是 historical implementation／reconciliation baseline；本輪不修改這些文件，也不改變 frozen Event Detection contract。
 
 ### 7.2 Incident Schema（收斂輸出）
 
-PRD-001 只描述 Incident 的產品角色與 conceptual data needs。Detailed authoritative Incident Schema、correlation contract與logical persistence roles由`PRD-003 v1.0 Final`定義；synchronization implementation contract留後續Engineering SPEC。G5的preliminary product data shape不具authoritative schema效力。
+PRD-001 只描述 Incident 的產品角色與 conceptual data needs。Detailed authoritative Incident Schema、correlation contract與logical persistence roles由`PRD-003 v1.1 Final`定義；synchronization implementation contract留後續Engineering SPEC。G5的preliminary product data shape不具authoritative schema效力。
 
 ### 7.3 RCA
 
-- Processing 期間：`1 Incident : 0..1 RCA`。
-- Successful RCA completion 後：`1 Incident : 1 RCA`。
-- RCA processing state 與 Incident lifecycle state 分離。
-- Incident只保存RCA relationship／current state；完整RCA Artifact可由future independent persistence authority保存。Detailed artifact schema、refresh／supersede／versioning與implementation留後續RCA PRD／SPEC。
+- `1 Incident : 0..1 Logical RCA Aggregate`；Aggregate具immutable published version history且任一時點至多一個Current。
+- RCA processing lifecycle與Incident lifecycle state分離；Assignment不是RCA eligibility gate，RCA failure不是closure hard gate。
+- Material Evidence可使Current成為STALE，成功refresh可publication新immutable version；詳細語意由`PRD-004 v1.0 Approved`定義。
+- Incident只保存coarse RCA availability／Current relationship；完整RCA Artifact、versions、attempts、freshness與history由RCA persistence authority保存。
 
 ---
 
@@ -421,11 +428,11 @@ PM 負責 integration review、merge／integration decision，以及將 stable m
 | Completed | 已完成 | Event Detection。 |
 | Completed | 已完成 | Event Runner。 |
 | Completed | 已完成 | Scenario／E2E validation。 |
-| In progress | Individual Engineering SPECs Implemented／Runtime Pending | Alert Correlation（PRD-003 v1.0 Final；SPEC-006 Policy Engine、SPEC-007 Correlation State、SPEC-008 Incident Core及SPEC-010 Shadow各自Implemented；SPEC-011與complete Runtime／Docker E2E pending）。 |
-| In progress | Individual Engineering SPECs Implemented／Integration Pending | Incident Manager／lifecycle（PRD-003 v1.0 Final；SPEC-008 Incident Core與SPEC-009 Lifecycle／Human Workflow各自Implemented；complete downstream integrations仍pending）。 |
-| Planned downstream | 規劃中 | RAG／LLM RCA、Dashboard、Jira、Discord／ChatOps、Email fallback／escalation、full integration／Demo。 |
+| Completed contract scope | SPEC-006～011 existing scope Implemented | Alert Correlation／Incident／Lifecycle／Runtime既有核准scope已各自完成；不包含本次新增RCA integration capability的implementation。 |
+| In progress | Individual Engineering SPECs Implemented／Integration Pending | Incident Manager／lifecycle（PRD-003 v1.1 Final；SPEC-008既有Incident Core與SPEC-009 Lifecycle／Human Workflow scope已Implemented；RCA additive integration與complete downstream integrations仍pending）。 |
+| Approved downstream／Implementation Pending | 規劃中 | `PRD-004 v1.0 Approved`之RAG／LLM RCA，以及未來PRD-005 Dashboard、Jira、Discord／ChatOps、Email fallback／escalation、full integration／Demo。 |
 
-SPEC-006～010各自依核准scope Implemented不代表SPEC-011、complete Runtime／Docker E2E、RCA／RAG、external operational integrations或整體平台已完成。既有產品目標維持資服盃截止 2026/11/07 與系上專題發表預計 2026/11 中旬。
+SPEC-006～011各自既有核准scope Implemented不代表RCA additive integration、RCA／RAG、external operational integrations或整體平台已完成。既有產品目標維持資服盃截止 2026/11/07 與系上專題發表預計 2026/11 中旬。
 
 ---
 
@@ -453,7 +460,7 @@ SPEC-006～010各自依核准scope Implemented不代表SPEC-011、complete Runti
 - [ ] 新 Incident 依 PoC Round Robin 自動指派，並可 manual override。
 - [ ] 每件 Incident 對應一張 Jira Ticket，且 Jira 不成為 Incident authority。
 - [ ] 每件 Incident 在 Discord 使用 single-thread collaboration context。
-- [ ] RCA processing state 與 Incident lifecycle 分離，successful completion 符合一件 Incident 一份 RCA。
+- [ ] RCA processing state 與 Incident lifecycle 分離；每件Incident至多一個Logical RCA Aggregate，具immutable published version history且至多一個Current。
 - [ ] Dashboard 正確呈現 Active／History 與 Incident Detail，但不成為 workflow gate。
 - [ ] Engineer 留下 Actual Action、Resolution Note、SOP Followed?、Additional Note。
 - [ ] Reviewer 檢查 evidence、RCA、resolution 與 recovery state 後完成 closure。
@@ -463,7 +470,7 @@ SPEC-006～010各自依核准scope Implemented不代表SPEC-011、complete Runti
 
 ### 10.4 Integration Acceptance
 
-- [ ] Automated：Detection → Correlation → Incident creation → Assignment → RCA → Dashboard／Jira／Discord delivery。
+- [ ] Automated：Detection → Correlation → durable Incident creation，之後Assignment與initial RCA obligations可獨立並行，再經授權projection銜接Dashboard／Jira／Discord delivery。
 - [ ] Human-in-the-loop：remediation、resolution note、SOP deviation、review、closure。
 - [ ] Demo 影片完成並涵蓋六大劇本。
 - [ ] 資安審查清單全部通過。
@@ -481,7 +488,7 @@ SPEC-006～010各自依核准scope Implemented不代表SPEC-011、complete Runti
 | Log 異常偵測 | scikit-learn Isolation Forest | 1.4.x |
 | Metrics 異常偵測 | Threshold + Isolation Forest | 1.4.x |
 | 向量資料庫 | ChromaDB | implementation detail deferred；不改變既有 dependency contract。 |
-| LLM | Gemini 2.5 Flash API | google-genai 1.16.x |
+| LLM | Gemini 2.5 Flash API | Approved model direction；exact SDK／package version deferred to RCA Engineering SPEC。 |
 | Embedding | Google text-embedding-004 | — |
 | 後端 | FastAPI + Uvicorn | 0.115.x |
 | 前端 | Jinja2 + Tailwind CSS CDN | — |
@@ -514,13 +521,13 @@ SPEC-006～010各自依核准scope Implemented不代表SPEC-011、complete Runti
 
 ## 13. 相關文件與驗證證據
 
-正式文件依domain分工：PRD-001 v3.4為執行中的overall platform direction；PRD-002 v1.5 Approved為Event Detection authority；SPEC-001 v2.3、SPEC-002 v1.4、SPEC-003 v1.1、SPEC-004 v1.1為Implemented engineering contracts；PRD-003 v1.0維持Final Alert Correlation／Incident Management detailed requirement authority。SPEC-006 v1.0、SPEC-007 v1.0、SPEC-008 v1.1、SPEC-009 v1.0及SPEC-010 v1.0已依各自核准scope Implemented；SPEC-011、complete Runtime／Docker E2E與完整downstream integrations仍pending。
+正式文件依domain分工：PRD-001 v3.5為執行中的overall platform direction；PRD-002 v1.5 Approved為Event Detection authority；SPEC-001 v2.3、SPEC-002 v1.4、SPEC-003 v1.1、SPEC-004 v1.1為Implemented engineering contracts；PRD-003 v1.1維持Final Alert Correlation／Incident Management detailed requirement authority；`PRD-004 v1.0 Approved`是RCA Domain product requirement authority。SPEC-006～011既有核准scope已Implemented；SPEC-008 v1.2與SPEC-011 v1.1的additive RCA integration boundary尚未實作，RCA／RAG、PRD-005 interfaces與完整downstream integrations仍為Implementation Pending。
 
 SPEC-005 v1.3為Implemented implementation／validation evidence（non-normative），S3 Identity Revalidation PASS；它不取代PRD-002或SPEC-001～004 detector authority，也不將observed E2E values升級為永久門檻。
 
 DDS-001 v1.3是repository-level Mock Data／Observability reference；README只提供project entry point與governance index。
 
-PRD-001 v3.4只做Post-PRD-003 backward governance reconciliation，不retroactively modify frozen Event Detection contracts。SPEC-003／SPEC-004／SPEC-005中的舊PRD references維持historical implementation／reconciliation baseline。
+PRD-001 v3.5完成Post-PRD-004 backward governance reconciliation，不retroactively modify frozen Event Detection、Correlation、Incident lifecycle或Runtime contracts。SPEC-003／SPEC-004／SPEC-005中的舊PRD references維持historical implementation／reconciliation baseline。
 
 SDD 與 ADR-001 由 Google Drive 管理，repository 不建立 mirror。ADR-001 保持 historical architecture decision record；未來重大架構改變應建立新 ADR。
 
