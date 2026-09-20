@@ -14,10 +14,12 @@ WORKFLOW_TABLES = {
     "incident_workflow_operation_receipts", "incident_assignment_state", "incident_resolution_submissions",
     "incident_review_attempts", "incident_workflow_audit",
 }
+RCA_TABLES = {"incident_rca_publication_receipts"}
 
 
 def _downgrade_empty_database_to_v1(database):
     with sqlite3.connect(database) as connection:
+        connection.execute("DROP TABLE incident_rca_publication_receipts")
         for table in ("incident_workflow_audit", "incident_review_attempts", "incident_resolution_submissions",
                       "incident_assignment_state", "incident_workflow_operation_receipts"):
             connection.execute(f"DROP TABLE {table}")
@@ -43,7 +45,7 @@ def test_v1_schema_is_upgraded_additively_and_reopens(tmp_path):
         assert store.get_operation_result("OP-1") == receipt.result
         assert store.get_assignment_state("unknown", "1") is None
         store.validate_readiness()
-    assert _table_names(database) == V1_TABLES | WORKFLOW_TABLES
+    assert _table_names(database) == V1_TABLES | WORKFLOW_TABLES | RCA_TABLES
     with sqlite3.connect(database) as connection:
         assert connection.execute("SELECT schema_version FROM incident_store_metadata").fetchone() == (SCHEMA_VERSION,)
 
@@ -61,6 +63,27 @@ def test_partial_v1_migration_fails_closed_and_keeps_old_metadata(tmp_path):
     with sqlite3.connect(database) as connection:
         assert connection.execute("SELECT schema_version FROM incident_store_metadata").fetchone() == (1,)
     assert _table_names(database) == V1_TABLES | {"incident_workflow_operation_receipts"}
+
+
+def test_v3_schema_adds_rca_publication_authority_without_rewriting_incidents(
+    tmp_path,
+) -> None:
+    database = tmp_path / "incident-v3.db"
+    store = SqliteIncidentStore(str(database))
+    record, receipt = _seed(store)
+    store.close()
+    with sqlite3.connect(database) as connection:
+        connection.execute("DROP TABLE incident_rca_publication_receipts")
+        connection.execute(
+            "UPDATE incident_store_metadata SET schema_version = 3 WHERE singleton = 1"
+        )
+
+    with SqliteIncidentStore(str(database)) as migrated:
+        assert migrated.get_incident("INC-1") == record
+        assert migrated.get_operation_result("OP-1") == receipt.result
+        assert migrated.get_rca_publication_result("PUB-MISSING") is None
+        migrated.validate_readiness()
+    assert _table_names(database) == V1_TABLES | WORKFLOW_TABLES | RCA_TABLES
 
 
 def test_newer_schema_version_fails_closed_without_schema_rewrite(tmp_path):

@@ -558,6 +558,130 @@ class IncidentOperationReceipt:
             _fail(IncidentErrorCode.MALFORMED_INCIDENT_RECORD, "receipt result and immutable identity must agree")
 
 
+class IncidentRcaPublicationDisposition(str, Enum):
+    APPLIED = "APPLIED"
+    PRECONDITION_SUPERSEDED = "PRECONDITION_SUPERSEDED"
+    TARGET_ALREADY_CURRENT_CONFLICT = "TARGET_ALREADY_CURRENT_CONFLICT"
+    REPAIR_REQUIRED = "REPAIR_REQUIRED"
+
+
+@dataclass(frozen=True, slots=True)
+class IncidentRcaRelationship:
+    """Incident-owned coarse RCA availability and Current relationship."""
+
+    incident_id: str
+    rca_status: str
+    current_version_id: str | None
+
+    def __post_init__(self) -> None:
+        _reference(self.incident_id, "incident_id")
+        _reference(self.rca_status, "rca_status")
+        _reference(self.current_version_id, "current_version_id", nullable=True)
+
+
+@dataclass(frozen=True, slots=True)
+class IncidentRcaPublicationRequest:
+    """Stable publication identity; caller time is evidence, not replay identity."""
+
+    publication_operation_id: str
+    incident_id: str
+    target_version_id: str
+    expected_current_version_id: str | None
+    authoritative_now: datetime
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "publication_operation_id",
+            "incident_id",
+            "target_version_id",
+        ):
+            _reference(
+                getattr(self, field_name),
+                field_name,
+                code=IncidentErrorCode.INVALID_INCIDENT_MUTATION,
+            )
+        _reference(
+            self.expected_current_version_id,
+            "expected_current_version_id",
+            nullable=True,
+            code=IncidentErrorCode.INVALID_INCIDENT_MUTATION,
+        )
+        object.__setattr__(
+            self,
+            "authoritative_now",
+            _utc_datetime(
+                self.authoritative_now,
+                "authoritative_now",
+                code=IncidentErrorCode.INVALID_INCIDENT_MUTATION,
+            ),
+        )
+
+    @property
+    def replay_identity(self) -> tuple[str, str, str, str | None]:
+        return (
+            self.publication_operation_id,
+            self.incident_id,
+            self.target_version_id,
+            self.expected_current_version_id,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class IncidentRcaPublicationResult:
+    publication_operation_id: str
+    incident_id: str
+    target_version_id: str
+    expected_current_version_id: str | None
+    disposition: IncidentRcaPublicationDisposition
+    resulting_current_version_id: str | None
+    completed_at: datetime
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "publication_operation_id",
+            "incident_id",
+            "target_version_id",
+        ):
+            _reference(getattr(self, field_name), field_name)
+        _reference(
+            self.expected_current_version_id,
+            "expected_current_version_id",
+            nullable=True,
+        )
+        _reference(
+            self.resulting_current_version_id,
+            "resulting_current_version_id",
+            nullable=True,
+        )
+        if not isinstance(self.disposition, IncidentRcaPublicationDisposition):
+            _fail(
+                IncidentErrorCode.MALFORMED_INCIDENT_RECORD,
+                "disposition must be an IncidentRcaPublicationDisposition",
+            )
+        if (
+            self.disposition is IncidentRcaPublicationDisposition.APPLIED
+            and self.resulting_current_version_id != self.target_version_id
+        ):
+            _fail(
+                IncidentErrorCode.MALFORMED_INCIDENT_RECORD,
+                "APPLIED publication must make its target Current",
+            )
+        object.__setattr__(
+            self,
+            "completed_at",
+            _utc_datetime(self.completed_at, "completed_at"),
+        )
+
+    @property
+    def replay_identity(self) -> tuple[str, str, str, str | None]:
+        return (
+            self.publication_operation_id,
+            self.incident_id,
+            self.target_version_id,
+            self.expected_current_version_id,
+        )
+
+
 # SPEC-009 workflow contracts are deliberately separate from the SPEC-008
 # correlation mutation and receipt namespace.
 class WorkflowAction(str, Enum):
@@ -991,6 +1115,10 @@ __all__ = [
     "IncidentOperationReceipt",
     "IncidentOperationResult",
     "IncidentRecord",
+    "IncidentRcaPublicationDisposition",
+    "IncidentRcaPublicationRequest",
+    "IncidentRcaPublicationResult",
+    "IncidentRcaRelationship",
     "IncidentSeverity",
     "IncidentStatus",
     "IncidentTimelineEntry",

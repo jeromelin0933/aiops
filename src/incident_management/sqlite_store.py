@@ -36,6 +36,9 @@ from .contracts import (
     IncidentOperationReceipt,
     IncidentOperationResult,
     IncidentRecord,
+    IncidentRcaPublicationDisposition,
+    IncidentRcaPublicationResult,
+    IncidentRcaRelationship,
     IncidentSeverity,
     IncidentStatus,
     IncidentTimelineEntry,
@@ -57,7 +60,7 @@ from .contracts import (
 
 
 DEFAULT_DATABASE_PATH = "incident_store.db"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 STATE_VERSION = 1
 _BUSY_TIMEOUT_MS = 5000
 
@@ -80,7 +83,9 @@ _WORKFLOW_TABLES = frozenset(
         "incident_workflow_audit",
     }
 )
-_EXPECTED_TABLES = _V1_TABLES | _WORKFLOW_TABLES
+_RCA_TABLES = frozenset({"incident_rca_publication_receipts"})
+_PRE_RCA_TABLES = _V1_TABLES | _WORKFLOW_TABLES
+_EXPECTED_TABLES = _PRE_RCA_TABLES | _RCA_TABLES
 
 # Exact implemented SPEC-007 authority tables.  These names are inspected only
 # through sqlite_master to reject physical co-location; their contents are
@@ -266,6 +271,25 @@ _SCHEMA_STATEMENTS = (
     "CREATE INDEX idx_resolution_incident_revision ON incident_resolution_submissions(incident_id, revision DESC)",
     "CREATE INDEX idx_review_incident_time ON incident_review_attempts(incident_id, reviewed_at, review_attempt_id)",
     "CREATE INDEX idx_workflow_audit_incident_time ON incident_workflow_audit(incident_id, occurred_at, workflow_audit_id)",
+    """
+    CREATE TABLE incident_rca_publication_receipts (
+        receipt_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        state_version INTEGER NOT NULL,
+        publication_operation_id TEXT NOT NULL UNIQUE,
+        incident_id TEXT NOT NULL,
+        target_version_id TEXT NOT NULL,
+        expected_current_version_id TEXT,
+        disposition TEXT NOT NULL CHECK(disposition IN (
+            'APPLIED', 'PRECONDITION_SUPERSEDED',
+            'TARGET_ALREADY_CURRENT_CONFLICT', 'REPAIR_REQUIRED'
+        )),
+        resulting_current_version_id TEXT,
+        completed_at TEXT NOT NULL,
+        FOREIGN KEY (incident_id) REFERENCES incidents(incident_id)
+            ON UPDATE RESTRICT ON DELETE RESTRICT
+    )
+    """,
+    "CREATE INDEX idx_incident_rca_publication_order ON incident_rca_publication_receipts(incident_id, receipt_id)",
 )
 
 _V2_TO_V3_STATEMENTS = (
@@ -275,6 +299,8 @@ _V2_TO_V3_STATEMENTS = (
     "ALTER TABLE incident_workflow_operation_receipts ADD COLUMN bound_reviewer TEXT",
     "ALTER TABLE incident_workflow_operation_receipts ADD COLUMN selection_mode TEXT",
 )
+
+_V3_TO_V4_STATEMENTS = _SCHEMA_STATEMENTS[-2:]
 
 
 def _domain_error(code: IncidentErrorCode, message: str) -> IncidentDomainError:
@@ -511,6 +537,19 @@ class _IncidentStoreTransaction:
         ).fetchone()
         return None if row is None else row["incident_id"]
 
+    def _get_rca_publication_result(
+        self, publication_operation_id: str
+    ) -> IncidentRcaPublicationResult | None:
+        row = self._connection.execute(
+            """SELECT * FROM incident_rca_publication_receipts
+                 WHERE publication_operation_id = ?""",
+            (publication_operation_id,),
+        ).fetchone()
+        return None if row is None else _decode_rca_publication_result(row)
+
+    def _validate_rca_publication_authority(self) -> None:
+        _validate_rca_publication_history(self._connection)
+
     def _insert_incident_state(self, record: IncidentRecord) -> None:
         self._connection.execute(
             """
@@ -616,6 +655,27 @@ class _IncidentStoreTransaction:
                 entry.action.value,
                 _json([effect.value for effect in entry.effects]),
                 _timestamp(entry.occurred_at),
+            ),
+        )
+
+    def _insert_rca_publication_result(
+        self, result: IncidentRcaPublicationResult
+    ) -> None:
+        self._connection.execute(
+            """INSERT INTO incident_rca_publication_receipts(
+                   state_version, publication_operation_id, incident_id,
+                   target_version_id, expected_current_version_id, disposition,
+                   resulting_current_version_id, completed_at
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                STATE_VERSION,
+                result.publication_operation_id,
+                result.incident_id,
+                result.target_version_id,
+                result.expected_current_version_id,
+                result.disposition.value,
+                result.resulting_current_version_id,
+                _timestamp(result.completed_at),
             ),
         )
 
@@ -821,9 +881,14 @@ class SqliteIncidentStore:
             # Metadata remains v1 until all additive workflow tables exist.
             for statement in _SCHEMA_STATEMENTS[7:]:
                 connection.execute(statement)
-        elif version == 2 and present == _EXPECTED_TABLES:
+        elif version == 2 and present == _PRE_RCA_TABLES:
             # Metadata remains v2 until every receipt provenance column exists.
             for statement in _V2_TO_V3_STATEMENTS:
+                connection.execute(statement)
+            for statement in _V3_TO_V4_STATEMENTS:
+                connection.execute(statement)
+        elif version == 3 and present == _PRE_RCA_TABLES:
+            for statement in _V3_TO_V4_STATEMENTS:
                 connection.execute(statement)
         else:
             raise _domain_error(IncidentErrorCode.INCIDENT_STORE_INTEGRITY_FAILURE, "Incident Store schema cannot be migrated safely")
@@ -904,6 +969,38 @@ class SqliteIncidentStore:
                 (operation_id,),
             ).fetchone()
             return None if row is None else _decode_receipt(row).result
+
+    def get_rca_relationship(
+        self, incident_id: str
+    ) -> IncidentRcaRelationship | None:
+        """Read Incident-owned coarse RCA state without exposing persistence."""
+
+        _validate_reference(incident_id, "incident_id")
+        with self._read_transaction() as connection:
+            self._validate_read_authority(connection)
+            _validate_rca_publication_history(connection)
+            record = _read_incident(connection, incident_id)
+            if record is None:
+                return None
+            return IncidentRcaRelationship(
+                record.incident_id, record.rca_status, record.rca_ref
+            )
+
+    def get_rca_publication_result(
+        self, publication_operation_id: str
+    ) -> IncidentRcaPublicationResult | None:
+        """Return a durable same-operation result or authoritative absence."""
+
+        _validate_reference(publication_operation_id, "publication_operation_id")
+        with self._read_transaction() as connection:
+            self._validate_read_authority(connection)
+            _validate_rca_publication_history(connection)
+            row = connection.execute(
+                """SELECT * FROM incident_rca_publication_receipts
+                     WHERE publication_operation_id = ?""",
+                (publication_operation_id,),
+            ).fetchone()
+            return None if row is None else _decode_rca_publication_result(row)
 
     def get_workflow_operation_result(self, workflow_operation_id: str) -> WorkflowOperationResult | None:
         _validate_reference(workflow_operation_id, "workflow_operation_id")
@@ -1001,6 +1098,7 @@ class SqliteIncidentStore:
             workflow_receipts = connection.execute("SELECT * FROM incident_workflow_operation_receipts ORDER BY workflow_operation_id").fetchall()
             for row in workflow_receipts:
                 _decode_workflow_receipt(row)
+            _validate_rca_publication_history(connection)
             for row in connection.execute("SELECT * FROM incident_assignment_state ORDER BY policy_id, policy_version").fetchall():
                 _decode_assignment_state(row)
             incident_ids = connection.execute("SELECT incident_id FROM incidents ORDER BY incident_id").fetchall()
@@ -1051,6 +1149,95 @@ class SqliteIncidentStore:
             raise _domain_error(
                 IncidentErrorCode.INCIDENT_STORE_INTEGRITY_FAILURE,
                 "Incident Store contains a foreign-key contradiction",
+            )
+
+
+def _decode_rca_publication_result(
+    row: sqlite3.Row,
+) -> IncidentRcaPublicationResult:
+    try:
+        _require_state_version(row, "Incident RCA publication receipt")
+        return IncidentRcaPublicationResult(
+            publication_operation_id=row["publication_operation_id"],
+            incident_id=row["incident_id"],
+            target_version_id=row["target_version_id"],
+            expected_current_version_id=row["expected_current_version_id"],
+            disposition=IncidentRcaPublicationDisposition(row["disposition"]),
+            resulting_current_version_id=row["resulting_current_version_id"],
+            completed_at=_parse_timestamp(row["completed_at"], "completed_at"),
+        )
+    except (KeyError, TypeError, ValueError, IncidentDomainError) as exc:
+        raise _domain_error(
+            IncidentErrorCode.INCIDENT_STORE_INTEGRITY_FAILURE,
+            "malformed Incident RCA publication receipt",
+        ) from exc
+
+
+def _validate_rca_publication_history(connection: sqlite3.Connection) -> None:
+    """Validate replay/CAS evidence and the final Incident relationship."""
+
+    rows = connection.execute(
+        "SELECT * FROM incident_rca_publication_receipts ORDER BY incident_id, receipt_id"
+    ).fetchall()
+    by_incident: dict[str, list[IncidentRcaPublicationResult]] = {}
+    for row in rows:
+        result = _decode_rca_publication_result(row)
+        by_incident.setdefault(result.incident_id, []).append(result)
+
+    for incident_id, results in by_incident.items():
+        record = _read_incident(connection, incident_id)
+        if record is None:
+            raise _domain_error(
+                IncidentErrorCode.INCIDENT_STORE_INTEGRITY_FAILURE,
+                "RCA publication receipt references a missing Incident",
+            )
+        modeled_current = (
+            results[0].expected_current_version_id
+            if results[0].disposition
+            is IncidentRcaPublicationDisposition.APPLIED
+            else results[0].resulting_current_version_id
+        )
+        for result in results:
+            if result.disposition is IncidentRcaPublicationDisposition.APPLIED:
+                if result.expected_current_version_id != modeled_current:
+                    raise _domain_error(
+                        IncidentErrorCode.INCIDENT_STORE_INTEGRITY_FAILURE,
+                        "APPLIED RCA publication contradicts Current precondition history",
+                    )
+                modeled_current = result.target_version_id
+            elif (
+                result.disposition
+                is IncidentRcaPublicationDisposition.PRECONDITION_SUPERSEDED
+            ):
+                if result.expected_current_version_id == modeled_current:
+                    raise _domain_error(
+                        IncidentErrorCode.INCIDENT_STORE_INTEGRITY_FAILURE,
+                        "superseded RCA publication had a matching Current precondition",
+                    )
+            elif (
+                result.disposition
+                is IncidentRcaPublicationDisposition.TARGET_ALREADY_CURRENT_CONFLICT
+                and result.target_version_id != modeled_current
+            ):
+                raise _domain_error(
+                    IncidentErrorCode.INCIDENT_STORE_INTEGRITY_FAILURE,
+                    "target-already-Current result contradicts RCA relationship history",
+                )
+            if (
+                result.disposition
+                is not IncidentRcaPublicationDisposition.REPAIR_REQUIRED
+                and result.resulting_current_version_id != modeled_current
+            ):
+                raise _domain_error(
+                    IncidentErrorCode.INCIDENT_STORE_INTEGRITY_FAILURE,
+                    "RCA publication result contradicts preserved Current",
+                )
+        if record.rca_ref != modeled_current or (
+            modeled_current is not None and record.rca_status != "COMPLETED"
+        ):
+            raise _domain_error(
+                IncidentErrorCode.INCIDENT_STORE_INTEGRITY_FAILURE,
+                "Incident RCA relationship contradicts publication receipts",
             )
 
 
