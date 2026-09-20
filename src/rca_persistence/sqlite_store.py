@@ -1,7 +1,8 @@
-"""Independent SQLite authority for SPEC-012 Aggregate, Attempt, and Try facts.
+"""Independent SQLite authority for SPEC-012 Candidate-A facts.
 
-Artifacts, Versions, publication, Current, and runtime orchestration belong
-to later phases and are not represented by writable placeholders here.
+The store owns local Aggregate, Attempt, Try, immutable Version/Artifact, and
+A-side publication-receipt truth.  It deliberately does not mutate Incident,
+promote Current, or claim that a local receipt is full publication.
 """
 
 from __future__ import annotations
@@ -18,24 +19,42 @@ from threading import RLock
 from .contracts import (
     AdmitAttemptRequest,
     AdmittedRetryDisposition,
+    ArtifactProvenance,
+    ArtifactStatementKind,
     AttemptLineage,
     AttemptLineageRead,
     CreateAggregateRequest,
+    DiagnosticConclusion,
+    EvidenceCompleteness,
+    EvidenceReference,
+    EvidentialSupport,
     GenerationAttempt,
     GenerationLifecycle,
     GenerationProvenance,
+    GuidanceSource,
+    KnowledgeReference,
     LogicalTryIdentity,
     LogicalTryOutcome,
     LogicalTryResultKind,
+    PublicationDisposition,
+    PublicationResult,
+    PublicationTargetIdentity,
+    RcaAction,
     RcaAggregate,
+    RcaArtifact,
     RcaDomainError,
     RcaErrorCode,
+    RcaHypothesis,
+    RcaVersion,
+    RecoveryCandidate,
+    RecoveryCandidateKind,
+    VersionRole,
     require_equivalent_attempt_lineage,
 )
 
 
-SCHEMA_VERSION = "3"
-_RECOGNIZED_OLDER_SCHEMA_VERSIONS = frozenset({"1", "2"})
+SCHEMA_VERSION = "4"
+_RECOGNIZED_OLDER_SCHEMA_VERSIONS = frozenset({"1", "2", "3"})
 _METADATA_KEY = "rca_store_schema_version"
 _TABLES = frozenset(
     {"rca_store_metadata", "rca_aggregates", "rca_attempts", "rca_operation_receipts"}
@@ -55,7 +74,7 @@ class RcaStoreIntegrityError(RcaDomainError):
 
 
 class SqliteRcaStore:
-    """Configurable-path Candidate-A SQLite authority through Phase 3."""
+    """Configurable-path Candidate-A SQLite authority through Phase 4."""
 
     def __init__(
         self,
@@ -296,6 +315,226 @@ class SqliteRcaStore:
         except sqlite3.Error as exc:
             raise _sqlite_error(exc, "RCA Store cannot record Logical Try outcome") from exc
 
+    def commit_validated_artifact(
+        self,
+        operation_id: str,
+        attempt_id: str,
+        artifact: RcaArtifact,
+        publication_target: PublicationTargetIdentity,
+        authoritative_now,
+    ) -> RcaVersion:
+        """Atomically allocate a Version and persist its Artifact and A-side receipt.
+
+        ``target_version_id`` is the caller's opaque proposed Version identity.  It
+        becomes allocated only if this transaction commits.  The authoritative
+        timestamp is evidence, not part of replay identity.
+        """
+
+        _reference(operation_id, "operation_id")
+        _reference(attempt_id, "attempt_id")
+        if not isinstance(artifact, RcaArtifact):
+            raise TypeError("artifact must be RcaArtifact")
+        if not isinstance(publication_target, PublicationTargetIdentity):
+            raise TypeError("publication_target must be PublicationTargetIdentity")
+        occurred_at = _timestamp(authoritative_now)
+        version_id = publication_target.target_version_id
+        try:
+            with self._write_transaction():
+                replay = self._read_receipt(operation_id)
+                if replay is not None:
+                    self._require_commit_receipt_identity(
+                        replay, artifact, publication_target, version_id, operation_id, attempt_id
+                    )
+                    version = self._read_version(version_id)
+                    if version is None:
+                        self._corruption("Artifact commit receipt references a missing Version")
+                    return version
+
+                existing_publication = self._read_publication_result(
+                    publication_target.publication_operation_id
+                )
+                if existing_publication is not None:
+                    if existing_publication.target != publication_target:
+                        raise RcaDomainError(
+                            RcaErrorCode.RECEIPT_REPLAY_CONFLICT,
+                            "publication_operation_id resolves to a contradictory target",
+                            operation_id=publication_target.publication_operation_id,
+                            attempt_id=attempt_id,
+                            version_id=version_id,
+                        )
+                    version = self._read_version(version_id)
+                    if version is None:
+                        self._corruption("A-side publication receipt references a missing Version")
+                    if version.attempt_id != attempt_id or version.artifact != artifact:
+                        raise RcaDomainError(
+                            RcaErrorCode.RECEIPT_REPLAY_CONFLICT,
+                            "equivalent publication identity contradicts immutable Version semantics",
+                            operation_id=publication_target.publication_operation_id,
+                            attempt_id=attempt_id,
+                            version_id=version_id,
+                        )
+                    return version
+
+                view = self._read_attempt_lineage(attempt_id)
+                if view is None:
+                    raise RcaDomainError(
+                        RcaErrorCode.INVALID_REFERENCE,
+                        "Artifact commit references an unknown Attempt",
+                        operation_id=operation_id,
+                        attempt_id=attempt_id,
+                        version_id=version_id,
+                    )
+                aggregate = self._read_aggregate(view.attempt.lineage.aggregate_id)
+                if aggregate is None:
+                    self._corruption("Attempt references a missing Aggregate")
+                if view.attempt.lifecycle is not GenerationLifecycle.COMPLETED or not view.try_outcomes:
+                    raise RcaDomainError(
+                        RcaErrorCode.SEMANTIC_CONFLICT,
+                        "only an Attempt with a validated successful Try may allocate a Version",
+                        operation_id=operation_id,
+                        attempt_id=attempt_id,
+                        version_id=version_id,
+                    )
+                latest = view.try_outcomes[-1]
+                if latest.result_kind is not LogicalTryResultKind.VALIDATED_RESULT:
+                    self._corruption("COMPLETED Attempt lacks a validated successful Try")
+                lineage = view.attempt.lineage
+                if publication_target.aggregate_id != lineage.aggregate_id or (
+                    publication_target.incident_id != aggregate.incident_id
+                ):
+                    raise RcaDomainError(
+                        RcaErrorCode.IDENTITY_LINEAGE_CONFLICT,
+                        "publication target contradicts fresh Aggregate/Incident lineage",
+                        operation_id=operation_id,
+                        aggregate_id=lineage.aggregate_id,
+                        attempt_id=attempt_id,
+                        version_id=version_id,
+                    )
+                if not _artifact_matches_lineage(artifact, lineage):
+                    raise RcaDomainError(
+                        RcaErrorCode.IDENTITY_LINEAGE_CONFLICT,
+                        "Artifact provenance contradicts the successful Attempt lineage",
+                        operation_id=operation_id,
+                        aggregate_id=lineage.aggregate_id,
+                        attempt_id=attempt_id,
+                        version_id=version_id,
+                    )
+                existing_version = self._read_version(version_id)
+                if existing_version is not None:
+                    raise RcaDomainError(
+                        RcaErrorCode.IDENTITY_LINEAGE_CONFLICT,
+                        "version_id is already allocated to another immutable Version",
+                        operation_id=operation_id,
+                        aggregate_id=lineage.aggregate_id,
+                        attempt_id=attempt_id,
+                        version_id=version_id,
+                    )
+
+                versions = self._read_all_versions()
+                next_number = 1 + max(
+                    (item.version_number for item in versions if item.aggregate_id == lineage.aggregate_id),
+                    default=0,
+                )
+                semantic_identity = _commit_semantic_identity(
+                    operation_id, attempt_id, artifact, publication_target, next_number
+                )
+                self._db.execute(
+                    """INSERT INTO rca_operation_receipts(
+                           operation_id, command_kind, semantic_identity,
+                           result_identity, occurred_at
+                       ) VALUES (?, 'COMMIT_ARTIFACT', ?, ?, ?)""",
+                    (operation_id, semantic_identity, version_id, occurred_at),
+                )
+                version = self._read_version(version_id)
+                if version is None:
+                    self._corruption("atomic Artifact commit did not produce a readable Version")
+                return version
+        except RcaDomainError:
+            raise
+        except sqlite3.Error as exc:
+            raise _sqlite_error(exc, "RCA Store cannot atomically commit validated Artifact") from exc
+
+    def get_version(self, version_id: str) -> RcaVersion | None:
+        _reference(version_id, "version_id")
+        try:
+            with self._read_snapshot():
+                version = self._read_version(version_id)
+                if version is not None:
+                    self._validate_version_authority(version)
+                return version
+        except RcaDomainError:
+            raise
+        except sqlite3.Error as exc:
+            raise _sqlite_error(exc, "RCA Store cannot read Version") from exc
+
+    def get_version_history(self, aggregate_id: str) -> tuple[RcaVersion, ...]:
+        _reference(aggregate_id, "aggregate_id")
+        try:
+            with self._read_snapshot():
+                if self._read_aggregate(aggregate_id) is None:
+                    return ()
+                versions = tuple(
+                    item for item in self._read_all_versions() if item.aggregate_id == aggregate_id
+                )
+                versions = tuple(sorted(versions, key=lambda item: item.version_number))
+                for version in versions:
+                    self._validate_version_authority(version)
+                return versions
+        except RcaDomainError:
+            raise
+        except sqlite3.Error as exc:
+            raise _sqlite_error(exc, "RCA Store cannot read Version history") from exc
+
+    def get_artifact(self, version_id: str) -> RcaArtifact | None:
+        version = self.get_version(version_id)
+        return None if version is None else version.artifact
+
+    def get_artifact_provenance(self, version_id: str) -> ArtifactProvenance | None:
+        artifact = self.get_artifact(version_id)
+        return None if artifact is None else artifact.provenance
+
+    def get_publication_result(
+        self, publication_operation_id: str
+    ) -> PublicationResult | None:
+        _reference(publication_operation_id, "publication_operation_id")
+        try:
+            with self._read_snapshot():
+                result = self._read_publication_result(publication_operation_id)
+                if result is not None:
+                    self._validate_publication_result(result)
+                return result
+        except RcaDomainError:
+            raise
+        except sqlite3.Error as exc:
+            raise _sqlite_error(exc, "RCA Store cannot read A-side publication receipt") from exc
+
+    def enumerate_recovery_candidates(self) -> tuple[RecoveryCandidate, ...]:
+        try:
+            with self._read_snapshot():
+                candidates = tuple(
+                    RecoveryCandidate(
+                        RecoveryCandidateKind.COMMITTED_UNPUBLISHED_VERSION,
+                        version.aggregate_id,
+                        attempt_id=version.attempt_id,
+                        version_id=version.version_id,
+                        publication_operation_id=version.publication_operation_id,
+                    )
+                    for version in sorted(
+                        self._read_all_versions(),
+                        key=lambda item: (item.aggregate_id, item.version_number),
+                    )
+                )
+                for candidate in candidates:
+                    version = self._read_version(candidate.version_id)  # type: ignore[arg-type]
+                    if version is None:
+                        self._corruption("recovery enumeration found a missing Version")
+                    self._validate_version_authority(version)
+                return candidates
+        except RcaDomainError:
+            raise
+        except sqlite3.Error as exc:
+            raise _sqlite_error(exc, "RCA Store cannot enumerate recovery authority") from exc
+
     def get_aggregate(self, aggregate_id: str) -> RcaAggregate | None:
         _reference(aggregate_id, "aggregate_id")
         try:
@@ -424,7 +663,7 @@ class SqliteRcaStore:
                     );
                     CREATE TABLE rca_operation_receipts (
                         operation_id TEXT PRIMARY KEY NOT NULL,
-                        command_kind TEXT NOT NULL CHECK(command_kind IN ('CREATE_AGGREGATE','ADMIT_ATTEMPT','RECORD_TRY')),
+                        command_kind TEXT NOT NULL CHECK(command_kind IN ('CREATE_AGGREGATE','ADMIT_ATTEMPT','RECORD_TRY','COMMIT_ARTIFACT')),
                         semantic_identity TEXT NOT NULL,
                         result_identity TEXT NOT NULL,
                         occurred_at TEXT NOT NULL
@@ -436,6 +675,9 @@ class SqliteRcaStore:
                     CREATE UNIQUE INDEX rca_one_outcome_per_logical_try
                         ON rca_operation_receipts(result_identity)
                         WHERE command_kind = 'RECORD_TRY';
+                    CREATE UNIQUE INDEX rca_one_commit_receipt_per_version
+                        ON rca_operation_receipts(result_identity)
+                        WHERE command_kind = 'COMMIT_ARTIFACT';
                     """
                     for statement in schema.split(";"):
                         if statement.strip():
@@ -552,6 +794,11 @@ class SqliteRcaStore:
                 RcaErrorCode.SCHEMA_INCOMPATIBILITY,
                 "Candidate-A schema lacks unique Logical Try identity authority",
             )
+        if not _has_unique_partial_commit_identity(self._db):
+            raise RcaStoreIntegrityError(
+                RcaErrorCode.SCHEMA_INCOMPATIBILITY,
+                "Candidate-A schema lacks unique immutable Version identity authority",
+            )
 
     def _validate_authority_locked(self) -> None:
         self._validate_current_schema()
@@ -581,11 +828,27 @@ class SqliteRcaStore:
             if self._read_attempt_lineage(attempt_id) is None:
                 self._corruption("Attempt disappeared during readiness snapshot")
             self._require_record_receipt("ADMIT_ATTEMPT", attempt_id)
+        versions = sorted(
+            self._read_all_versions(), key=lambda item: (item.aggregate_id, item.version_number)
+        )
+        expected_by_aggregate: dict[str, int] = {}
+        publication_ids: set[str] = set()
+        for version in versions:
+            expected = expected_by_aggregate.get(version.aggregate_id, 0) + 1
+            if version.version_number != expected:
+                self._corruption("committed Version numbers are not continuous")
+            expected_by_aggregate[version.aggregate_id] = expected
+            if version.publication_operation_id in publication_ids:
+                self._corruption("publication_operation_id targets multiple Versions")
+            publication_ids.add(version.publication_operation_id)
+            self._validate_version_authority(version)
         for row in self._db.execute(
             """SELECT result_identity FROM rca_operation_receipts
                  WHERE command_kind = 'RECORD_TRY' ORDER BY result_identity"""
         ):
             self._require_record_receipt("RECORD_TRY", row[0])
+        for version in versions:
+            self._require_record_receipt("COMMIT_ARTIFACT", version.version_id)
         for row in self._db.execute(
             "SELECT operation_id FROM rca_operation_receipts ORDER BY operation_id"
         ):
@@ -651,6 +914,158 @@ class SqliteRcaStore:
             raise RcaStoreIntegrityError(
                 RcaErrorCode.INTEGRITY_CORRUPTION, "malformed or contradictory persisted Attempt"
             ) from exc
+
+    def _read_version(self, version_id: str) -> RcaVersion | None:
+        rows = self._db.execute(
+            """SELECT operation_id, semantic_identity, result_identity, occurred_at
+                 FROM rca_operation_receipts
+                WHERE command_kind='COMMIT_ARTIFACT' AND result_identity=?""",
+            (version_id,),
+        ).fetchall()
+        if len(rows) > 1:
+            self._corruption("version_id resolves to multiple Artifact commit receipts")
+        return None if not rows else self._decode_version_receipt(tuple(rows[0]))
+
+    def _read_all_versions(self) -> tuple[RcaVersion, ...]:
+        return tuple(
+            self._decode_version_receipt(tuple(row))
+            for row in self._db.execute(
+                """SELECT operation_id, semantic_identity, result_identity, occurred_at
+                     FROM rca_operation_receipts
+                    WHERE command_kind='COMMIT_ARTIFACT' ORDER BY result_identity"""
+            )
+        )
+
+    def _decode_version_receipt(self, row: tuple[object, ...]) -> RcaVersion:
+        try:
+            operation_id, encoded, result_identity, occurred_at = row
+            _reference(operation_id, "operation_id")
+            _reference(result_identity, "result_identity")
+            _parse_timestamp(occurred_at)
+            payload = json.loads(encoded)  # type: ignore[arg-type]
+            data = _expect_object(
+                payload,
+                {"operation_id", "attempt_id", "artifact", "publication_target", "version_number"},
+                "Artifact commit receipt",
+            )
+            if data["operation_id"] != operation_id:
+                raise ValueError("Artifact commit operation identity mismatch")
+            target = _publication_target_from_object(data["publication_target"])
+            if target.target_version_id != result_identity:
+                raise ValueError("Artifact commit result identity mismatch")
+            return RcaVersion(
+                target.target_version_id,
+                target.aggregate_id,
+                data["version_number"],  # type: ignore[arg-type]
+                data["attempt_id"],  # type: ignore[arg-type]
+                _decode_artifact_object(data["artifact"]),
+                target.publication_operation_id,
+                VersionRole.COMMITTED_UNPUBLISHED,
+            )
+        except RcaStoreIntegrityError:
+            raise
+        except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError, RcaDomainError) as exc:
+            raise RcaStoreIntegrityError(
+                RcaErrorCode.INTEGRITY_CORRUPTION,
+                "malformed persisted immutable Version/Artifact",
+            ) from exc
+
+    def _read_publication_result(
+        self, publication_operation_id: str
+    ) -> PublicationResult | None:
+        matches: list[PublicationResult] = []
+        for row in self._db.execute(
+            """SELECT operation_id, semantic_identity, result_identity, occurred_at
+                 FROM rca_operation_receipts WHERE command_kind='COMMIT_ARTIFACT'"""
+        ):
+            version = self._decode_version_receipt(tuple(row))
+            if version.publication_operation_id == publication_operation_id:
+                payload = json.loads(row[1])
+                target = _publication_target_from_object(payload["publication_target"])
+                matches.append(
+                    PublicationResult(
+                        target,
+                        PublicationDisposition.A_SIDE_COMMITTED,
+                        _parse_timestamp(row[3]),
+                    )
+                )
+        if len(matches) > 1:
+            self._corruption("publication_operation_id resolves to multiple receipts")
+        return None if not matches else matches[0]
+
+    def _validate_version_authority(self, version: RcaVersion) -> None:
+        aggregate = self._read_aggregate(version.aggregate_id)
+        view = self._read_attempt_lineage(version.attempt_id)
+        result = self._read_publication_result(version.publication_operation_id)
+        if aggregate is None or view is None or result is None:
+            self._corruption("Version has dangling Aggregate, Attempt, or publication authority")
+        if view.attempt.lineage.aggregate_id != version.aggregate_id:
+            self._corruption("Version and Attempt belong to different Aggregates")
+        if view.attempt.lifecycle is not GenerationLifecycle.COMPLETED:
+            self._corruption("Version references a non-successful Attempt")
+        if not _artifact_matches_lineage(version.artifact, view.attempt.lineage):
+            self._corruption("Version Artifact provenance contradicts Attempt lineage")
+        if result.target != PublicationTargetIdentity(
+            version.publication_operation_id,
+            version.aggregate_id,
+            aggregate.incident_id,
+            version.version_id,
+            result.target.expected_current_version_id,
+        ):
+            self._corruption("Version and A-side publication receipt contradict")
+        self._validate_publication_result(result)
+
+    def _validate_publication_result(self, result: PublicationResult) -> None:
+        if result.disposition is not PublicationDisposition.A_SIDE_COMMITTED:
+            self._corruption("Phase-4 receipt claims a non-local publication result")
+        version = self._read_version(result.target.target_version_id)
+        aggregate = self._read_aggregate(result.target.aggregate_id)
+        if version is None or aggregate is None:
+            self._corruption("A-side receipt has a dangling Version or Aggregate")
+        if (
+            version.publication_operation_id != result.target.publication_operation_id
+            or version.aggregate_id != result.target.aggregate_id
+            or aggregate.incident_id != result.target.incident_id
+        ):
+            self._corruption("A-side receipt contradicts immutable publication target")
+
+    def _require_commit_receipt_identity(
+        self,
+        receipt: tuple[object, ...],
+        artifact: RcaArtifact,
+        target: PublicationTargetIdentity,
+        version_id: str,
+        operation_id: str,
+        attempt_id: str,
+    ) -> None:
+        self._validate_receipt(receipt)
+        if receipt[1] != "COMMIT_ARTIFACT":
+            raise RcaDomainError(
+                RcaErrorCode.RECEIPT_REPLAY_CONFLICT,
+                "operation_id resolves to a different Candidate-A command",
+                operation_id=operation_id,
+                attempt_id=attempt_id,
+                version_id=version_id,
+            )
+        try:
+            payload = json.loads(receipt[2])  # type: ignore[arg-type]
+            version_number = payload["version_number"]
+            semantic_identity = _commit_semantic_identity(
+                operation_id, attempt_id, artifact, target, version_number
+            )
+        except (KeyError, TypeError, json.JSONDecodeError):
+            self._corruption("Artifact commit receipt is malformed")
+        if (
+            receipt[2] != semantic_identity
+            or receipt[3] != version_id
+        ):
+            raise RcaDomainError(
+                RcaErrorCode.RECEIPT_REPLAY_CONFLICT,
+                "operation_id resolves to a contradictory Artifact commit",
+                operation_id=operation_id,
+                attempt_id=attempt_id,
+                version_id=version_id,
+            )
 
     def _insert_receipt(
         self,
@@ -811,6 +1226,21 @@ class SqliteRcaStore:
                     view, outcome.identity.try_ordinal
                 ) != outcome:
                     raise ValueError("Try receipt contradicts its authoritative outcome")
+            elif kind == "COMMIT_ARTIFACT":
+                if not isinstance(payload, dict):
+                    raise ValueError("Artifact receipt has no semantic identity")
+                version = self._read_version(result_identity)  # type: ignore[arg-type]
+                if version is None:
+                    raise ValueError("Artifact receipt references missing Version")
+                expected = _commit_semantic_identity(
+                    operation_id,  # type: ignore[arg-type]
+                    payload["attempt_id"],  # type: ignore[arg-type]
+                    _decode_artifact_object(payload["artifact"]),
+                    _publication_target_from_object(payload["publication_target"]),
+                    payload["version_number"],  # type: ignore[arg-type]
+                )
+                if encoded != expected or version.attempt_id != payload["attempt_id"]:
+                    raise ValueError("Artifact receipt contradicts immutable Version")
             else:
                 raise ValueError("unknown receipt command kind")
         except RcaStoreIntegrityError:
@@ -957,6 +1387,188 @@ def _try_outcome_from_receipt(receipt: tuple[object, ...]) -> LogicalTryOutcome:
         ) from exc
 
 
+def _artifact_matches_lineage(artifact: RcaArtifact, lineage: AttemptLineage) -> bool:
+    provenance = artifact.provenance
+    return (
+        provenance.evidence_snapshot_id == lineage.evidence_snapshot_id
+        and provenance.evidence_revision_id == lineage.evidence_revision_id
+        and provenance.knowledge_snapshot_id == lineage.knowledge_snapshot_id
+        and provenance.generation == lineage.generation_provenance
+    )
+
+
+def _encode_artifact(artifact: RcaArtifact) -> str:
+    return json.dumps(
+        asdict(artifact),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+
+
+def _expect_object(value: object, keys: set[str], label: str) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != keys:
+        raise ValueError(f"{label} has unsupported or missing fields")
+    return value
+
+
+def _decode_artifact_object(value: object) -> RcaArtifact:
+    data = _expect_object(
+        value,
+        {
+            "summary", "severity_assessment", "diagnostic_conclusion", "hypotheses",
+            "remediation_actions", "prevention_actions", "limitations",
+            "evidence_completeness", "knowledge_gap", "provenance",
+        },
+        "Artifact",
+    )
+    provenance_data = _expect_object(
+        data["provenance"],
+        {
+            "evidence_snapshot_id", "evidence_revision_id", "knowledge_snapshot_id",
+            "evidence_references", "knowledge_references", "generation",
+        },
+        "Artifact provenance",
+    )
+    generation_data = _expect_object(
+        provenance_data["generation"],
+        {"provider_id", "model_id", "prompt_id", "configuration_id", "credential_profile_id"},
+        "generation provenance",
+    )
+    generation = GenerationProvenance(**generation_data)  # type: ignore[arg-type]
+    evidence_items = tuple(
+        _expect_object(
+            item, {"reference_id", "statement_kind", "description"}, "evidence reference"
+        )
+        for item in _object_list(provenance_data["evidence_references"], "evidence references")
+    )
+    evidence = tuple(
+        EvidenceReference(
+            item["reference_id"],  # type: ignore[arg-type]
+            ArtifactStatementKind(item["statement_kind"]),
+            item["description"],  # type: ignore[arg-type]
+        )
+        for item in evidence_items
+    )
+    knowledge = tuple(
+        KnowledgeReference(
+            **_expect_object(
+                item,
+                {"reference_id", "corpus_id", "index_id", "document_id", "document_version", "section_id", "chunk_id"},
+                "knowledge reference",
+            )
+        )
+        for item in _object_list(provenance_data["knowledge_references"], "knowledge references")
+    )
+    provenance = ArtifactProvenance(
+        provenance_data["evidence_snapshot_id"],  # type: ignore[arg-type]
+        provenance_data["evidence_revision_id"],  # type: ignore[arg-type]
+        provenance_data["knowledge_snapshot_id"],  # type: ignore[arg-type]
+        evidence,
+        knowledge,
+        generation,
+    )
+    hypotheses = tuple(
+        RcaHypothesis(
+            item["rank"],  # type: ignore[arg-type]
+            item["statement"],  # type: ignore[arg-type]
+            EvidentialSupport(item["evidential_support"]),
+            tuple(_string_list(item["supporting_evidence_ids"], "supporting evidence")),
+            tuple(_string_list(item["contradicting_evidence_ids"], "contradicting evidence")),
+            tuple(_string_list(item["knowledge_reference_ids"], "hypothesis knowledge")),
+            item["reasoning_summary"],  # type: ignore[arg-type]
+        )
+        for item in (
+            _expect_object(
+                raw,
+                {"rank", "statement", "evidential_support", "supporting_evidence_ids", "contradicting_evidence_ids", "knowledge_reference_ids", "reasoning_summary"},
+                "hypothesis",
+            )
+            for raw in _object_list(data["hypotheses"], "hypotheses")
+        )
+    )
+
+    def decode_actions(raw: object, label: str) -> tuple[RcaAction, ...]:
+        actions: list[RcaAction] = []
+        for value in _object_list(raw, label):
+            item = _expect_object(
+                value, {"description", "source", "knowledge_reference_ids"}, label
+            )
+            actions.append(
+                RcaAction(
+                    item["description"],  # type: ignore[arg-type]
+                    GuidanceSource(item["source"]),
+                    tuple(_string_list(item["knowledge_reference_ids"], label)),
+                )
+            )
+        return tuple(actions)
+
+    return RcaArtifact(
+        data["summary"],  # type: ignore[arg-type]
+        data["severity_assessment"],  # type: ignore[arg-type]
+        DiagnosticConclusion(data["diagnostic_conclusion"]),
+        hypotheses,
+        decode_actions(data["remediation_actions"], "remediation actions"),
+        decode_actions(data["prevention_actions"], "prevention actions"),
+        tuple(_string_list(data["limitations"], "limitations")),
+        EvidenceCompleteness(data["evidence_completeness"]),
+        data["knowledge_gap"],  # type: ignore[arg-type]
+        provenance,
+    )
+
+
+def _object_list(value: object, label: str) -> list[object]:
+    if not isinstance(value, list):
+        raise ValueError(f"{label} must be an array")
+    return value
+
+
+def _string_list(value: object, label: str) -> list[str]:
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise ValueError(f"{label} must be a string array")
+    return value
+
+
+def _publication_target_object(target: PublicationTargetIdentity) -> dict[str, object]:
+    return {
+        "publication_operation_id": target.publication_operation_id,
+        "aggregate_id": target.aggregate_id,
+        "incident_id": target.incident_id,
+        "target_version_id": target.target_version_id,
+        "expected_current_version_id": target.expected_current_version_id,
+    }
+
+
+def _publication_target_from_object(value: object) -> PublicationTargetIdentity:
+    data = _expect_object(
+        value,
+        {"publication_operation_id", "aggregate_id", "incident_id", "target_version_id", "expected_current_version_id"},
+        "publication target",
+    )
+    return PublicationTargetIdentity(**data)  # type: ignore[arg-type]
+
+
+def _commit_semantic_identity(
+    operation_id: str,
+    attempt_id: str,
+    artifact: RcaArtifact,
+    target: PublicationTargetIdentity,
+    version_number: int,
+) -> str:
+    return json.dumps(
+        {
+            "operation_id": operation_id,
+            "attempt_id": attempt_id,
+            "artifact": json.loads(_encode_artifact(artifact)),
+            "publication_target": _publication_target_object(target),
+            "version_number": version_number,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+
+
 def _has_unique_column(connection: sqlite3.Connection, table: str, column: str) -> bool:
     for index in connection.execute(f"PRAGMA index_list({table})"):
         if not index[2]:
@@ -980,6 +1592,24 @@ def _has_unique_partial_try_identity(connection: sqlite3.Connection) -> bool:
             and definition is not None
             and isinstance(definition[0], str)
             and "WHERE command_kind = 'RECORD_TRY'" in definition[0]
+        ):
+            return True
+    return False
+
+
+def _has_unique_partial_commit_identity(connection: sqlite3.Connection) -> bool:
+    for index in connection.execute("PRAGMA index_list(rca_operation_receipts)"):
+        if not index[2] or not index[4]:
+            continue
+        columns = [row[2] for row in connection.execute(f"PRAGMA index_info({index[1]})")]
+        definition = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='index' AND name=?", (index[1],)
+        ).fetchone()
+        if (
+            columns == ["result_identity"]
+            and definition is not None
+            and isinstance(definition[0], str)
+            and "WHERE command_kind = 'COMMIT_ARTIFACT'" in definition[0]
         ):
             return True
     return False
