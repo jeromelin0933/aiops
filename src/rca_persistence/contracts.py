@@ -632,6 +632,9 @@ class PublicationResult:
         if self.disposition is PublicationDisposition.APPLIED:
             if self.resulting_current_version_id != self.target.target_version_id:
                 _fail("APPLIED publication must make its target the resulting Current")
+        elif self.disposition is PublicationDisposition.A_SIDE_COMMITTED:
+            if self.resulting_current_version_id is not None:
+                _fail("A-side commit is not authorized Current evidence")
 
 
 @dataclass(frozen=True, slots=True)
@@ -655,6 +658,8 @@ class CurrentRcaRead:
     current: CurrentRca
     version: RcaVersion
     artifact: RcaArtifact
+    attempt_lineage: AttemptLineageRead
+    publication_result: PublicationResult
 
     def __post_init__(self) -> None:
         if not isinstance(self.current, CurrentRca):
@@ -663,6 +668,10 @@ class CurrentRcaRead:
             _fail("version must be RcaVersion", "version")
         if not isinstance(self.artifact, RcaArtifact):
             _fail("artifact must be RcaArtifact", "artifact")
+        if not isinstance(self.attempt_lineage, AttemptLineageRead):
+            _fail("attempt_lineage must be AttemptLineageRead", "attempt_lineage")
+        if not isinstance(self.publication_result, PublicationResult):
+            _fail("publication_result must be PublicationResult", "publication_result")
         if self.current.aggregate_id != self.version.aggregate_id:
             _fail("Current and Version must belong to the same Aggregate", "version.aggregate_id")
         if self.current.current_version_id != self.version.version_id:
@@ -671,6 +680,14 @@ class CurrentRcaRead:
             _fail("Current read Version must have CURRENT role", "version.role")
         if self.version.artifact != self.artifact:
             _fail("Current Version and returned Artifact must be identical", "artifact")
+        if self.attempt_lineage.attempt.lineage.attempt_id != self.version.attempt_id:
+            _fail("Current lineage must identify the Version Attempt", "attempt_lineage")
+        if (
+            self.publication_result.disposition is not PublicationDisposition.APPLIED
+            or self.publication_result.target.target_version_id != self.version.version_id
+            or self.publication_result.resulting_current_version_id != self.version.version_id
+        ):
+            _fail("Current requires matching authorized APPLIED publication evidence")
 
 
 @dataclass(frozen=True, slots=True)
@@ -742,6 +759,7 @@ class RcaReadPort(Protocol):
     def get_artifact(self, version_id: str) -> RcaArtifact | None: ...
     def get_artifact_provenance(self, version_id: str) -> ArtifactProvenance | None: ...
     def get_current(self, aggregate_id: str) -> CurrentRcaRead | None: ...
+    def get_freshness_lineage(self, aggregate_id: str) -> tuple[CurrentRca, ...]: ...
     def get_publication_result(self, publication_operation_id: str) -> PublicationResult | None: ...
     def enumerate_recovery_candidates(self) -> tuple[RecoveryCandidate, ...]: ...
     def validate_local_readiness(self) -> None: ...

@@ -79,6 +79,9 @@ def test_new_schema_initializes_with_explicit_current_version_and_is_ready(tmp_p
         "rca_aggregates",
         "rca_attempts",
         "rca_operation_receipts",
+        "rca_publication_results",
+        "rca_currents",
+        "rca_freshness_history",
     }
     assert metadata == [("rca_store_schema_version", SCHEMA_VERSION)]
 

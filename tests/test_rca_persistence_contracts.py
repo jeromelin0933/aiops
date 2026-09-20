@@ -269,16 +269,29 @@ def test_current_read_returns_one_coherent_relationship_version_and_artifact() -
     artifact = _artifact()
     current = CurrentRca("AGG-1", "VER-1", CurrentFreshness.FRESH, "ER-1")
     version = RcaVersion("VER-1", "AGG-1", 1, "ATT-1", artifact, "PUB-1", VersionRole.CURRENT)
-    view = CurrentRcaRead(current, version, artifact)
+    outcome = LogicalTryOutcome(
+        LogicalTryIdentity("ATT-1", 1), LogicalTryResultKind.VALIDATED_RESULT,
+        AdmittedRetryDisposition.NON_RETRYABLE, NOW, validated_result_id="VALID-1",
+    )
+    lineage = AttemptLineageRead(
+        GenerationAttempt(_lineage(), GenerationLifecycle.COMPLETED, 1), (outcome,)
+    )
+    publication = PublicationResult(
+        PublicationTargetIdentity("PUB-1", "AGG-1", "INC-1", "VER-1", None),
+        PublicationDisposition.APPLIED,
+        NOW,
+        "VER-1",
+    )
+    view = CurrentRcaRead(current, version, artifact, lineage, publication)
 
     assert view.current.current_version_id == view.version.version_id
     assert view.artifact is artifact
     assert get_type_hints(RcaReadPort.get_current)["return"] == CurrentRcaRead | None
 
     with pytest.raises(RcaContractError, match="identify the returned Version"):
-        CurrentRcaRead(replace(current, current_version_id="VER-OTHER"), version, artifact)
+        CurrentRcaRead(replace(current, current_version_id="VER-OTHER"), version, artifact, lineage, publication)
     with pytest.raises(RcaContractError, match="returned Artifact"):
-        CurrentRcaRead(current, version, replace(artifact, summary="Different Artifact"))
+        CurrentRcaRead(current, version, replace(artifact, summary="Different Artifact"), lineage, publication)
 
 
 def test_attempt_read_returns_one_coherent_core_summary_and_ordered_try_history() -> None:

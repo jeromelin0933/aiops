@@ -31,8 +31,8 @@ def test_a_side_receipt_is_local_only_and_discoverable(tmp_path) -> None:
         assert candidates[0].kind is RecoveryCandidateKind.COMMITTED_UNPUBLISHED_VERSION
         assert candidates[0].version_id == "VER-1"
         assert candidates[0].publication_operation_id == "PUB-1"
-        assert not hasattr(store, "complete_authorized_publication")
-        assert not hasattr(store, "apply_authorized_freshness")
+        assert hasattr(store, "complete_authorized_publication")
+        assert hasattr(store, "apply_authorized_freshness")
 
 
 def test_same_command_and_response_loss_replay_return_original_identities(tmp_path) -> None:
@@ -95,4 +95,4 @@ def test_artifact_commit_does_not_mutate_incident_or_current_state(tmp_path) -> 
         version = commit(store)
         assert store.get_aggregate("AGG-1") == before
         assert version.role is VersionRole.COMMITTED_UNPUBLISHED
-        assert "get_current" not in SqliteRcaStore.__dict__
+        assert store.get_current("AGG-1") is None

@@ -1,8 +1,9 @@
 """Independent SQLite authority for SPEC-012 Candidate-A facts.
 
-The store owns local Aggregate, Attempt, Try, immutable Version/Artifact, and
-A-side publication-receipt truth.  It deliberately does not mutate Incident,
-promote Current, or claim that a local receipt is full publication.
+The store owns local Aggregate, Attempt, Try, immutable Version/Artifact,
+A-side publication receipts, authorized publication results, and canonical
+Current/freshness truth.  It deliberately does not mutate Incident or treat a
+local A-side receipt as full publication authority.
 """
 
 from __future__ import annotations
@@ -24,6 +25,9 @@ from .contracts import (
     AttemptLineage,
     AttemptLineageRead,
     CreateAggregateRequest,
+    CurrentFreshness,
+    CurrentRca,
+    CurrentRcaRead,
     DiagnosticConclusion,
     EvidenceCompleteness,
     EvidenceReference,
@@ -53,11 +57,15 @@ from .contracts import (
 )
 
 
-SCHEMA_VERSION = "4"
-_RECOGNIZED_OLDER_SCHEMA_VERSIONS = frozenset({"1", "2", "3"})
+SCHEMA_VERSION = "6"
+_RECOGNIZED_OLDER_SCHEMA_VERSIONS = frozenset({"1", "2", "3", "4", "5"})
 _METADATA_KEY = "rca_store_schema_version"
 _TABLES = frozenset(
-    {"rca_store_metadata", "rca_aggregates", "rca_attempts", "rca_operation_receipts"}
+    {
+        "rca_store_metadata", "rca_aggregates", "rca_attempts",
+        "rca_operation_receipts", "rca_publication_results", "rca_currents",
+        "rca_freshness_history",
+    }
 )
 
 
@@ -74,7 +82,7 @@ class RcaStoreIntegrityError(RcaDomainError):
 
 
 class SqliteRcaStore:
-    """Configurable-path Candidate-A SQLite authority through Phase 4."""
+    """Configurable-path Candidate-A SQLite authority."""
 
     def __init__(
         self,
@@ -454,6 +462,216 @@ class SqliteRcaStore:
         except sqlite3.Error as exc:
             raise _sqlite_error(exc, "RCA Store cannot atomically commit validated Artifact") from exc
 
+    def complete_authorized_publication(
+        self, result: PublicationResult
+    ) -> PublicationResult:
+        """Record an external authorized result and apply its local effect atomically."""
+
+        if not isinstance(result, PublicationResult):
+            raise TypeError("result must be PublicationResult")
+        if result.disposition is PublicationDisposition.A_SIDE_COMMITTED:
+            raise RcaDomainError(
+                RcaErrorCode.INVALID_CONTRACT,
+                "A-side commit evidence cannot authorize Current promotion",
+                operation_id=result.target.publication_operation_id,
+            )
+        try:
+            with self._write_transaction():
+                existing = self._read_completed_publication_result(
+                    result.target.publication_operation_id
+                )
+                if existing is not None:
+                    if existing != result:
+                        raise RcaDomainError(
+                            RcaErrorCode.PUBLICATION_EVIDENCE_INCONSISTENCY,
+                            "publication result replay contradicts durable authorized evidence",
+                            operation_id=result.target.publication_operation_id,
+                            aggregate_id=result.target.aggregate_id,
+                            version_id=result.target.target_version_id,
+                        )
+                    return existing
+
+                local = self._read_a_side_publication_result(
+                    result.target.publication_operation_id
+                )
+                if local is None or local.target != result.target:
+                    raise RcaDomainError(
+                        RcaErrorCode.PUBLICATION_EVIDENCE_INCONSISTENCY,
+                        "authorized publication result has no matching A-side target receipt",
+                        operation_id=result.target.publication_operation_id,
+                        aggregate_id=result.target.aggregate_id,
+                        version_id=result.target.target_version_id,
+                    )
+                version = self._read_version(result.target.target_version_id)
+                if version is None:
+                    self._corruption("publication result targets a missing Version")
+                current = self._read_current_state(result.target.aggregate_id)
+
+                if result.disposition is PublicationDisposition.APPLIED:
+                    actual = None if current is None else current.current_version_id
+                    if actual != result.target.expected_current_version_id:
+                        raise RcaDomainError(
+                            RcaErrorCode.PUBLICATION_EVIDENCE_INCONSISTENCY,
+                            "APPLIED result contradicts the fresh local Current precondition",
+                            operation_id=result.target.publication_operation_id,
+                            aggregate_id=result.target.aggregate_id,
+                            version_id=result.target.target_version_id,
+                        )
+                    basis = version.artifact.provenance.evidence_revision_id
+                    self._append_freshness_history(
+                        CurrentRca(
+                            result.target.aggregate_id,
+                            result.target.target_version_id,
+                            CurrentFreshness.FRESH,
+                            basis,
+                        ),
+                        result.target.publication_operation_id,
+                    )
+                    self._db.execute(
+                        """INSERT INTO rca_currents(
+                               aggregate_id, current_version_id, freshness,
+                               material_evidence_revision_basis, updated_at
+                           ) VALUES (?, ?, 'FRESH', ?, ?)
+                           ON CONFLICT(aggregate_id) DO UPDATE SET
+                               current_version_id=excluded.current_version_id,
+                               freshness=excluded.freshness,
+                               material_evidence_revision_basis=excluded.material_evidence_revision_basis,
+                               updated_at=excluded.updated_at""",
+                        (
+                            result.target.aggregate_id,
+                            result.target.target_version_id,
+                            basis,
+                            _timestamp(result.recorded_at),
+                        ),
+                    )
+                else:
+                    actual = None if current is None else current.current_version_id
+                    if (
+                        result.resulting_current_version_id is not None
+                        and result.resulting_current_version_id != actual
+                    ):
+                        raise RcaDomainError(
+                            RcaErrorCode.PUBLICATION_EVIDENCE_INCONSISTENCY,
+                            "non-success result contradicts the preserved local Current",
+                            operation_id=result.target.publication_operation_id,
+                            aggregate_id=result.target.aggregate_id,
+                            version_id=result.target.target_version_id,
+                        )
+
+                self._insert_publication_result(result)
+                return result
+        except RcaDomainError:
+            raise
+        except sqlite3.Error as exc:
+            raise _sqlite_error(exc, "RCA Store cannot complete authorized publication") from exc
+
+    def apply_authorized_freshness(self, current: CurrentRca) -> CurrentRca:
+        """Apply Candidate-B-authorized materiality truth without deriving it locally."""
+
+        if not isinstance(current, CurrentRca):
+            raise TypeError("current must be CurrentRca")
+        try:
+            with self._write_transaction():
+                stored = self._read_current_state(current.aggregate_id)
+                if stored is None:
+                    raise RcaDomainError(
+                        RcaErrorCode.NOT_FOUND,
+                        "Aggregate has no canonical Current",
+                        aggregate_id=current.aggregate_id,
+                        version_id=current.current_version_id,
+                    )
+                if stored == current:
+                    return stored
+                if stored.current_version_id != current.current_version_id:
+                    raise RcaDomainError(
+                        RcaErrorCode.SEMANTIC_CONFLICT,
+                        "freshness evidence was based on a superseded Current",
+                        aggregate_id=current.aggregate_id,
+                        version_id=current.current_version_id,
+                    )
+                if stored.freshness is CurrentFreshness.STALE:
+                    raise RcaDomainError(
+                        RcaErrorCode.SEMANTIC_CONFLICT,
+                        "freshness update cannot replace an existing authoritative stale basis",
+                        aggregate_id=current.aggregate_id,
+                        version_id=current.current_version_id,
+                    )
+                if current.freshness is not CurrentFreshness.STALE:
+                    raise RcaDomainError(
+                        RcaErrorCode.SEMANTIC_CONFLICT,
+                        "only authorized material evidence may transition FRESH Current to STALE",
+                        aggregate_id=current.aggregate_id,
+                        version_id=current.current_version_id,
+                    )
+                self._append_freshness_history(current, None)
+                self._db.execute(
+                    """UPDATE rca_currents
+                          SET freshness=?, material_evidence_revision_basis=?
+                        WHERE aggregate_id=? AND current_version_id=?""",
+                    (
+                        current.freshness.value,
+                        current.material_evidence_revision_basis,
+                        current.aggregate_id,
+                        current.current_version_id,
+                    ),
+                )
+                return current
+        except RcaDomainError:
+            raise
+        except sqlite3.Error as exc:
+            raise _sqlite_error(exc, "RCA Store cannot apply authorized freshness") from exc
+
+    def get_current(self, aggregate_id: str) -> CurrentRcaRead | None:
+        _reference(aggregate_id, "aggregate_id")
+        try:
+            with self._read_snapshot():
+                current = self._read_current_state(aggregate_id)
+                if current is None:
+                    if self._read_freshness_history(aggregate_id):
+                        self._corruption(
+                            "freshness lineage proves a missing canonical Current"
+                        )
+                    if self._has_durable_current_evidence(aggregate_id):
+                        self._corruption(
+                            "APPLIED publication proves a missing canonical Current"
+                        )
+                    return None
+                version = self._read_version(current.current_version_id)
+                if version is None:
+                    self._corruption("Current references a missing Version")
+                lineage = self._read_attempt_lineage(version.attempt_id)
+                result = self._read_completed_publication_result(
+                    version.publication_operation_id
+                )
+                if lineage is None or result is None:
+                    self._corruption("Current has dangling lineage or publication evidence")
+                self._validate_version_authority(version)
+                freshness_lineage = self._read_freshness_history(aggregate_id)
+                self._validate_freshness_history(aggregate_id, freshness_lineage)
+                return CurrentRcaRead(current, version, version.artifact, lineage, result)
+        except RcaDomainError:
+            raise
+        except sqlite3.Error as exc:
+            raise _sqlite_error(exc, "RCA Store cannot read canonical Current") from exc
+
+    def get_freshness_lineage(self, aggregate_id: str) -> tuple[CurrentRca, ...]:
+        """Return ordered, append-only freshness facts across Current replacements."""
+
+        _reference(aggregate_id, "aggregate_id")
+        try:
+            with self._read_snapshot():
+                if self._read_aggregate(aggregate_id) is None:
+                    if self._read_freshness_history(aggregate_id):
+                        self._corruption("freshness lineage references a missing Aggregate")
+                    return ()
+                lineage = self._read_freshness_history(aggregate_id)
+                self._validate_freshness_history(aggregate_id, lineage)
+                return lineage
+        except RcaDomainError:
+            raise
+        except sqlite3.Error as exc:
+            raise _sqlite_error(exc, "RCA Store cannot read freshness lineage") from exc
+
     def get_version(self, version_id: str) -> RcaVersion | None:
         _reference(version_id, "version_id")
         try:
@@ -511,25 +729,81 @@ class SqliteRcaStore:
     def enumerate_recovery_candidates(self) -> tuple[RecoveryCandidate, ...]:
         try:
             with self._read_snapshot():
-                candidates = tuple(
-                    RecoveryCandidate(
-                        RecoveryCandidateKind.COMMITTED_UNPUBLISHED_VERSION,
-                        version.aggregate_id,
-                        attempt_id=version.attempt_id,
-                        version_id=version.version_id,
-                        publication_operation_id=version.publication_operation_id,
-                    )
-                    for version in sorted(
-                        self._read_all_versions(),
-                        key=lambda item: (item.aggregate_id, item.version_number),
+                self._validate_authority_locked()
+                candidates: list[RecoveryCandidate] = []
+                versions = sorted(
+                    self._read_all_versions(),
+                    key=lambda item: (item.aggregate_id, item.version_number),
+                )
+                for version in versions:
+                    result = self._read_publication_result(version.publication_operation_id)
+                    if result is None:
+                        self._corruption("recovery enumeration found missing publication authority")
+                    if result.disposition is PublicationDisposition.A_SIDE_COMMITTED:
+                        candidates.append(
+                            RecoveryCandidate(
+                                RecoveryCandidateKind.COMMITTED_UNPUBLISHED_VERSION,
+                                version.aggregate_id,
+                                attempt_id=version.attempt_id,
+                                version_id=version.version_id,
+                                publication_operation_id=version.publication_operation_id,
+                            )
+                        )
+                    elif result.disposition is not PublicationDisposition.APPLIED:
+                        candidates.append(
+                            RecoveryCandidate(
+                                RecoveryCandidateKind.UNRESOLVED_PUBLICATION,
+                                version.aggregate_id,
+                                attempt_id=version.attempt_id,
+                                version_id=version.version_id,
+                                publication_operation_id=version.publication_operation_id,
+                            )
+                        )
+                for row in self._db.execute(
+                    "SELECT attempt_id FROM rca_attempts ORDER BY aggregate_id, attempt_id"
+                ):
+                    view = self._read_attempt_lineage(row[0])
+                    if view is None:
+                        self._corruption("recovery enumeration found a missing Attempt")
+                    if (
+                        view.attempt.lifecycle is GenerationLifecycle.FAILED
+                        and view.try_outcomes
+                        and view.try_outcomes[-1].retry_disposition
+                        is AdmittedRetryDisposition.RETRYABLE
+                    ):
+                        candidates.append(
+                            RecoveryCandidate(
+                                RecoveryCandidateKind.ATTEMPT_TRY_RECONCILIATION,
+                                view.attempt.lineage.aggregate_id,
+                                attempt_id=view.attempt.lineage.attempt_id,
+                            )
+                        )
+                for row in self._db.execute(
+                    "SELECT aggregate_id FROM rca_currents ORDER BY aggregate_id"
+                ):
+                    current = self._read_current_state(row[0])
+                    if current is None:
+                        self._corruption("recovery enumeration found a missing Current")
+                    if current.freshness is CurrentFreshness.STALE:
+                        candidates.append(
+                            RecoveryCandidate(
+                                RecoveryCandidateKind.STALE_CURRENT,
+                                current.aggregate_id,
+                                version_id=current.current_version_id,
+                            )
+                        )
+                return tuple(
+                    sorted(
+                        candidates,
+                        key=lambda item: (
+                            item.aggregate_id,
+                            item.kind.value,
+                            item.attempt_id or "",
+                            item.version_id or "",
+                            item.publication_operation_id or "",
+                        ),
                     )
                 )
-                for candidate in candidates:
-                    version = self._read_version(candidate.version_id)  # type: ignore[arg-type]
-                    if version is None:
-                        self._corruption("recovery enumeration found a missing Version")
-                    self._validate_version_authority(version)
-                return candidates
         except RcaDomainError:
             raise
         except sqlite3.Error as exc:
@@ -575,7 +849,7 @@ class SqliteRcaStore:
             raise _sqlite_error(exc, "RCA Store cannot read Attempt lineage") from exc
 
     def validate_local_readiness(self) -> None:
-        """Validate all local authority through Phase 3 without skipping bad records."""
+        """Validate all local authority without skipping bad records."""
         try:
             with self._read_snapshot():
                 self._validate_authority_locked()
@@ -668,6 +942,31 @@ class SqliteRcaStore:
                         result_identity TEXT NOT NULL,
                         occurred_at TEXT NOT NULL
                     );
+                    CREATE TABLE rca_publication_results (
+                        publication_operation_id TEXT PRIMARY KEY NOT NULL,
+                        target_identity TEXT NOT NULL,
+                        disposition TEXT NOT NULL CHECK(disposition IN ('APPLIED','PRECONDITION_SUPERSEDED','TARGET_ALREADY_CURRENT_CONFLICT','REPAIR_REQUIRED')),
+                        resulting_current_version_id TEXT,
+                        recorded_at TEXT NOT NULL
+                    );
+                    CREATE TABLE rca_currents (
+                        aggregate_id TEXT PRIMARY KEY NOT NULL,
+                        current_version_id TEXT NOT NULL UNIQUE,
+                        freshness TEXT NOT NULL CHECK(freshness IN ('FRESH','STALE')),
+                        material_evidence_revision_basis TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        FOREIGN KEY(aggregate_id) REFERENCES rca_aggregates(aggregate_id)
+                    );
+                    CREATE TABLE rca_freshness_history (
+                        aggregate_id TEXT NOT NULL,
+                        transition_ordinal INTEGER NOT NULL CHECK(transition_ordinal > 0),
+                        version_id TEXT NOT NULL,
+                        freshness TEXT NOT NULL CHECK(freshness IN ('FRESH','STALE')),
+                        material_evidence_revision_basis TEXT NOT NULL,
+                        source_publication_operation_id TEXT,
+                        PRIMARY KEY(aggregate_id, transition_ordinal),
+                        FOREIGN KEY(aggregate_id) REFERENCES rca_aggregates(aggregate_id)
+                    );
                     CREATE INDEX rca_attempts_by_aggregate
                         ON rca_attempts(aggregate_id, attempt_id);
                     CREATE INDEX rca_receipts_by_result
@@ -753,6 +1052,18 @@ class SqliteRcaStore:
                 "operation_id", "command_kind", "semantic_identity",
                 "result_identity", "occurred_at",
             },
+            "rca_publication_results": {
+                "publication_operation_id", "target_identity", "disposition",
+                "resulting_current_version_id", "recorded_at",
+            },
+            "rca_currents": {
+                "aggregate_id", "current_version_id", "freshness",
+                "material_evidence_revision_basis", "updated_at",
+            },
+            "rca_freshness_history": {
+                "aggregate_id", "transition_ordinal", "version_id", "freshness",
+                "material_evidence_revision_basis", "source_publication_operation_id",
+            },
         }
         for table, expected in expected_columns.items():
             actual = {row[1] for row in self._db.execute(f"PRAGMA table_info({table})")}
@@ -767,6 +1078,9 @@ class SqliteRcaStore:
             ("rca_aggregates", "incident_id"),
             ("rca_attempts", "attempt_id"),
             ("rca_operation_receipts", "operation_id"),
+            ("rca_publication_results", "publication_operation_id"),
+            ("rca_currents", "aggregate_id"),
+            ("rca_currents", "current_version_id"),
         ):
             if not _has_unique_column(self._db, table, column):
                 raise RcaStoreIntegrityError(
@@ -788,6 +1102,38 @@ class SqliteRcaStore:
             raise RcaStoreIntegrityError(
                 RcaErrorCode.SCHEMA_INCOMPATIBILITY,
                 "Candidate-A Attempt table lacks its local Aggregate reference",
+            )
+        current_foreign_keys = self._db.execute(
+            "PRAGMA foreign_key_list(rca_currents)"
+        ).fetchall()
+        if len(current_foreign_keys) != 1 or (
+            current_foreign_keys[0][2], current_foreign_keys[0][3], current_foreign_keys[0][4]
+        ) != ("rca_aggregates", "aggregate_id", "aggregate_id"):
+            raise RcaStoreIntegrityError(
+                RcaErrorCode.SCHEMA_INCOMPATIBILITY,
+                "Candidate-A Current table lacks its local Aggregate reference",
+            )
+        freshness_foreign_keys = self._db.execute(
+            "PRAGMA foreign_key_list(rca_freshness_history)"
+        ).fetchall()
+        if len(freshness_foreign_keys) != 1 or (
+            freshness_foreign_keys[0][2],
+            freshness_foreign_keys[0][3],
+            freshness_foreign_keys[0][4],
+        ) != ("rca_aggregates", "aggregate_id", "aggregate_id"):
+            raise RcaStoreIntegrityError(
+                RcaErrorCode.SCHEMA_INCOMPATIBILITY,
+                "Candidate-A freshness history lacks its local Aggregate reference",
+            )
+        freshness_primary_key = {
+            row[1]: row[5]
+            for row in self._db.execute("PRAGMA table_info(rca_freshness_history)")
+            if row[5]
+        }
+        if freshness_primary_key != {"aggregate_id": 1, "transition_ordinal": 2}:
+            raise RcaStoreIntegrityError(
+                RcaErrorCode.SCHEMA_INCOMPATIBILITY,
+                "Candidate-A freshness history lacks ordered append-only identity",
             )
         if not _has_unique_partial_try_identity(self._db):
             raise RcaStoreIntegrityError(
@@ -849,6 +1195,36 @@ class SqliteRcaStore:
             self._require_record_receipt("RECORD_TRY", row[0])
         for version in versions:
             self._require_record_receipt("COMMIT_ARTIFACT", version.version_id)
+        for row in self._db.execute(
+            "SELECT publication_operation_id FROM rca_publication_results ORDER BY publication_operation_id"
+        ):
+            result = self._read_completed_publication_result(row[0])
+            if result is None:
+                self._corruption("publication result disappeared during readiness snapshot")
+            self._validate_publication_result(result)
+        seen_current_versions: set[str] = set()
+        for row in self._db.execute(
+            "SELECT aggregate_id FROM rca_currents ORDER BY aggregate_id"
+        ):
+            current = self._read_current_state(row[0])
+            if current is None:
+                self._corruption("Current disappeared during readiness snapshot")
+            if current.current_version_id in seen_current_versions:
+                self._corruption("one Version is Current for multiple Aggregates")
+            seen_current_versions.add(current.current_version_id)
+            version = self._read_version(current.current_version_id)
+            if version is None or version.aggregate_id != current.aggregate_id:
+                self._corruption("Current references a missing or wrong-Aggregate Version")
+            if version.role is not VersionRole.CURRENT:
+                self._corruption("canonical Current Version role is contradictory")
+            result = self._read_completed_publication_result(
+                version.publication_operation_id
+            )
+            if result is None or result.disposition is not PublicationDisposition.APPLIED:
+                self._corruption("Current lacks authorized APPLIED publication evidence")
+        for aggregate_id in aggregate_ids:
+            lineage = self._read_freshness_history(aggregate_id)
+            self._validate_freshness_history(aggregate_id, lineage)
         for row in self._db.execute(
             "SELECT operation_id FROM rca_operation_receipts ORDER BY operation_id"
         ):
@@ -953,6 +1329,19 @@ class SqliteRcaStore:
             target = _publication_target_from_object(data["publication_target"])
             if target.target_version_id != result_identity:
                 raise ValueError("Artifact commit result identity mismatch")
+            role = VersionRole.COMMITTED_UNPUBLISHED
+            current_rows = self._db.execute(
+                "SELECT aggregate_id FROM rca_currents WHERE current_version_id=?",
+                (target.target_version_id,),
+            ).fetchall()
+            if len(current_rows) > 1:
+                self._corruption("one Version is Current for multiple Aggregates")
+            if current_rows:
+                if current_rows[0][0] != target.aggregate_id:
+                    self._corruption("Current Version belongs to the wrong Aggregate")
+                role = VersionRole.CURRENT
+            elif self._has_applied_publication(target.target_version_id):
+                role = VersionRole.HISTORICAL
             return RcaVersion(
                 target.target_version_id,
                 target.aggregate_id,
@@ -960,7 +1349,7 @@ class SqliteRcaStore:
                 data["attempt_id"],  # type: ignore[arg-type]
                 _decode_artifact_object(data["artifact"]),
                 target.publication_operation_id,
-                VersionRole.COMMITTED_UNPUBLISHED,
+                role,
             )
         except RcaStoreIntegrityError:
             raise
@@ -971,6 +1360,14 @@ class SqliteRcaStore:
             ) from exc
 
     def _read_publication_result(
+        self, publication_operation_id: str
+    ) -> PublicationResult | None:
+        completed = self._read_completed_publication_result(publication_operation_id)
+        if completed is not None:
+            return completed
+        return self._read_a_side_publication_result(publication_operation_id)
+
+    def _read_a_side_publication_result(
         self, publication_operation_id: str
     ) -> PublicationResult | None:
         matches: list[PublicationResult] = []
@@ -992,6 +1389,222 @@ class SqliteRcaStore:
         if len(matches) > 1:
             self._corruption("publication_operation_id resolves to multiple receipts")
         return None if not matches else matches[0]
+
+    def _read_completed_publication_result(
+        self, publication_operation_id: str
+    ) -> PublicationResult | None:
+        row = self._db.execute(
+            """SELECT target_identity, disposition, resulting_current_version_id, recorded_at
+                 FROM rca_publication_results
+                WHERE publication_operation_id=?""",
+            (publication_operation_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        try:
+            target = _publication_target_from_object(json.loads(row[0]))
+            if target.publication_operation_id != publication_operation_id:
+                raise ValueError("publication operation mismatch")
+            return PublicationResult(
+                target,
+                PublicationDisposition(row[1]),
+                _parse_timestamp(row[3]),
+                row[2],
+            )
+        except (TypeError, ValueError, json.JSONDecodeError, RcaDomainError) as exc:
+            raise RcaStoreIntegrityError(
+                RcaErrorCode.INTEGRITY_CORRUPTION,
+                "malformed authorized publication result",
+            ) from exc
+
+    def _insert_publication_result(self, result: PublicationResult) -> None:
+        self._db.execute(
+            """INSERT INTO rca_publication_results(
+                   publication_operation_id, target_identity, disposition,
+                   resulting_current_version_id, recorded_at
+               ) VALUES (?, ?, ?, ?, ?)""",
+            (
+                result.target.publication_operation_id,
+                json.dumps(
+                    _publication_target_object(result.target),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                result.disposition.value,
+                result.resulting_current_version_id,
+                _timestamp(result.recorded_at),
+            ),
+        )
+
+    def _has_applied_publication(self, version_id: str) -> bool:
+        found = False
+        for row in self._db.execute(
+            "SELECT target_identity, disposition FROM rca_publication_results"
+        ):
+            try:
+                target = _publication_target_from_object(json.loads(row[0]))
+                disposition = PublicationDisposition(row[1])
+            except (TypeError, ValueError, json.JSONDecodeError, RcaDomainError) as exc:
+                raise RcaStoreIntegrityError(
+                    RcaErrorCode.INTEGRITY_CORRUPTION,
+                    "malformed authorized publication result",
+                ) from exc
+            if disposition is PublicationDisposition.APPLIED and target.target_version_id == version_id:
+                if found:
+                    self._corruption("Version has multiple APPLIED publication results")
+                found = True
+        return found
+
+    def _read_current_state(self, aggregate_id: str) -> CurrentRca | None:
+        rows = self._db.execute(
+            """SELECT aggregate_id, current_version_id, freshness,
+                      material_evidence_revision_basis, updated_at
+                 FROM rca_currents WHERE aggregate_id=?""",
+            (aggregate_id,),
+        ).fetchall()
+        if len(rows) > 1:
+            self._corruption("Aggregate has multiple canonical Currents")
+        if not rows:
+            return None
+        try:
+            row = rows[0]
+            _parse_timestamp(row[4])
+            return CurrentRca(row[0], row[1], CurrentFreshness(row[2]), row[3])
+        except (TypeError, ValueError, RcaDomainError) as exc:
+            raise RcaStoreIntegrityError(
+                RcaErrorCode.INTEGRITY_CORRUPTION,
+                "malformed canonical Current authority",
+            ) from exc
+
+    def _has_durable_current_evidence(self, aggregate_id: str) -> bool:
+        """Detect publication evidence that makes Current absence contradictory."""
+
+        applied = False
+        local_publication_ids = {
+            version.publication_operation_id
+            for version in self._read_all_versions()
+            if version.aggregate_id == aggregate_id
+        }
+        for row in self._db.execute(
+            """SELECT publication_operation_id FROM rca_publication_results
+                 ORDER BY publication_operation_id"""
+        ):
+            result = self._read_completed_publication_result(row[0])
+            if result is None:
+                self._corruption("publication result disappeared during Current read")
+            if (
+                result.target.aggregate_id != aggregate_id
+                and result.target.publication_operation_id not in local_publication_ids
+            ):
+                continue
+            self._validate_publication_result(result)
+            if result.disposition is PublicationDisposition.APPLIED:
+                applied = True
+        return applied
+
+    def _append_freshness_history(
+        self,
+        state: CurrentRca,
+        source_publication_operation_id: str | None,
+    ) -> None:
+        lineage = self._read_freshness_history(state.aggregate_id)
+        current = self._read_current_state(state.aggregate_id)
+        if lineage:
+            if current is None or lineage[-1] != current:
+                self._corruption("freshness lineage does not match the canonical Current projection")
+        elif current is not None:
+            self._corruption("canonical Current lacks initial freshness lineage")
+        self._db.execute(
+            """INSERT INTO rca_freshness_history(
+                   aggregate_id, transition_ordinal, version_id, freshness,
+                   material_evidence_revision_basis, source_publication_operation_id
+               ) VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                state.aggregate_id,
+                len(lineage) + 1,
+                state.current_version_id,
+                state.freshness.value,
+                state.material_evidence_revision_basis,
+                source_publication_operation_id,
+            ),
+        )
+
+    def _read_freshness_history(self, aggregate_id: str) -> tuple[CurrentRca, ...]:
+        rows = self._db.execute(
+            """SELECT transition_ordinal, version_id, freshness,
+                      material_evidence_revision_basis
+                 FROM rca_freshness_history
+                WHERE aggregate_id=? ORDER BY transition_ordinal""",
+            (aggregate_id,),
+        ).fetchall()
+        try:
+            ordinals = tuple(row[0] for row in rows)
+            if ordinals != tuple(range(1, len(rows) + 1)):
+                raise ValueError("freshness transition ordinals are not continuous")
+            return tuple(
+                CurrentRca(
+                    aggregate_id,
+                    row[1],
+                    CurrentFreshness(row[2]),
+                    row[3],
+                )
+                for row in rows
+            )
+        except (TypeError, ValueError, RcaDomainError) as exc:
+            raise RcaStoreIntegrityError(
+                RcaErrorCode.INTEGRITY_CORRUPTION,
+                "malformed freshness lineage",
+            ) from exc
+
+    def _validate_freshness_history(
+        self, aggregate_id: str, lineage: tuple[CurrentRca, ...]
+    ) -> None:
+        current = self._read_current_state(aggregate_id)
+        if not lineage:
+            if current is not None:
+                self._corruption("canonical Current lacks freshness lineage")
+            return
+        if current is None or lineage[-1] != current:
+            self._corruption("freshness lineage contradicts canonical Current projection")
+        rows = self._db.execute(
+            """SELECT transition_ordinal, source_publication_operation_id
+                 FROM rca_freshness_history
+                WHERE aggregate_id=? ORDER BY transition_ordinal""",
+            (aggregate_id,),
+        ).fetchall()
+        seen_versions: set[str] = set()
+        previous_version: str | None = None
+        for state, row in zip(lineage, rows, strict=True):
+            version = self._read_version(state.current_version_id)
+            if version is None or version.aggregate_id != aggregate_id:
+                self._corruption("freshness lineage references a missing or wrong Version")
+            source_publication_operation_id = row[1]
+            if state.current_version_id != previous_version:
+                if state.current_version_id in seen_versions:
+                    self._corruption("freshness lineage returns to a superseded Version")
+                if state.freshness is not CurrentFreshness.FRESH:
+                    self._corruption("new Current lineage must begin FRESH")
+                if source_publication_operation_id != version.publication_operation_id:
+                    self._corruption("Current promotion lineage lacks its publication identity")
+                if (
+                    state.material_evidence_revision_basis
+                    != version.artifact.provenance.evidence_revision_id
+                ):
+                    self._corruption("Current promotion freshness basis contradicts Artifact lineage")
+                result = self._read_completed_publication_result(
+                    version.publication_operation_id
+                )
+                if result is None or result.disposition is not PublicationDisposition.APPLIED:
+                    self._corruption("Current promotion lineage lacks APPLIED publication evidence")
+                seen_versions.add(state.current_version_id)
+            else:
+                if state.freshness is not CurrentFreshness.STALE:
+                    self._corruption("same-Current freshness transition must be STALE")
+                if lineage[row[0] - 2].freshness is CurrentFreshness.STALE:
+                    self._corruption("Current has contradictory repeated STALE transitions")
+                if source_publication_operation_id is not None:
+                    self._corruption("materiality freshness fact claims publication authority")
+            previous_version = state.current_version_id
 
     def _validate_version_authority(self, version: RcaVersion) -> None:
         aggregate = self._read_aggregate(version.aggregate_id)
@@ -1016,8 +1629,11 @@ class SqliteRcaStore:
         self._validate_publication_result(result)
 
     def _validate_publication_result(self, result: PublicationResult) -> None:
-        if result.disposition is not PublicationDisposition.A_SIDE_COMMITTED:
-            self._corruption("Phase-4 receipt claims a non-local publication result")
+        local = self._read_a_side_publication_result(
+            result.target.publication_operation_id
+        )
+        if local is None or local.target != result.target:
+            self._corruption("publication result contradicts its A-side target receipt")
         version = self._read_version(result.target.target_version_id)
         aggregate = self._read_aggregate(result.target.aggregate_id)
         if version is None or aggregate is None:
@@ -1028,6 +1644,36 @@ class SqliteRcaStore:
             or aggregate.incident_id != result.target.incident_id
         ):
             self._corruption("A-side receipt contradicts immutable publication target")
+        if result.disposition is PublicationDisposition.A_SIDE_COMMITTED:
+            return
+        if result.disposition is PublicationDisposition.APPLIED:
+            if result.resulting_current_version_id != version.version_id:
+                self._corruption("APPLIED result contradicts its target Version")
+            if version.role not in {VersionRole.CURRENT, VersionRole.HISTORICAL}:
+                self._corruption("APPLIED Version has no durable published role")
+            freshness_rows = self._db.execute(
+                """SELECT aggregate_id, version_id, freshness,
+                          material_evidence_revision_basis
+                     FROM rca_freshness_history
+                    WHERE source_publication_operation_id=?""",
+                (result.target.publication_operation_id,),
+            ).fetchall()
+            if len(freshness_rows) != 1:
+                self._corruption("APPLIED publication lacks unique freshness lineage")
+            freshness = freshness_rows[0]
+            if freshness != (
+                version.aggregate_id,
+                version.version_id,
+                CurrentFreshness.FRESH.value,
+                version.artifact.provenance.evidence_revision_id,
+            ):
+                self._corruption("APPLIED publication freshness lineage is contradictory")
+        elif result.resulting_current_version_id is not None:
+            preserved = self._read_version(result.resulting_current_version_id)
+            if preserved is None or preserved.aggregate_id != result.target.aggregate_id:
+                self._corruption("publication result names a missing or wrong preserved Current")
+            if preserved.role not in {VersionRole.CURRENT, VersionRole.HISTORICAL}:
+                self._corruption("publication result preserved an unpublished Version")
 
     def _require_commit_receipt_identity(
         self,
