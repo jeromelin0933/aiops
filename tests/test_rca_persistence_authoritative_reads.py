@@ -66,8 +66,11 @@ def test_legitimate_absence_remains_distinct_from_integrity_failure(tmp_path) ->
     with SqliteRcaStore(tmp_path / "rca.db") as store:
         assert store.get_aggregate("AGG-MISSING") is None
         assert store.get_aggregate_by_incident("INC-MISSING") is None
+        assert store.get_attempt_lineage("ATT-MISSING") is None
         assert store.get_current("AGG-MISSING") is None
+        assert store.get_freshness_lineage("AGG-MISSING") == ()
         assert store.get_version("VER-MISSING") is None
+        assert store.get_version_history("AGG-MISSING") == ()
         assert store.get_publication_result("PUB-MISSING") is None
 
 
@@ -158,6 +161,111 @@ def test_missing_version_with_durable_reference_fails_closed_after_reopen(
     else:
         _prepare_published_version(database)
     _corrupt_version_authority(database, surviving_reference)
+
+    with pytest.raises(RcaDomainError) as raised:
+        SqliteRcaStore(database)
+    assert raised.value.code is RcaErrorCode.INTEGRITY_CORRUPTION
+
+
+def _remove_aggregate_and_admission_receipt(database) -> None:
+    with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA foreign_keys=OFF")
+        connection.execute(
+            "DELETE FROM rca_operation_receipts WHERE command_kind='CREATE_AGGREGATE'"
+        )
+        connection.execute("DELETE FROM rca_aggregates WHERE aggregate_id='AGG-1'")
+
+
+def _remove_attempt_and_attempt_receipts(database) -> None:
+    with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA foreign_keys=OFF")
+        connection.execute(
+            """DELETE FROM rca_operation_receipts
+                WHERE command_kind IN ('ADMIT_ATTEMPT','RECORD_TRY')"""
+        )
+        connection.execute("DELETE FROM rca_attempts WHERE attempt_id='ATT-1'")
+
+
+def test_missing_aggregate_with_surviving_attempt_fails_point_read_closed(
+    tmp_path,
+) -> None:
+    database = tmp_path / "aggregate-attempt-reference.db"
+    store = SqliteRcaStore(database)
+    seed(store)
+    _remove_aggregate_and_admission_receipt(database)
+
+    with pytest.raises(RcaDomainError) as raised:
+        store.get_aggregate("AGG-1")
+    assert raised.value.code is RcaErrorCode.INTEGRITY_CORRUPTION
+    store.close()
+
+
+def test_missing_aggregate_with_surviving_version_fails_identity_and_history_reads_closed(
+    tmp_path,
+) -> None:
+    database = tmp_path / "aggregate-version-reference.db"
+    store = SqliteRcaStore(database)
+    seed(store)
+    commit(store)
+    _remove_attempt_and_attempt_receipts(database)
+    _remove_aggregate_and_admission_receipt(database)
+
+    reads = (
+        lambda: store.get_aggregate_by_incident("INC-1"),
+        lambda: store.get_version_history("AGG-1"),
+    )
+    for read in reads:
+        with pytest.raises(RcaDomainError) as raised:
+            read()
+        assert raised.value.code is RcaErrorCode.INTEGRITY_CORRUPTION
+    store.close()
+
+
+def test_missing_aggregate_with_surviving_current_and_freshness_fails_reads_closed(
+    tmp_path,
+) -> None:
+    database = tmp_path / "aggregate-current-reference.db"
+    _prepare_published_version(database)
+    store = SqliteRcaStore(database)
+    _remove_aggregate_and_admission_receipt(database)
+
+    for read in (
+        lambda: store.get_current("AGG-1"),
+        lambda: store.get_freshness_lineage("AGG-1"),
+    ):
+        with pytest.raises(RcaDomainError) as raised:
+            read()
+        assert raised.value.code is RcaErrorCode.INTEGRITY_CORRUPTION
+    store.close()
+
+
+def test_missing_attempt_with_surviving_version_fails_point_read_closed(
+    tmp_path,
+) -> None:
+    database = tmp_path / "attempt-version-reference.db"
+    store = SqliteRcaStore(database)
+    seed(store)
+    commit(store)
+    _remove_attempt_and_attempt_receipts(database)
+
+    with pytest.raises(RcaDomainError) as raised:
+        store.get_attempt_lineage("ATT-1")
+    assert raised.value.code is RcaErrorCode.INTEGRITY_CORRUPTION
+    store.close()
+
+
+@pytest.mark.parametrize("missing_authority", ["aggregate", "attempt"])
+def test_downstream_dangling_authority_fails_closed_after_reopen(
+    tmp_path, missing_authority
+) -> None:
+    database = tmp_path / f"downstream-dangling-{missing_authority}.db"
+    with SqliteRcaStore(database) as store:
+        seed(store)
+        commit(store)
+    if missing_authority == "aggregate":
+        _remove_aggregate_and_admission_receipt(database)
+    else:
+        _remove_attempt_and_attempt_receipts(database)
 
     with pytest.raises(RcaDomainError) as raised:
         SqliteRcaStore(database)

@@ -699,10 +699,10 @@ class SqliteRcaStore:
             with self._read_snapshot():
                 if (
                     self._read_aggregate(aggregate_id) is None
-                    and self._has_record_receipt("CREATE_AGGREGATE", aggregate_id)
+                    and self._has_durable_aggregate_reference(aggregate_id)
                 ):
                     self._corruption(
-                        "Aggregate admission receipt references a missing Aggregate"
+                        "durable Candidate-A authority references a missing Aggregate"
                     )
                 current = self._read_current_state(aggregate_id)
                 if current is None:
@@ -742,9 +742,9 @@ class SqliteRcaStore:
                 if self._read_aggregate(aggregate_id) is None:
                     if self._read_freshness_history(aggregate_id):
                         self._corruption("freshness lineage references a missing Aggregate")
-                    if self._has_record_receipt("CREATE_AGGREGATE", aggregate_id):
+                    if self._has_durable_aggregate_reference(aggregate_id):
                         self._corruption(
-                            "Aggregate admission receipt references a missing Aggregate"
+                            "durable Candidate-A authority references a missing Aggregate"
                         )
                     return ()
                 lineage = self._read_freshness_history(aggregate_id)
@@ -777,9 +777,9 @@ class SqliteRcaStore:
         try:
             with self._read_snapshot():
                 if self._read_aggregate(aggregate_id) is None:
-                    if self._has_record_receipt("CREATE_AGGREGATE", aggregate_id):
+                    if self._has_durable_aggregate_reference(aggregate_id):
                         self._corruption(
-                            "Aggregate admission receipt references a missing Aggregate"
+                            "durable Candidate-A authority references a missing Aggregate"
                         )
                     return ()
                 versions = tuple(
@@ -911,9 +911,9 @@ class SqliteRcaStore:
                 aggregate = self._read_aggregate(aggregate_id)
                 if aggregate is not None:
                     self._require_record_receipt("CREATE_AGGREGATE", aggregate_id)
-                elif self._has_record_receipt("CREATE_AGGREGATE", aggregate_id):
+                elif self._has_durable_aggregate_reference(aggregate_id):
                     self._corruption(
-                        "Aggregate admission receipt references a missing Aggregate"
+                        "durable Candidate-A authority references a missing Aggregate"
                     )
                 return aggregate
         except RcaDomainError:
@@ -928,9 +928,9 @@ class SqliteRcaStore:
                 aggregate = self._read_aggregate_by_incident(incident_id)
                 if aggregate is not None:
                     self._require_record_receipt("CREATE_AGGREGATE", aggregate.aggregate_id)
-                elif self._has_aggregate_receipt_for_incident(incident_id):
+                elif self._has_durable_aggregate_reference_for_incident(incident_id):
                     self._corruption(
-                        "Incident binding receipt references a missing Aggregate"
+                        "durable Candidate-A authority references a missing Incident-bound Aggregate"
                     )
                 return aggregate
         except RcaDomainError:
@@ -945,9 +945,9 @@ class SqliteRcaStore:
                 view = self._read_attempt_lineage(attempt_id)
                 if view is not None:
                     self._require_record_receipt("ADMIT_ATTEMPT", attempt_id)
-                elif self._has_record_receipt("ADMIT_ATTEMPT", attempt_id):
+                elif self._has_durable_attempt_reference(attempt_id):
                     self._corruption(
-                        "Attempt admission receipt references a missing Attempt"
+                        "durable Candidate-A authority references a missing Attempt"
                     )
                 return view
         except RcaDomainError:
@@ -1456,6 +1456,107 @@ class SqliteRcaStore:
             if version.version_id == version_id:
                 return True
         return False
+
+    def _has_durable_aggregate_reference(self, aggregate_id: str) -> bool:
+        """Return whether surviving local authority proves an Aggregate must exist."""
+
+        if self._has_record_receipt("CREATE_AGGREGATE", aggregate_id):
+            return True
+        for row in self._db.execute(
+            """SELECT command_kind, semantic_identity, occurred_at
+                 FROM rca_operation_receipts
+                WHERE command_kind IN ('CREATE_AGGREGATE','ADMIT_ATTEMPT')"""
+        ):
+            try:
+                payload = json.loads(row[1])
+                if row[0] == "CREATE_AGGREGATE":
+                    data = _expect_object(
+                        payload,
+                        {"operation_id", "aggregate_id", "incident_id"},
+                        "Aggregate receipt",
+                    )
+                    referenced_aggregate_id = data["aggregate_id"]
+                else:
+                    referenced_aggregate_id = _attempt_request_from_payload(
+                        payload, _parse_timestamp(row[2])
+                    ).lineage.aggregate_id
+            except (TypeError, ValueError, json.JSONDecodeError, RcaDomainError) as exc:
+                raise RcaStoreIntegrityError(
+                    RcaErrorCode.INTEGRITY_CORRUPTION,
+                    "malformed persisted Aggregate reference receipt",
+                ) from exc
+            if referenced_aggregate_id == aggregate_id:
+                return True
+        for table in ("rca_attempts", "rca_currents", "rca_freshness_history"):
+            if self._db.execute(
+                f"SELECT 1 FROM {table} WHERE aggregate_id=? LIMIT 1",
+                (aggregate_id,),
+            ).fetchone() is not None:
+                return True
+        if any(
+            version.aggregate_id == aggregate_id
+            for version in self._read_all_versions()
+        ):
+            return True
+        for row in self._db.execute(
+            "SELECT publication_operation_id FROM rca_publication_results"
+        ):
+            result = self._read_completed_publication_result(row[0])
+            if result is None:
+                self._corruption(
+                    "publication result disappeared during Aggregate reference read"
+                )
+            if result.target.aggregate_id == aggregate_id:
+                return True
+        return False
+
+    def _has_durable_aggregate_reference_for_incident(self, incident_id: str) -> bool:
+        """Use only durable facts that explicitly carry the requested Incident ID."""
+
+        if self._has_aggregate_receipt_for_incident(incident_id):
+            return True
+        for row in self._db.execute(
+            """SELECT operation_id, semantic_identity, result_identity, occurred_at
+                 FROM rca_operation_receipts
+                WHERE command_kind='COMMIT_ARTIFACT'"""
+        ):
+            self._decode_version_receipt(tuple(row))
+            try:
+                payload = json.loads(row[1])
+                target = _publication_target_from_object(payload["publication_target"])
+            except (KeyError, TypeError, json.JSONDecodeError, RcaDomainError) as exc:
+                raise RcaStoreIntegrityError(
+                    RcaErrorCode.INTEGRITY_CORRUPTION,
+                    "malformed persisted Artifact publication target",
+                ) from exc
+            if target.incident_id == incident_id:
+                return True
+        for row in self._db.execute(
+            "SELECT publication_operation_id FROM rca_publication_results"
+        ):
+            result = self._read_completed_publication_result(row[0])
+            if result is None:
+                self._corruption(
+                    "publication result disappeared during Incident binding read"
+                )
+            if result.target.incident_id == incident_id:
+                return True
+        return False
+
+    def _has_durable_attempt_reference(self, attempt_id: str) -> bool:
+        """Return whether surviving local authority proves an Attempt must exist."""
+
+        if self._db.execute(
+            """SELECT 1 FROM rca_operation_receipts
+                 WHERE command_kind IN (
+                     'ADMIT_ATTEMPT', 'MARK_ATTEMPT_GENERATING', 'RECORD_TRY'
+                 ) AND result_identity=? LIMIT 1""",
+            (attempt_id,),
+        ).fetchone() is not None:
+            return True
+        return any(
+            version.attempt_id == attempt_id for version in self._read_all_versions()
+        )
 
     def _decode_version_receipt(self, row: tuple[object, ...]) -> RcaVersion:
         try:
