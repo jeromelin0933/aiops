@@ -44,6 +44,7 @@ from .contracts import (
     VersionRole,
     require_equivalent_attempt_lineage,
 )
+from .sqlite_store import SCHEMA_VERSION, RcaStoreIntegrityError, SqliteRcaStore
 
 __all__ = [
     "RCA_ERROR_DISPOSITIONS",
@@ -88,4 +89,7 @@ __all__ = [
     "RecoveryCandidateKind",
     "VersionRole",
     "require_equivalent_attempt_lineage",
+    "SCHEMA_VERSION",
+    "RcaStoreIntegrityError",
+    "SqliteRcaStore",
 ]
