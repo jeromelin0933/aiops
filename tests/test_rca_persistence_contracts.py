@@ -260,7 +260,12 @@ def test_public_ports_are_semantic_and_expose_no_storage_or_scheduler_primitive(
     read_methods = set(RcaReadPort.__dict__)
     mutation_methods = set(RcaMutationPort.__dict__)
     assert {"get_current", "get_version_history", "enumerate_recovery_candidates", "validate_local_readiness"} <= read_methods
-    assert {"create_or_discover_aggregate", "commit_validated_artifact", "complete_authorized_publication"} <= mutation_methods
+    assert {
+        "create_or_discover_aggregate",
+        "mark_attempt_generating",
+        "commit_validated_artifact",
+        "complete_authorized_publication",
+    } <= mutation_methods
     forbidden_fragments = ("sql", "connection", "table", "scheduler", "retry_budget", "incident_store")
     assert not any(fragment in name for name in read_methods | mutation_methods for fragment in forbidden_fragments)
 

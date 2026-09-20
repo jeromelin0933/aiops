@@ -57,8 +57,8 @@ from .contracts import (
 )
 
 
-SCHEMA_VERSION = "6"
-_RECOGNIZED_OLDER_SCHEMA_VERSIONS = frozenset({"1", "2", "3", "4", "5"})
+SCHEMA_VERSION = "7"
+_RECOGNIZED_OLDER_SCHEMA_VERSIONS = frozenset({"1", "2", "3", "4", "5", "6"})
 _METADATA_KEY = "rca_store_schema_version"
 _TABLES = frozenset(
     {
@@ -322,6 +322,78 @@ class SqliteRcaStore:
             raise
         except sqlite3.Error as exc:
             raise _sqlite_error(exc, "RCA Store cannot record Logical Try outcome") from exc
+
+    def mark_attempt_generating(
+        self,
+        operation_id: str,
+        attempt_id: str,
+        authoritative_now,
+    ) -> GenerationAttempt:
+        """Persist a caller-authorized PENDING-to-GENERATING transition."""
+
+        _reference(operation_id, "operation_id")
+        _reference(attempt_id, "attempt_id")
+        occurred_at = _timestamp(authoritative_now)
+        try:
+            with self._write_transaction():
+                replay = self._read_receipt(operation_id)
+                if replay is not None:
+                    self._require_generating_receipt_identity(
+                        replay, operation_id, attempt_id
+                    )
+                    view = self._read_attempt_lineage(attempt_id)
+                    if view is None:
+                        self._corruption(
+                            "Generating transition receipt references a missing Attempt"
+                        )
+                    return view.attempt
+
+                view = self._read_attempt_lineage(attempt_id)
+                if view is None:
+                    raise RcaDomainError(
+                        RcaErrorCode.INVALID_REFERENCE,
+                        "Generating transition references an unknown admitted Attempt",
+                        operation_id=operation_id,
+                        attempt_id=attempt_id,
+                    )
+                if view.attempt.lifecycle is not GenerationLifecycle.PENDING:
+                    raise RcaDomainError(
+                        RcaErrorCode.SEMANTIC_CONFLICT,
+                        "only a PENDING Attempt may transition to GENERATING",
+                        operation_id=operation_id,
+                        attempt_id=attempt_id,
+                    )
+
+                semantic_identity = _generating_semantic_identity(
+                    operation_id, attempt_id
+                )
+                self._db.execute(
+                    """INSERT INTO rca_operation_receipts(
+                           operation_id, command_kind, semantic_identity,
+                           result_identity, occurred_at
+                       ) VALUES (?, 'MARK_ATTEMPT_GENERATING', ?, ?, ?)""",
+                    (operation_id, semantic_identity, attempt_id, occurred_at),
+                )
+                self._db.execute(
+                    """UPDATE rca_attempts SET lifecycle='GENERATING'
+                         WHERE attempt_id=? AND lifecycle='PENDING'""",
+                    (attempt_id,),
+                )
+                updated = self._read_attempt_lineage(attempt_id)
+                if (
+                    updated is None
+                    or updated.attempt.lifecycle is not GenerationLifecycle.GENERATING
+                ):
+                    self._corruption(
+                        "authorized generating transition did not produce coherent state"
+                    )
+                return updated.attempt
+        except RcaDomainError:
+            raise
+        except sqlite3.Error as exc:
+            raise _sqlite_error(
+                exc, "RCA Store cannot mark Attempt as GENERATING"
+            ) from exc
 
     def commit_validated_artifact(
         self,
@@ -625,6 +697,13 @@ class SqliteRcaStore:
         _reference(aggregate_id, "aggregate_id")
         try:
             with self._read_snapshot():
+                if (
+                    self._read_aggregate(aggregate_id) is None
+                    and self._has_record_receipt("CREATE_AGGREGATE", aggregate_id)
+                ):
+                    self._corruption(
+                        "Aggregate admission receipt references a missing Aggregate"
+                    )
                 current = self._read_current_state(aggregate_id)
                 if current is None:
                     if self._read_freshness_history(aggregate_id):
@@ -663,6 +742,10 @@ class SqliteRcaStore:
                 if self._read_aggregate(aggregate_id) is None:
                     if self._read_freshness_history(aggregate_id):
                         self._corruption("freshness lineage references a missing Aggregate")
+                    if self._has_record_receipt("CREATE_AGGREGATE", aggregate_id):
+                        self._corruption(
+                            "Aggregate admission receipt references a missing Aggregate"
+                        )
                     return ()
                 lineage = self._read_freshness_history(aggregate_id)
                 self._validate_freshness_history(aggregate_id, lineage)
@@ -679,6 +762,10 @@ class SqliteRcaStore:
                 version = self._read_version(version_id)
                 if version is not None:
                     self._validate_version_authority(version)
+                elif self._has_durable_version_reference(version_id):
+                    self._corruption(
+                        "durable Candidate-A authority references a missing Version"
+                    )
                 return version
         except RcaDomainError:
             raise
@@ -690,6 +777,10 @@ class SqliteRcaStore:
         try:
             with self._read_snapshot():
                 if self._read_aggregate(aggregate_id) is None:
+                    if self._has_record_receipt("CREATE_AGGREGATE", aggregate_id):
+                        self._corruption(
+                            "Aggregate admission receipt references a missing Aggregate"
+                        )
                     return ()
                 versions = tuple(
                     item for item in self._read_all_versions() if item.aggregate_id == aggregate_id
@@ -765,12 +856,16 @@ class SqliteRcaStore:
                     view = self._read_attempt_lineage(row[0])
                     if view is None:
                         self._corruption("recovery enumeration found a missing Attempt")
-                    if (
+                    needs_reconciliation = view.attempt.lifecycle in {
+                        GenerationLifecycle.PENDING,
+                        GenerationLifecycle.GENERATING,
+                    } or (
                         view.attempt.lifecycle is GenerationLifecycle.FAILED
-                        and view.try_outcomes
+                        and bool(view.try_outcomes)
                         and view.try_outcomes[-1].retry_disposition
                         is AdmittedRetryDisposition.RETRYABLE
-                    ):
+                    )
+                    if needs_reconciliation:
                         candidates.append(
                             RecoveryCandidate(
                                 RecoveryCandidateKind.ATTEMPT_TRY_RECONCILIATION,
@@ -816,6 +911,10 @@ class SqliteRcaStore:
                 aggregate = self._read_aggregate(aggregate_id)
                 if aggregate is not None:
                     self._require_record_receipt("CREATE_AGGREGATE", aggregate_id)
+                elif self._has_record_receipt("CREATE_AGGREGATE", aggregate_id):
+                    self._corruption(
+                        "Aggregate admission receipt references a missing Aggregate"
+                    )
                 return aggregate
         except RcaDomainError:
             raise
@@ -829,6 +928,10 @@ class SqliteRcaStore:
                 aggregate = self._read_aggregate_by_incident(incident_id)
                 if aggregate is not None:
                     self._require_record_receipt("CREATE_AGGREGATE", aggregate.aggregate_id)
+                elif self._has_aggregate_receipt_for_incident(incident_id):
+                    self._corruption(
+                        "Incident binding receipt references a missing Aggregate"
+                    )
                 return aggregate
         except RcaDomainError:
             raise
@@ -842,6 +945,10 @@ class SqliteRcaStore:
                 view = self._read_attempt_lineage(attempt_id)
                 if view is not None:
                     self._require_record_receipt("ADMIT_ATTEMPT", attempt_id)
+                elif self._has_record_receipt("ADMIT_ATTEMPT", attempt_id):
+                    self._corruption(
+                        "Attempt admission receipt references a missing Attempt"
+                    )
                 return view
         except RcaDomainError:
             raise
@@ -937,7 +1044,7 @@ class SqliteRcaStore:
                     );
                     CREATE TABLE rca_operation_receipts (
                         operation_id TEXT PRIMARY KEY NOT NULL,
-                        command_kind TEXT NOT NULL CHECK(command_kind IN ('CREATE_AGGREGATE','ADMIT_ATTEMPT','RECORD_TRY','COMMIT_ARTIFACT')),
+                        command_kind TEXT NOT NULL CHECK(command_kind IN ('CREATE_AGGREGATE','ADMIT_ATTEMPT','MARK_ATTEMPT_GENERATING','RECORD_TRY','COMMIT_ARTIFACT')),
                         semantic_identity TEXT NOT NULL,
                         result_identity TEXT NOT NULL,
                         occurred_at TEXT NOT NULL
@@ -1311,6 +1418,44 @@ class SqliteRcaStore:
                     WHERE command_kind='COMMIT_ARTIFACT' ORDER BY result_identity"""
             )
         )
+
+    def _has_durable_version_reference(self, version_id: str) -> bool:
+        if self._db.execute(
+            "SELECT 1 FROM rca_currents WHERE current_version_id=? LIMIT 1",
+            (version_id,),
+        ).fetchone() is not None:
+            return True
+        if self._db.execute(
+            "SELECT 1 FROM rca_freshness_history WHERE version_id=? LIMIT 1",
+            (version_id,),
+        ).fetchone() is not None:
+            return True
+
+        for row in self._db.execute(
+            """SELECT publication_operation_id FROM rca_publication_results
+                 ORDER BY publication_operation_id"""
+        ):
+            result = self._read_completed_publication_result(row[0])
+            if result is None:
+                self._corruption(
+                    "publication result disappeared during Version reference read"
+                )
+            if (
+                result.target.target_version_id == version_id
+                or result.resulting_current_version_id == version_id
+            ):
+                return True
+
+        for row in self._db.execute(
+            """SELECT operation_id, semantic_identity, result_identity, occurred_at
+                 FROM rca_operation_receipts
+                WHERE command_kind='COMMIT_ARTIFACT'
+                ORDER BY operation_id"""
+        ):
+            version = self._decode_version_receipt(tuple(row))
+            if version.version_id == version_id:
+                return True
+        return False
 
     def _decode_version_receipt(self, row: tuple[object, ...]) -> RcaVersion:
         try:
@@ -1826,6 +1971,60 @@ class SqliteRcaStore:
                 attempt_id=outcome.identity.attempt_id,
             )
 
+    def _require_generating_receipt_identity(
+        self,
+        receipt: tuple[object, ...],
+        operation_id: str,
+        attempt_id: str,
+    ) -> None:
+        self._validate_receipt(receipt)
+        if (
+            receipt[1] != "MARK_ATTEMPT_GENERATING"
+            or receipt[2] != _generating_semantic_identity(operation_id, attempt_id)
+            or receipt[3] != attempt_id
+        ):
+            raise RcaDomainError(
+                RcaErrorCode.RECEIPT_REPLAY_CONFLICT,
+                "operation_id resolves to a contradictory Candidate-A command",
+                operation_id=operation_id,
+                attempt_id=attempt_id,
+            )
+
+    def _has_record_receipt(self, command_kind: str, result_identity: str) -> bool:
+        return self._db.execute(
+            """SELECT 1 FROM rca_operation_receipts
+                 WHERE command_kind=? AND result_identity=? LIMIT 1""",
+            (command_kind, result_identity),
+        ).fetchone() is not None
+
+    def _has_aggregate_receipt_for_incident(self, incident_id: str) -> bool:
+        for row in self._db.execute(
+            """SELECT semantic_identity, occurred_at
+                 FROM rca_operation_receipts
+                WHERE command_kind='CREATE_AGGREGATE'"""
+        ):
+            try:
+                payload = json.loads(row[0])
+                data = _expect_object(
+                    payload,
+                    {"operation_id", "aggregate_id", "incident_id"},
+                    "Aggregate receipt",
+                )
+                request = CreateAggregateRequest(
+                    data["operation_id"],  # type: ignore[arg-type]
+                    data["aggregate_id"],  # type: ignore[arg-type]
+                    data["incident_id"],  # type: ignore[arg-type]
+                    _parse_timestamp(row[1]),
+                )
+            except (TypeError, ValueError, json.JSONDecodeError, RcaDomainError) as exc:
+                raise RcaStoreIntegrityError(
+                    RcaErrorCode.INTEGRITY_CORRUPTION,
+                    "malformed persisted Aggregate admission receipt",
+                ) from exc
+            if request.incident_id == incident_id:
+                return True
+        return False
+
     def _require_record_receipt(self, command_kind: str, result_identity: str) -> None:
         rows = self._db.execute(
             """SELECT operation_id, command_kind, semantic_identity, result_identity, occurred_at
@@ -1863,6 +2062,16 @@ class SqliteRcaStore:
                 view = self._read_attempt_lineage(result_identity)  # type: ignore[arg-type]
                 if view is None or view.attempt.lineage != request.lineage:
                     raise ValueError("Attempt receipt contradicts its result")
+            elif kind == "MARK_ATTEMPT_GENERATING":
+                if encoded != _generating_semantic_identity(
+                    operation_id, result_identity  # type: ignore[arg-type]
+                ):
+                    raise ValueError("Generating receipt identity is contradictory")
+                view = self._read_attempt_lineage(result_identity)  # type: ignore[arg-type]
+                if view is None or view.attempt.lifecycle is GenerationLifecycle.PENDING:
+                    raise ValueError(
+                        "Generating receipt contradicts the durable Attempt lifecycle"
+                    )
             elif kind == "RECORD_TRY":
                 outcome = _try_outcome_from_receipt(
                     (operation_id, encoded, result_identity, occurred_at)
@@ -1966,6 +2175,14 @@ def _attempt_request_from_payload(payload: dict[str, object], occurred_at) -> Ad
         lineage_data["knowledge_snapshot_id"], provenance,
     )
     return AdmitAttemptRequest(payload["operation_id"], lineage, occurred_at)  # type: ignore[arg-type]
+
+
+def _generating_semantic_identity(operation_id: str, attempt_id: str) -> str:
+    return json.dumps(
+        {"operation_id": operation_id, "attempt_id": attempt_id},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def _try_result_identity(identity: LogicalTryIdentity) -> str:

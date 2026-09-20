@@ -63,6 +63,24 @@ def test_retryable_terminal_try_is_enumerated_without_allocating_identity(tmp_pa
         assert first[0].attempt_id == "ATT-1"
 
 
+def test_pending_attempt_recovery_is_deterministic_and_restart_stable(tmp_path) -> None:
+    database = tmp_path / "pending.db"
+    _create_database(database)
+
+    with SqliteRcaStore(database) as store:
+        first = store.enumerate_recovery_candidates()
+        assert first == store.enumerate_recovery_candidates()
+        assert len(first) == 1
+        assert first[0].kind is RecoveryCandidateKind.ATTEMPT_TRY_RECONCILIATION
+        assert first[0].attempt_id == "ATT-1"
+        assert first[0].version_id is None
+        assert first[0].publication_operation_id is None
+
+    with SqliteRcaStore(database) as reopened:
+        assert reopened.enumerate_recovery_candidates() == first
+        assert reopened.get_attempt_lineage("ATT-1").try_outcomes == ()
+
+
 @pytest.mark.parametrize(
     "disposition",
     [

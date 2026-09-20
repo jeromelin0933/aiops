@@ -223,6 +223,47 @@ def test_attempt_admission_equivalent_replay_and_authoritative_read(tmp_path) ->
         ).fetchone() == (2,)
 
 
+def test_authorized_generating_transition_is_replay_safe_and_restart_durable(
+    tmp_path,
+) -> None:
+    database = tmp_path / "generating.db"
+    with SqliteRcaStore(database) as store:
+        _seed_aggregate(store)
+        store.admit_attempt(_attempt_request())
+        transitioned = store.mark_attempt_generating("OP-GEN-1", "ATT-1", NOW)
+        replayed = store.mark_attempt_generating(
+            "OP-GEN-1", "ATT-1", NOW + timedelta(hours=1)
+        )
+        assert transitioned == replayed
+        assert transitioned.lifecycle is GenerationLifecycle.GENERATING
+        assert transitioned.lineage == _lineage()
+        assert transitioned.latest_try_ordinal is None
+
+        with pytest.raises(RcaDomainError) as illegal:
+            store.mark_attempt_generating("OP-GEN-2", "ATT-1", NOW)
+        assert illegal.value.code is RcaErrorCode.SEMANTIC_CONFLICT
+
+        with pytest.raises(RcaDomainError) as contradictory:
+            store.mark_attempt_generating("OP-GEN-1", "ATT-X", NOW)
+        assert contradictory.value.code is RcaErrorCode.RECEIPT_REPLAY_CONFLICT
+
+    with SqliteRcaStore(database) as reopened:
+        view = reopened.get_attempt_lineage("ATT-1")
+        assert view is not None
+        assert view.attempt.lifecycle is GenerationLifecycle.GENERATING
+        assert view.try_outcomes == ()
+        assert reopened.mark_attempt_generating(
+            "OP-GEN-1", "ATT-1", NOW + timedelta(days=1)
+        ) == view.attempt
+
+
+def test_generating_transition_rejects_missing_attempt(tmp_path) -> None:
+    with SqliteRcaStore(tmp_path / "missing-generating.db") as store:
+        with pytest.raises(RcaDomainError) as raised:
+            store.mark_attempt_generating("OP-GEN", "ATT-MISSING", NOW)
+        assert raised.value.code is RcaErrorCode.INVALID_REFERENCE
+
+
 def test_attempt_requires_aggregate_and_rejects_contradictory_lineage(tmp_path) -> None:
     with SqliteRcaStore(tmp_path / "rca.db") as store:
         with pytest.raises(RcaDomainError) as missing:
