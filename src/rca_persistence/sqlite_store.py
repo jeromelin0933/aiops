@@ -1,9 +1,7 @@
-"""Independent SQLite authority for SPEC-012 Aggregate and Attempt facts.
+"""Independent SQLite authority for SPEC-012 Aggregate, Attempt, and Try facts.
 
-This Phase-2 adapter intentionally stops at obligation-first Aggregate and
-immutable Attempt-core persistence.  Logical Try outcomes, Artifacts,
-Versions, publication, Current, and runtime orchestration belong to later
-phases and are not represented by writable placeholders here.
+Artifacts, Versions, publication, Current, and runtime orchestration belong
+to later phases and are not represented by writable placeholders here.
 """
 
 from __future__ import annotations
@@ -19,12 +17,16 @@ from threading import RLock
 
 from .contracts import (
     AdmitAttemptRequest,
+    AdmittedRetryDisposition,
     AttemptLineage,
     AttemptLineageRead,
     CreateAggregateRequest,
     GenerationAttempt,
     GenerationLifecycle,
     GenerationProvenance,
+    LogicalTryIdentity,
+    LogicalTryOutcome,
+    LogicalTryResultKind,
     RcaAggregate,
     RcaDomainError,
     RcaErrorCode,
@@ -32,8 +34,8 @@ from .contracts import (
 )
 
 
-SCHEMA_VERSION = "2"
-_RECOGNIZED_OLDER_SCHEMA_VERSIONS = frozenset({"1"})
+SCHEMA_VERSION = "3"
+_RECOGNIZED_OLDER_SCHEMA_VERSIONS = frozenset({"1", "2"})
 _METADATA_KEY = "rca_store_schema_version"
 _TABLES = frozenset(
     {"rca_store_metadata", "rca_aggregates", "rca_attempts", "rca_operation_receipts"}
@@ -53,7 +55,7 @@ class RcaStoreIntegrityError(RcaDomainError):
 
 
 class SqliteRcaStore:
-    """Configurable-path Candidate-A SQLite authority for Phase 2."""
+    """Configurable-path Candidate-A SQLite authority through Phase 3."""
 
     def __init__(
         self,
@@ -214,6 +216,86 @@ class SqliteRcaStore:
         except sqlite3.Error as exc:
             raise _sqlite_error(exc, "RCA Store cannot admit Attempt") from exc
 
+    def record_try_outcome(
+        self, operation_id: str, outcome: LogicalTryOutcome
+    ) -> LogicalTryOutcome:
+        _reference(operation_id, "operation_id")
+        if not isinstance(outcome, LogicalTryOutcome):
+            raise TypeError("outcome must be LogicalTryOutcome")
+        try:
+            with self._write_transaction():
+                replay = self._read_receipt(operation_id)
+                if replay is not None:
+                    self._require_try_receipt_identity(replay, operation_id, outcome)
+                    stored = self._read_try_outcome(outcome.identity)
+                    if stored is None:
+                        self._corruption("Try receipt references a missing authoritative outcome")
+                    return stored
+
+                view = self._read_attempt_lineage(outcome.identity.attempt_id)
+                if view is None:
+                    raise RcaDomainError(
+                        RcaErrorCode.INVALID_REFERENCE,
+                        "Try outcome references an unknown admitted Attempt",
+                        operation_id=operation_id,
+                        attempt_id=outcome.identity.attempt_id,
+                    )
+
+                stored = self._find_try_outcome(view, outcome.identity.try_ordinal)
+                if stored is not None:
+                    if stored != outcome:
+                        raise RcaDomainError(
+                            RcaErrorCode.IDENTITY_LINEAGE_CONFLICT,
+                            "Logical Try identity resolves to a contradictory outcome",
+                            operation_id=operation_id,
+                            attempt_id=outcome.identity.attempt_id,
+                        )
+                    return stored
+
+                expected_ordinal = len(view.try_outcomes) + 1
+                if outcome.identity.try_ordinal != expected_ordinal:
+                    raise RcaDomainError(
+                        RcaErrorCode.SEMANTIC_CONFLICT,
+                        "Logical Try ordinal cannot skip an undisposed predecessor",
+                        operation_id=operation_id,
+                        attempt_id=outcome.identity.attempt_id,
+                    )
+                if view.try_outcomes and (
+                    view.try_outcomes[-1].retry_disposition
+                    is not AdmittedRetryDisposition.RETRYABLE
+                ):
+                    raise RcaDomainError(
+                        RcaErrorCode.SEMANTIC_CONFLICT,
+                        "latest admitted Try disposition does not permit another ordinal",
+                        operation_id=operation_id,
+                        attempt_id=outcome.identity.attempt_id,
+                    )
+                if view.attempt.lifecycle is GenerationLifecycle.COMPLETED:
+                    raise RcaDomainError(
+                        RcaErrorCode.SEMANTIC_CONFLICT,
+                        "a completed Attempt cannot admit another Logical Try outcome",
+                        operation_id=operation_id,
+                        attempt_id=outcome.identity.attempt_id,
+                    )
+
+                self._insert_try_receipt(operation_id, outcome)
+                lifecycle = (
+                    GenerationLifecycle.COMPLETED
+                    if outcome.result_kind is LogicalTryResultKind.VALIDATED_RESULT
+                    else GenerationLifecycle.FAILED
+                )
+                self._db.execute(
+                    """UPDATE rca_attempts
+                          SET lifecycle = ?, latest_try_ordinal = ?
+                        WHERE attempt_id = ?""",
+                    (lifecycle.value, outcome.identity.try_ordinal, outcome.identity.attempt_id),
+                )
+                return outcome
+        except RcaDomainError:
+            raise
+        except sqlite3.Error as exc:
+            raise _sqlite_error(exc, "RCA Store cannot record Logical Try outcome") from exc
+
     def get_aggregate(self, aggregate_id: str) -> RcaAggregate | None:
         _reference(aggregate_id, "aggregate_id")
         try:
@@ -254,7 +336,7 @@ class SqliteRcaStore:
             raise _sqlite_error(exc, "RCA Store cannot read Attempt lineage") from exc
 
     def validate_local_readiness(self) -> None:
-        """Validate all Phase-2 local authority without skipping bad records."""
+        """Validate all local authority through Phase 3 without skipping bad records."""
         try:
             with self._read_snapshot():
                 self._validate_authority_locked()
@@ -342,7 +424,7 @@ class SqliteRcaStore:
                     );
                     CREATE TABLE rca_operation_receipts (
                         operation_id TEXT PRIMARY KEY NOT NULL,
-                        command_kind TEXT NOT NULL CHECK(command_kind IN ('CREATE_AGGREGATE','ADMIT_ATTEMPT')),
+                        command_kind TEXT NOT NULL CHECK(command_kind IN ('CREATE_AGGREGATE','ADMIT_ATTEMPT','RECORD_TRY')),
                         semantic_identity TEXT NOT NULL,
                         result_identity TEXT NOT NULL,
                         occurred_at TEXT NOT NULL
@@ -351,6 +433,9 @@ class SqliteRcaStore:
                         ON rca_attempts(aggregate_id, attempt_id);
                     CREATE INDEX rca_receipts_by_result
                         ON rca_operation_receipts(command_kind, result_identity);
+                    CREATE UNIQUE INDEX rca_one_outcome_per_logical_try
+                        ON rca_operation_receipts(result_identity)
+                        WHERE command_kind = 'RECORD_TRY';
                     """
                     for statement in schema.split(";"):
                         if statement.strip():
@@ -462,6 +547,11 @@ class SqliteRcaStore:
                 RcaErrorCode.SCHEMA_INCOMPATIBILITY,
                 "Candidate-A Attempt table lacks its local Aggregate reference",
             )
+        if not _has_unique_partial_try_identity(self._db):
+            raise RcaStoreIntegrityError(
+                RcaErrorCode.SCHEMA_INCOMPATIBILITY,
+                "Candidate-A schema lacks unique Logical Try identity authority",
+            )
 
     def _validate_authority_locked(self) -> None:
         self._validate_current_schema()
@@ -491,6 +581,11 @@ class SqliteRcaStore:
             if self._read_attempt_lineage(attempt_id) is None:
                 self._corruption("Attempt disappeared during readiness snapshot")
             self._require_record_receipt("ADMIT_ATTEMPT", attempt_id)
+        for row in self._db.execute(
+            """SELECT result_identity FROM rca_operation_receipts
+                 WHERE command_kind = 'RECORD_TRY' ORDER BY result_identity"""
+        ):
+            self._require_record_receipt("RECORD_TRY", row[0])
         for row in self._db.execute(
             "SELECT operation_id FROM rca_operation_receipts ORDER BY operation_id"
         ):
@@ -540,6 +635,8 @@ class SqliteRcaStore:
             (attempt_id,),
         ).fetchone()
         if row is None:
+            if self._read_try_outcomes(attempt_id):
+                self._corruption("Logical Try history references a missing Attempt")
             return None
         try:
             if self._read_aggregate(row[1]) is None:
@@ -548,8 +645,8 @@ class SqliteRcaStore:
             lineage = AttemptLineage(row[0], row[1], row[2], row[3], row[4], provenance)
             attempt = GenerationAttempt(lineage, GenerationLifecycle(row[10]), row[11])
             _parse_timestamp(row[12])
-            # Phase 2 cannot hold Try facts, so only the coherent initial summary is legal.
-            return AttemptLineageRead(attempt, ())
+            outcomes = self._read_try_outcomes(row[0])
+            return AttemptLineageRead(attempt, outcomes)
         except (IndexError, TypeError, ValueError, RcaDomainError) as exc:
             raise RcaStoreIntegrityError(
                 RcaErrorCode.INTEGRITY_CORRUPTION, "malformed or contradictory persisted Attempt"
@@ -572,6 +669,50 @@ class SqliteRcaStore:
                 result_identity,
                 _timestamp(request.authoritative_now),
             ),
+        )
+
+    def _insert_try_receipt(self, operation_id: str, outcome: LogicalTryOutcome) -> None:
+        self._db.execute(
+            """INSERT INTO rca_operation_receipts(
+                   operation_id, command_kind, semantic_identity, result_identity, occurred_at
+               ) VALUES (?, 'RECORD_TRY', ?, ?, ?)""",
+            (
+                operation_id,
+                _try_semantic_identity(operation_id, outcome),
+                _try_result_identity(outcome.identity),
+                _timestamp(outcome.occurred_at),
+            ),
+        )
+
+    def _read_try_outcomes(self, attempt_id: str) -> tuple[LogicalTryOutcome, ...]:
+        outcomes: list[LogicalTryOutcome] = []
+        for row in self._db.execute(
+            """SELECT operation_id, semantic_identity, result_identity, occurred_at
+                 FROM rca_operation_receipts
+                WHERE command_kind = 'RECORD_TRY'"""
+        ):
+            outcome = _try_outcome_from_receipt(tuple(row))
+            if outcome.identity.attempt_id == attempt_id:
+                outcomes.append(outcome)
+        outcomes.sort(key=lambda item: item.identity.try_ordinal)
+        return tuple(outcomes)
+
+    def _read_try_outcome(self, identity: LogicalTryIdentity) -> LogicalTryOutcome | None:
+        row = self._db.execute(
+            """SELECT operation_id, semantic_identity, result_identity, occurred_at
+                 FROM rca_operation_receipts
+                WHERE command_kind = 'RECORD_TRY' AND result_identity = ?""",
+            (_try_result_identity(identity),),
+        ).fetchone()
+        return None if row is None else _try_outcome_from_receipt(tuple(row))
+
+    @staticmethod
+    def _find_try_outcome(
+        view: AttemptLineageRead, ordinal: int
+    ) -> LogicalTryOutcome | None:
+        return next(
+            (item for item in view.try_outcomes if item.identity.try_ordinal == ordinal),
+            None,
         )
 
     def _read_receipt(self, operation_id: str) -> tuple[object, ...] | None:
@@ -603,6 +744,25 @@ class SqliteRcaStore:
                 RcaErrorCode.RECEIPT_REPLAY_CONFLICT,
                 "operation_id resolves to a contradictory Candidate-A command",
                 operation_id=request.operation_id,
+            )
+
+    def _require_try_receipt_identity(
+        self,
+        receipt: tuple[object, ...],
+        operation_id: str,
+        outcome: LogicalTryOutcome,
+    ) -> None:
+        self._validate_receipt(receipt)
+        if (
+            receipt[1] != "RECORD_TRY"
+            or receipt[2] != _try_semantic_identity(operation_id, outcome)
+            or receipt[3] != _try_result_identity(outcome.identity)
+        ):
+            raise RcaDomainError(
+                RcaErrorCode.RECEIPT_REPLAY_CONFLICT,
+                "operation_id resolves to a contradictory Candidate-A command",
+                operation_id=operation_id,
+                attempt_id=outcome.identity.attempt_id,
             )
 
     def _require_record_receipt(self, command_kind: str, result_identity: str) -> None:
@@ -642,6 +802,15 @@ class SqliteRcaStore:
                 view = self._read_attempt_lineage(result_identity)  # type: ignore[arg-type]
                 if view is None or view.attempt.lineage != request.lineage:
                     raise ValueError("Attempt receipt contradicts its result")
+            elif kind == "RECORD_TRY":
+                outcome = _try_outcome_from_receipt(
+                    (operation_id, encoded, result_identity, occurred_at)
+                )
+                view = self._read_attempt_lineage(outcome.identity.attempt_id)
+                if view is None or self._find_try_outcome(
+                    view, outcome.identity.try_ordinal
+                ) != outcome:
+                    raise ValueError("Try receipt contradicts its authoritative outcome")
             else:
                 raise ValueError("unknown receipt command kind")
         except RcaStoreIntegrityError:
@@ -723,12 +892,95 @@ def _attempt_request_from_payload(payload: dict[str, object], occurred_at) -> Ad
     return AdmitAttemptRequest(payload["operation_id"], lineage, occurred_at)  # type: ignore[arg-type]
 
 
+def _try_result_identity(identity: LogicalTryIdentity) -> str:
+    return json.dumps(
+        [identity.attempt_id, identity.try_ordinal], separators=(",", ":")
+    )
+
+
+def _try_semantic_identity(operation_id: str, outcome: LogicalTryOutcome) -> str:
+    payload = {
+        "operation_id": operation_id,
+        "outcome": {
+            "identity": {
+                "attempt_id": outcome.identity.attempt_id,
+                "try_ordinal": outcome.identity.try_ordinal,
+            },
+            "result_kind": outcome.result_kind.value,
+            "retry_disposition": outcome.retry_disposition.value,
+            "occurred_at": _timestamp(outcome.occurred_at),
+            "validated_result_id": outcome.validated_result_id,
+            "failure_code": outcome.failure_code,
+            "safe_failure_message": outcome.safe_failure_message,
+        },
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def _try_outcome_from_receipt(receipt: tuple[object, ...]) -> LogicalTryOutcome:
+    try:
+        operation_id, encoded, result_identity, occurred_at = receipt
+        _reference(operation_id, "operation_id")
+        _reference(result_identity, "result_identity")
+        receipt_time = _parse_timestamp(occurred_at)
+        payload = json.loads(encoded)  # type: ignore[arg-type]
+        if not isinstance(payload, dict) or payload.get("operation_id") != operation_id:
+            raise ValueError("Try receipt identity does not match operation_id")
+        outcome_data = payload.get("outcome")
+        if not isinstance(outcome_data, dict):
+            raise ValueError("Try receipt has no outcome object")
+        identity_data = outcome_data.get("identity")
+        if not isinstance(identity_data, dict):
+            raise ValueError("Try receipt has no identity object")
+        outcome = LogicalTryOutcome(
+            LogicalTryIdentity(
+                identity_data["attempt_id"], identity_data["try_ordinal"]  # type: ignore[arg-type]
+            ),
+            LogicalTryResultKind(outcome_data["result_kind"]),
+            AdmittedRetryDisposition(outcome_data["retry_disposition"]),
+            _parse_timestamp(outcome_data["occurred_at"]),
+            validated_result_id=outcome_data.get("validated_result_id"),  # type: ignore[arg-type]
+            failure_code=outcome_data.get("failure_code"),  # type: ignore[arg-type]
+            safe_failure_message=outcome_data.get("safe_failure_message"),  # type: ignore[arg-type]
+        )
+        if outcome.occurred_at != receipt_time:
+            raise ValueError("Try outcome time contradicts its receipt")
+        if _try_result_identity(outcome.identity) != result_identity:
+            raise ValueError("Try receipt result identity is contradictory")
+        return outcome
+    except RcaDomainError:
+        raise
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RcaStoreIntegrityError(
+            RcaErrorCode.INTEGRITY_CORRUPTION,
+            "malformed or contradictory Logical Try outcome",
+        ) from exc
+
+
 def _has_unique_column(connection: sqlite3.Connection, table: str, column: str) -> bool:
     for index in connection.execute(f"PRAGMA index_list({table})"):
         if not index[2]:
             continue
         columns = [row[2] for row in connection.execute(f"PRAGMA index_info({index[1]})")]
         if columns == [column]:
+            return True
+    return False
+
+
+def _has_unique_partial_try_identity(connection: sqlite3.Connection) -> bool:
+    for index in connection.execute("PRAGMA index_list(rca_operation_receipts)"):
+        if not index[2] or not index[4]:
+            continue
+        columns = [row[2] for row in connection.execute(f"PRAGMA index_info({index[1]})")]
+        definition = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='index' AND name=?", (index[1],)
+        ).fetchone()
+        if (
+            columns == ["result_identity"]
+            and definition is not None
+            and isinstance(definition[0], str)
+            and "WHERE command_kind = 'RECORD_TRY'" in definition[0]
+        ):
             return True
     return False
 

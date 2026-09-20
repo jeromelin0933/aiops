@@ -380,9 +380,28 @@ class AttemptLineageRead:
         ordinals = tuple(outcome.identity.try_ordinal for outcome in outcomes)
         if ordinals != tuple(range(1, len(outcomes) + 1)):
             _fail("Try history must be ordered and continuous from ordinal 1", "try_outcomes")
+        for outcome in outcomes[:-1]:
+            if outcome.result_kind is LogicalTryResultKind.VALIDATED_RESULT:
+                _fail(
+                    "validated Try result must be the final outcome in Attempt history",
+                    "try_outcomes",
+                )
+            if outcome.retry_disposition is not AdmittedRetryDisposition.RETRYABLE:
+                _fail(
+                    "terminal Try disposition must be the final outcome in Attempt history",
+                    "try_outcomes",
+                )
         expected_latest = None if not outcomes else outcomes[-1].identity.try_ordinal
         if self.attempt.latest_try_ordinal != expected_latest:
             _fail("Attempt lifecycle summary must identify the latest durable Try", "attempt")
+        if self.attempt.lifecycle in {
+            GenerationLifecycle.PENDING,
+            GenerationLifecycle.GENERATING,
+        } and outcomes:
+            _fail(
+                "non-terminal Attempt lifecycle cannot summarize a terminal Try outcome",
+                "attempt.lifecycle",
+            )
         if self.attempt.lifecycle is GenerationLifecycle.COMPLETED and (
             not outcomes or outcomes[-1].result_kind is not LogicalTryResultKind.VALIDATED_RESULT
         ):
