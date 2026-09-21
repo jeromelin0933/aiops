@@ -95,6 +95,22 @@ class EvidenceDomainError(ValueError):
         self.field_path = field_path
 
 
+class EvidenceStoreError(EvidenceDomainError):
+    """Typed Candidate-B persistence failure."""
+
+
+class EvidenceStoreIntegrityError(EvidenceStoreError):
+    """Fail-closed error for uncertain or contradictory store authority."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        kind: EvidenceFailureKind = EvidenceFailureKind.EVIDENCE_STORE_INTEGRITY_FAILURE,
+    ) -> None:
+        super().__init__(kind, message)
+
+
 def invalid_capture_command(message: str, *, field_path: str) -> EvidenceDomainError:
     return EvidenceDomainError(
         EvidenceFailureKind.INVALID_CAPTURE_COMMAND,
@@ -107,6 +123,8 @@ __all__ = [
     "DEFAULT_RETRY_DISPOSITIONS",
     "EvidenceDomainError",
     "EvidenceFailureKind",
+    "EvidenceStoreError",
+    "EvidenceStoreIntegrityError",
     "RetryDisposition",
     "invalid_capture_command",
 ]

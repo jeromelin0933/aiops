@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+import json
+from typing import Any
 
 from .errors import (
     EvidenceDomainError,
@@ -49,6 +51,18 @@ class MaterialityEvaluationKind(str, Enum):
     NO_BASELINE = "NO_BASELINE"
 
 
+class EvidenceReadiness(str, Enum):
+    READY = "READY"
+
+
+class EvidenceIntegrityStatus(str, Enum):
+    VALID = "VALID"
+
+
+MAX_FAILURE_PROVENANCE_ENTRIES = 16
+MAX_FAILURE_PROVENANCE_UTF8_BYTES = 4096
+
+
 def _reference(value: object, field: str) -> str:
     if not isinstance(value, str) or not value or value != value.strip():
         raise invalid_capture_command(
@@ -74,6 +88,143 @@ def _count(value: object, field: str, *, nullable: bool = False) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ValueError(f"{field} must be a non-negative integer")
     return value
+
+
+def _validate_safe_persisted_text(value: object, *, path: str) -> None:
+    """Apply safe-text checks recursively at authoritative JSON boundaries."""
+    from .security import validate_safe_text
+
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _validate_safe_persisted_text(item, path=f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _validate_safe_persisted_text(item, path=f"{path}[{index}]")
+    elif isinstance(value, str):
+        validate_safe_text(value, field_path=path)
+
+
+def _require_object_keys(
+    value: object, required: set[str], *, field: str
+) -> dict[str, Any]:
+    if not isinstance(value, dict) or not required.issubset(value):
+        missing = sorted(required - set(value)) if isinstance(value, dict) else sorted(required)
+        raise ValueError(f"{field} is missing required facts: {', '.join(missing)}")
+    return value
+
+
+def _require_exact_object_keys(
+    value: object, required: set[str], *, field: str
+) -> dict[str, Any]:
+    result = _require_object_keys(value, required, field=field)
+    extras = sorted(set(result) - required)
+    if extras:
+        raise ValueError(f"{field} has unsupported facts: {', '.join(extras)}")
+    return result
+
+
+def _persisted_datetime(value: object, *, field: str) -> datetime:
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be an absolute timestamp")
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"{field} must be an absolute timestamp") from exc
+
+
+def _decode_window(value: object, *, field: str) -> LogicalWindow:
+    data = _require_exact_object_keys(value, {"start", "end"}, field=field)
+    return LogicalWindow(
+        _persisted_datetime(data["start"], field=f"{field}.start"),
+        _persisted_datetime(data["end"], field=f"{field}.end"),
+    )
+
+
+def _decode_query_provenance(value: object, *, source: EvidenceSource) -> QueryProvenance:
+    data = _require_exact_object_keys(
+        value,
+        {
+            "source", "query_semantic_identity", "query_version", "logical_window",
+            "selectors", "adapter_contract_version", "bounds_policy_identity",
+            "request_budget_identity",
+        },
+        field=f"Snapshot provenance.{source.value}.query",
+    )
+    if not isinstance(data["selectors"], list):
+        raise ValueError("persisted query selectors must be an ordered list")
+    selectors = []
+    for index, raw in enumerate(data["selectors"]):
+        selector = _require_exact_object_keys(
+            raw,
+            {
+                "source", "field_name", "normalized_value", "escaped_value",
+                "selector_policy_version",
+            },
+            field=f"Snapshot provenance.{source.value}.query.selectors[{index}]",
+        )
+        selectors.append(
+            SelectorFact(
+                EvidenceSource(selector["source"]),
+                selector["field_name"],
+                selector["normalized_value"],
+                selector["escaped_value"],
+                selector["selector_policy_version"],
+            )
+        )
+    return QueryProvenance(
+        EvidenceSource(data["source"]),
+        data["query_semantic_identity"],
+        data["query_version"],
+        _decode_window(data["logical_window"], field=f"Snapshot provenance.{source.value}.query.logical_window"),
+        tuple(selectors),
+        data["adapter_contract_version"],
+        data["bounds_policy_identity"],
+        data["request_budget_identity"],
+    )
+
+
+def _decode_collection_provenance(
+    value: object, *, source: EvidenceSource
+) -> CollectionProvenance:
+    data = _require_exact_object_keys(
+        value,
+        {
+            "source", "adapter_contract_version", "logical_window", "page_count",
+            "continuation_complete", "response_validation_status",
+        },
+        field=f"Snapshot provenance.{source.value}.collection",
+    )
+    return CollectionProvenance(
+        EvidenceSource(data["source"]),
+        data["adapter_contract_version"],
+        _decode_window(data["logical_window"], field=f"Snapshot provenance.{source.value}.collection.logical_window"),
+        data["page_count"],
+        data["continuation_complete"],
+        SourceStatus(data["response_validation_status"]),
+    )
+
+
+def _decode_bounds(value: object, *, source: EvidenceSource) -> BoundsOmissionFacts:
+    fields = {
+        "bounds_policy_version", "observed_candidate_count", "included_count",
+        "omitted_count", "omission_reason", "sampling_applied",
+        "sampling_policy_identity", "aggregation_applied", "aggregation_rule_identity",
+        "aggregation_lossy", "dedup_applied", "dedup_input_count",
+        "dedup_output_count", "truncation_applied", "truncation_reason",
+        "completeness_impact",
+    }
+    data = _require_exact_object_keys(
+        value, fields, field=f"Snapshot bounds.{source.value}"
+    )
+    return BoundsOmissionFacts(
+        data["bounds_policy_version"], data["observed_candidate_count"],
+        data["included_count"], data["omitted_count"], data["omission_reason"],
+        data["sampling_applied"], data["sampling_policy_identity"],
+        data["aggregation_applied"], data["aggregation_rule_identity"],
+        data["aggregation_lossy"], data["dedup_applied"], data["dedup_input_count"],
+        data["dedup_output_count"], data["truncation_applied"],
+        data["truncation_reason"], EvidenceCompleteness(data["completeness_impact"]),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -439,6 +590,418 @@ class MaterialityResult:
         object.__setattr__(self, "reason_facts", facts)
 
 
+@dataclass(frozen=True, slots=True)
+class EvidenceRevision:
+    """Incident-scoped canonical evidence identity persisted by Candidate B."""
+
+    revision_id: str
+    incident_id: str
+    canonicalization_version: str
+    canonical_semantic_content: str
+    integrity_identity: str
+
+    def __post_init__(self) -> None:
+        from .identity import canonical_json, semantic_identity
+
+        for field in ("revision_id", "incident_id", "canonicalization_version"):
+            object.__setattr__(self, field, _reference(getattr(self, field), field))
+        if not isinstance(self.canonical_semantic_content, str):
+            raise TypeError("canonical_semantic_content must be canonical JSON")
+        try:
+            decoded = json.loads(self.canonical_semantic_content)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("canonical_semantic_content must be valid JSON") from exc
+        if canonical_json(decoded) != self.canonical_semantic_content:
+            raise ValueError("canonical_semantic_content is not canonical JSON")
+        from .security import validate_safe_provenance
+        validate_safe_provenance(decoded, path="revision.semantic_content")
+        _validate_safe_persisted_text(decoded, path="revision.semantic_content")
+        semantic = _require_object_keys(
+            decoded,
+            {
+                "incident_context",
+                "events",
+                "normalized_evidence",
+                "source_statuses",
+                "completeness",
+                "omission",
+                "collection_boundaries",
+            },
+            field="Revision semantic content",
+        )
+        if not isinstance(semantic["incident_context"], dict):
+            raise ValueError("Revision incident_context must be an object")
+        if not isinstance(semantic["events"], list) or not semantic["events"]:
+            raise ValueError("Revision events must be a non-empty ordered list")
+        for field in ("normalized_evidence", "source_statuses", "omission", "collection_boundaries"):
+            if not isinstance(semantic[field], dict):
+                raise ValueError(f"Revision {field} must be an object")
+        if semantic["completeness"] not in {item.value for item in EvidenceCompleteness}:
+            raise ValueError("Revision completeness is invalid")
+        projection = {
+            "incident_id": self.incident_id,
+            "canonicalization_version": self.canonicalization_version,
+            "semantic_content": decoded,
+        }
+        expected_revision_id = semantic_identity("spec013-evidence-revision", projection)
+        expected_integrity = semantic_identity("spec013-revision-integrity", projection)
+        if self.revision_id != expected_revision_id:
+            raise ValueError("revision_id contradicts canonical semantic evidence")
+        if self.integrity_identity != expected_integrity:
+            raise ValueError("Revision integrity identity is invalid")
+
+    @classmethod
+    def from_content(
+        cls,
+        *,
+        incident_id: str,
+        canonicalization_version: str,
+        semantic_content: object,
+    ) -> "EvidenceRevision":
+        from .identity import canonical_json, semantic_identity
+
+        incident_id = _reference(incident_id, "incident_id")
+        canonicalization_version = _reference(
+            canonicalization_version, "canonicalization_version"
+        )
+        content = canonical_json(semantic_content)
+        projection = {
+            "incident_id": incident_id,
+            "canonicalization_version": canonicalization_version,
+            "semantic_content": json.loads(content),
+        }
+        return cls(
+            semantic_identity("spec013-evidence-revision", projection),
+            incident_id,
+            canonicalization_version,
+            content,
+            semantic_identity("spec013-revision-integrity", projection),
+        )
+
+    @property
+    def semantic_content(self) -> Any:
+        return json.loads(self.canonical_semantic_content)
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceSnapshot:
+    """Immutable operational capture record bound to exactly one Revision."""
+
+    snapshot_id: str
+    capture_operation_id: str
+    incident_id: str
+    snapshot_at: datetime
+    capture_contract_version: str
+    canonicalization_version: str
+    source_policy_version: str
+    bounds_policy_version: str
+    config_identity: str
+    revision_id: str
+    completeness: EvidenceCompleteness
+    source_statuses: tuple[tuple[EvidenceSource, SourceStatus], ...]
+    canonical_snapshot_content: str
+
+    def __post_init__(self) -> None:
+        from .identity import canonical_json, semantic_identity
+
+        for field in (
+            "snapshot_id",
+            "capture_operation_id",
+            "incident_id",
+            "capture_contract_version",
+            "canonicalization_version",
+            "source_policy_version",
+            "bounds_policy_version",
+            "config_identity",
+            "revision_id",
+        ):
+            object.__setattr__(self, field, _reference(getattr(self, field), field))
+        object.__setattr__(self, "snapshot_at", canonical_utc(self.snapshot_at, field="snapshot_at"))
+        if not isinstance(self.completeness, EvidenceCompleteness):
+            raise TypeError("completeness must be an EvidenceCompleteness")
+        statuses = tuple(self.source_statuses)
+        if not statuses:
+            raise ValueError("source_statuses must not be empty")
+        if any(
+            not isinstance(item, tuple)
+            or len(item) != 2
+            or not isinstance(item[0], EvidenceSource)
+            or not isinstance(item[1], SourceStatus)
+            for item in statuses
+        ):
+            raise TypeError("source_statuses must contain EvidenceSource/SourceStatus pairs")
+        if len({source for source, _ in statuses}) != len(statuses):
+            raise ValueError("source_statuses must be unique by source")
+        statuses = tuple(sorted(statuses, key=lambda item: item[0].value))
+        object.__setattr__(self, "source_statuses", statuses)
+        if self.completeness is EvidenceCompleteness.FULL and any(
+            status not in {SourceStatus.AVAILABLE, SourceStatus.EMPTY}
+            for _, status in statuses
+        ):
+            raise ValueError("FULL Snapshot cannot contain an unavailable or invalid source")
+        if not isinstance(self.canonical_snapshot_content, str):
+            raise TypeError("canonical_snapshot_content must be canonical JSON")
+        try:
+            content = json.loads(self.canonical_snapshot_content)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("canonical_snapshot_content must be valid JSON") from exc
+        if not isinstance(content, dict) or not content:
+            raise ValueError("Snapshot content must be a non-empty object")
+        if canonical_json(content) != self.canonical_snapshot_content:
+            raise ValueError("canonical_snapshot_content is not canonical JSON")
+        from .security import validate_safe_provenance
+        validate_safe_provenance(content, path="snapshot.content")
+        _validate_safe_persisted_text(content, path="snapshot.content")
+        snapshot_content = _require_object_keys(
+            content,
+            {
+                "incident_projection",
+                "event_projections",
+                "episode",
+                "windows",
+                "semantic_evidence",
+                "provenance",
+                "bounds",
+                "post_context",
+            },
+            field="Snapshot content",
+        )
+        if not isinstance(snapshot_content["incident_projection"], dict) or not snapshot_content["incident_projection"]:
+            raise ValueError("Snapshot incident_projection must be a non-empty object")
+        if not isinstance(snapshot_content["event_projections"], list) or not snapshot_content["event_projections"]:
+            raise ValueError("Snapshot event_projections must be a non-empty ordered list")
+        _require_object_keys(snapshot_content["episode"], {"start", "end"}, field="Snapshot episode")
+        source_names = {source.value for source, _ in statuses}
+        source_maps = {
+            field: _require_exact_object_keys(
+                snapshot_content[field], source_names, field=f"Snapshot {field}"
+            )
+            for field in ("windows", "provenance", "bounds")
+        }
+        summaries = []
+        for source, status in statuses:
+            provenance = _require_exact_object_keys(
+                source_maps["provenance"][source.value],
+                {"query", "collection", "validation_findings", "safe_failure_kind"},
+                field=f"Snapshot provenance.{source.value}",
+            )
+            if not isinstance(provenance["validation_findings"], list):
+                raise ValueError("persisted validation_findings must be an ordered list")
+            query = _decode_query_provenance(provenance["query"], source=source)
+            collection = _decode_collection_provenance(
+                provenance["collection"], source=source
+            )
+            bounds = _decode_bounds(source_maps["bounds"][source.value], source=source)
+            window = _decode_window(
+                source_maps["windows"][source.value],
+                field=f"Snapshot windows.{source.value}",
+            )
+            if query.source is not source or collection.source is not source:
+                raise ValueError("persisted provenance source identity is contradictory")
+            if query.logical_window != window or collection.logical_window != window:
+                raise ValueError("persisted provenance logical windows are contradictory")
+            if bounds.bounds_policy_version != self.bounds_policy_version:
+                raise ValueError("persisted bounds policy contradicts CaptureCommand")
+            safe_failure = provenance["safe_failure_kind"]
+            summary = SourceCollectionSummary(
+                source,
+                status,
+                bounds.included_count,
+                query,
+                collection,
+                bounds,
+                tuple(provenance["validation_findings"]),
+                EvidenceFailureKind(safe_failure) if safe_failure is not None else None,
+            )
+            summaries.append(summary)
+        if self.completeness is EvidenceCompleteness.FULL:
+            if any(
+                summary.status in {SourceStatus.UNAVAILABLE, SourceStatus.INVALID}
+                or summary.bounds.completeness_impact is EvidenceCompleteness.DEGRADED
+                for summary in summaries
+            ):
+                raise ValueError("FULL Snapshot has completeness-affecting source or bounds facts")
+        elif not any(
+            summary.status in {SourceStatus.UNAVAILABLE, SourceStatus.INVALID}
+            or summary.bounds.completeness_impact is EvidenceCompleteness.DEGRADED
+            for summary in summaries
+        ):
+            raise ValueError("DEGRADED Snapshot requires a persisted degradation basis")
+        _require_object_keys(
+            snapshot_content["post_context"],
+            {
+                "episode_end",
+                "default_boundary",
+                "effective_window_ends",
+                "snapshot_at",
+                "reached_upper_boundary",
+            },
+            field="Snapshot post_context",
+        )
+        if not isinstance(snapshot_content["semantic_evidence"], dict):
+            raise ValueError("Snapshot semantic_evidence must be an object")
+        normalized = snapshot_content["semantic_evidence"].get("normalized_evidence")
+        normalized = _require_exact_object_keys(
+            normalized, source_names, field="Snapshot semantic_evidence.normalized_evidence"
+        )
+        for summary in summaries:
+            records = normalized[summary.source.value]
+            if not isinstance(records, list):
+                raise ValueError("normalized source evidence must be an ordered list")
+            if len(records) != summary.record_count:
+                raise ValueError("normalized evidence count contradicts persisted bounds")
+        expected = semantic_identity(
+            "spec013-evidence-snapshot",
+            {"capture_operation_id": self.capture_operation_id},
+        )
+        if self.snapshot_id != expected:
+            raise ValueError("snapshot_id contradicts capture operation identity")
+
+    @classmethod
+    def from_content(
+        cls,
+        command: CaptureCommand,
+        *,
+        revision_id: str,
+        completeness: EvidenceCompleteness,
+        source_statuses: tuple[tuple[EvidenceSource, SourceStatus], ...],
+        snapshot_content: object,
+    ) -> "EvidenceSnapshot":
+        from .identity import canonical_json, semantic_identity
+
+        if not isinstance(command, CaptureCommand):
+            raise TypeError("command must be a CaptureCommand")
+        return cls(
+            semantic_identity(
+                "spec013-evidence-snapshot",
+                {"capture_operation_id": command.capture_operation_id},
+            ),
+            command.capture_operation_id,
+            command.incident_id,
+            command.snapshot_at,
+            command.capture_contract_version,
+            command.canonicalization_version,
+            command.source_policy_version,
+            command.bounds_policy_version,
+            command.config_identity,
+            revision_id,
+            completeness,
+            source_statuses,
+            canonical_json(snapshot_content),
+        )
+
+    @property
+    def snapshot_content(self) -> dict[str, Any]:
+        return json.loads(self.canonical_snapshot_content)
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureSuccess:
+    command: CaptureCommand
+    snapshot: EvidenceSnapshot
+    revision: EvidenceRevision
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.command, CaptureCommand):
+            raise TypeError("command must be a CaptureCommand")
+        if not isinstance(self.snapshot, EvidenceSnapshot):
+            raise TypeError("snapshot must be an EvidenceSnapshot")
+        if not isinstance(self.revision, EvidenceRevision):
+            raise TypeError("revision must be an EvidenceRevision")
+        if self.snapshot.capture_operation_id != self.command.capture_operation_id:
+            raise ValueError("Snapshot does not belong to CaptureCommand")
+        if self.snapshot.incident_id != self.command.incident_id:
+            raise ValueError("Snapshot Incident contradicts CaptureCommand")
+        for field in (
+            "snapshot_at",
+            "capture_contract_version",
+            "canonicalization_version",
+            "source_policy_version",
+            "bounds_policy_version",
+            "config_identity",
+        ):
+            if getattr(self.snapshot, field) != getattr(self.command, field):
+                raise ValueError(f"Snapshot {field} contradicts CaptureCommand")
+        if self.snapshot.revision_id != self.revision.revision_id:
+            raise ValueError("Snapshot Revision binding is contradictory")
+        if self.revision.incident_id != self.command.incident_id:
+            raise ValueError("Revision Incident contradicts CaptureCommand")
+        if self.revision.canonicalization_version != self.command.canonicalization_version:
+            raise ValueError("Revision canonicalization contradicts CaptureCommand")
+        semantic = self.revision.semantic_content
+        expected_statuses = {
+            source.value: status.value for source, status in self.snapshot.source_statuses
+        }
+        if semantic["source_statuses"] != expected_statuses:
+            raise ValueError("Revision source statuses contradict Snapshot")
+        if semantic["completeness"] != self.snapshot.completeness.value:
+            raise ValueError("Revision completeness contradicts Snapshot")
+        if self.snapshot.snapshot_content["semantic_evidence"] != semantic:
+            raise ValueError("Snapshot semantic evidence contradicts Revision")
+        content = self.snapshot.snapshot_content
+        if semantic["omission"] != content["bounds"]:
+            raise ValueError("Revision omission facts contradict Snapshot bounds")
+        if semantic["collection_boundaries"] != content["windows"]:
+            raise ValueError("Revision collection boundaries contradict Snapshot windows")
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureTerminalOutcome:
+    capture_operation_id: str
+    command_semantic_identity: str
+    terminal_kind: CaptureTerminalKind
+    snapshot_id: str | None = None
+    revision_id: str | None = None
+    failure: CaptureFailure | None = None
+    safe_provenance: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "capture_operation_id", _reference(self.capture_operation_id, "capture_operation_id"))
+        object.__setattr__(self, "command_semantic_identity", _reference(self.command_semantic_identity, "command_semantic_identity"))
+        if not isinstance(self.terminal_kind, CaptureTerminalKind):
+            raise TypeError("terminal_kind must be a CaptureTerminalKind")
+        from .security import validate_safe_text
+        provenance = tuple(_bounded_text(item, "safe_provenance") for item in self.safe_provenance)
+        if len(provenance) > MAX_FAILURE_PROVENANCE_ENTRIES:
+            raise ValueError(
+                f"safe_provenance must contain at most {MAX_FAILURE_PROVENANCE_ENTRIES} entries"
+            )
+        from .identity import canonical_json
+        if len(canonical_json(provenance).encode("utf-8")) > MAX_FAILURE_PROVENANCE_UTF8_BYTES:
+            raise ValueError(
+                f"safe_provenance must be at most {MAX_FAILURE_PROVENANCE_UTF8_BYTES} UTF-8 bytes"
+            )
+        for index, item in enumerate(provenance):
+            validate_safe_text(item, field_path=f"safe_provenance[{index}]")
+        object.__setattr__(self, "safe_provenance", provenance)
+        if self.terminal_kind is CaptureTerminalKind.SUCCESS:
+            _reference(self.snapshot_id, "snapshot_id")
+            _reference(self.revision_id, "revision_id")
+            if self.failure is not None or provenance:
+                raise ValueError("SUCCESS cannot carry failure authority")
+        else:
+            if self.snapshot_id is not None or self.revision_id is not None:
+                raise ValueError("FAILURE cannot carry Snapshot/Revision authority")
+            if not isinstance(self.failure, CaptureFailure):
+                raise TypeError("FAILURE requires CaptureFailure")
+            if self.failure.capture_operation_id != self.capture_operation_id:
+                raise ValueError("CaptureFailure operation identity is contradictory")
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceRecoveryFacts:
+    capture_outcomes: tuple[CaptureTerminalOutcome, ...]
+    snapshots: tuple[EvidenceSnapshot, ...]
+    revisions: tuple[EvidenceRevision, ...]
+    materiality_results: tuple[MaterialityResult, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "capture_outcomes", tuple(self.capture_outcomes))
+        object.__setattr__(self, "snapshots", tuple(self.snapshots))
+        object.__setattr__(self, "revisions", tuple(self.revisions))
+        object.__setattr__(self, "materiality_results", tuple(self.materiality_results))
+
+
 __all__ = [
     "BoundsOmissionFacts",
     "CaptureCommand",
@@ -446,6 +1009,13 @@ __all__ = [
     "CaptureTerminalKind",
     "CollectionProvenance",
     "EvidenceCompleteness",
+    "EvidenceIntegrityStatus",
+    "MAX_FAILURE_PROVENANCE_ENTRIES",
+    "MAX_FAILURE_PROVENANCE_UTF8_BYTES",
+    "EvidenceReadiness",
+    "EvidenceRecoveryFacts",
+    "EvidenceRevision",
+    "EvidenceSnapshot",
     "EvidenceSource",
     "MaterialityEvaluationKind",
     "MaterialityJudgement",
@@ -455,4 +1025,6 @@ __all__ = [
     "SelectorFact",
     "SourceCollectionSummary",
     "SourceStatus",
+    "CaptureSuccess",
+    "CaptureTerminalOutcome",
 ]
