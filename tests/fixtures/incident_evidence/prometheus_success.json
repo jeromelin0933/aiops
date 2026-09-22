@@ -1,0 +1,16 @@
+{
+  "status": "success",
+  "data": {
+    "resultType": "matrix",
+    "result": [
+      {
+        "metric": {"service_name": "payments", "instance": "b"},
+        "values": [[1789956030, "12.5"], [1789956010, "10"], [1789956010, "10.0"]]
+      },
+      {
+        "metric": {"instance": "a", "service_name": "payments"},
+        "values": [[1789956020, "11"]]
+      }
+    ]
+  }
+}

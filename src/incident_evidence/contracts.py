@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 import json
+from math import isfinite
 from typing import Any
 
 from .errors import (
@@ -403,6 +404,111 @@ class QueryProvenance:
         if len({selector.field_name for selector in selectors}) != len(selectors):
             raise ValueError("selector fields must be unique")
         object.__setattr__(self, "selectors", selectors)
+
+
+@dataclass(frozen=True, slots=True)
+class SourceAdapterRequest:
+    """Bounded semantic request shared by Candidate-B source adapters."""
+
+    source: EvidenceSource
+    incident_id: str
+    logical_window: LogicalWindow
+    selectors: tuple[SelectorFact, ...]
+    query_resource: str
+    query_semantic_identity: str
+    query_version: str
+    adapter_contract_version: str
+    bounds_policy_identity: str
+    request_budget_identity: str
+    timeout_seconds: float
+    max_records: int
+    max_content_bytes: int
+    max_labels_per_record: int
+    max_label_value_characters: int
+    query_resolution_seconds: float | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.source, EvidenceSource):
+            raise TypeError("source must be an EvidenceSource")
+        if not isinstance(self.logical_window, LogicalWindow):
+            raise TypeError("logical_window must be a LogicalWindow")
+        for field in (
+            "incident_id",
+            "query_resource",
+            "query_semantic_identity",
+            "query_version",
+            "adapter_contract_version",
+            "bounds_policy_identity",
+            "request_budget_identity",
+        ):
+            object.__setattr__(self, field, _bounded_text(getattr(self, field), field))
+        from .security import validate_safe_text
+
+        for field in (
+            "incident_id",
+            "query_resource",
+            "query_semantic_identity",
+            "query_version",
+            "adapter_contract_version",
+            "bounds_policy_identity",
+            "request_budget_identity",
+        ):
+            validate_safe_text(getattr(self, field), field_path=field)
+        selectors = tuple(self.selectors)
+        if any(
+            not isinstance(selector, SelectorFact) or selector.source is not self.source
+            for selector in selectors
+        ):
+            raise ValueError("selectors must be SelectorFacts for the request source")
+        if len({selector.field_name for selector in selectors}) != len(selectors):
+            raise ValueError("selector fields must be unique")
+        object.__setattr__(
+            self,
+            "selectors",
+            tuple(sorted(selectors, key=lambda item: item.field_name)),
+        )
+        if (
+            isinstance(self.timeout_seconds, bool)
+            or not isinstance(self.timeout_seconds, (int, float))
+            or not isfinite(float(self.timeout_seconds))
+            or self.timeout_seconds <= 0
+        ):
+            raise ValueError("timeout_seconds must be a finite positive number")
+        object.__setattr__(self, "timeout_seconds", float(self.timeout_seconds))
+        for field in (
+            "max_records",
+            "max_content_bytes",
+            "max_labels_per_record",
+            "max_label_value_characters",
+        ):
+            value = getattr(self, field)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"{field} must be a positive integer")
+        if self.query_resolution_seconds is not None:
+            value = self.query_resolution_seconds
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not isfinite(float(value))
+                or value <= 0
+            ):
+                raise ValueError(
+                    "query_resolution_seconds must be a finite positive number"
+                )
+            object.__setattr__(self, "query_resolution_seconds", float(value))
+
+    @property
+    def query_provenance(self) -> QueryProvenance:
+        return QueryProvenance(
+            self.source,
+            self.query_semantic_identity,
+            self.query_version,
+            self.logical_window,
+            self.selectors,
+            self.adapter_contract_version,
+            self.bounds_policy_identity,
+            self.request_budget_identity,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1114,6 +1220,7 @@ __all__ = [
     "MaterialityResult",
     "QueryProvenance",
     "SelectorFact",
+    "SourceAdapterRequest",
     "SourceCollectionSummary",
     "SourceStatus",
     "CaptureSuccess",

@@ -1,0 +1,16 @@
+{
+  "status": "success",
+  "data": {
+    "resultType": "streams",
+    "result": [
+      {
+        "stream": {"service_name": "payments", "level": "error"},
+        "values": [
+          ["1789956030000000000", "database unavailable"],
+          ["1789956010000000000", "request started"],
+          ["1789956010000000000", "request started"]
+        ]
+      }
+    ]
+  }
+}

@@ -25,6 +25,7 @@ from .contracts import (
     QueryProvenance,
     SelectorFact,
     SourceCollectionSummary,
+    SourceAdapterRequest,
     SourceStatus,
     TrustedEvent,
 )
@@ -62,6 +63,14 @@ from .time_semantics import (
 from .sqlite_store import SCHEMA_VERSION, STORE_DOMAIN, SqliteEvidenceStore
 from .capture_plan import build_capture_plan
 from .trusted_core import admit_capture_plan
+from .adapters import (
+    LokiLogRecord,
+    LokiRangeAdapter,
+    LokiSourceResult,
+    PrometheusRangeAdapter,
+    PrometheusSampleRecord,
+    PrometheusSourceResult,
+)
 
 __all__ = [
     "BoundsOmissionFacts",
@@ -89,6 +98,9 @@ __all__ = [
     "EvidencePolicyConfigError",
     "EvidenceSource",
     "LogicalWindow",
+    "LokiLogRecord",
+    "LokiRangeAdapter",
+    "LokiSourceResult",
     "IncidentCaptureProjection",
     "MaterialityEvaluationKind",
     "MaterialityJudgement",
@@ -96,9 +108,13 @@ __all__ = [
     "MaterialityResult",
     "QueryProvenance",
     "PlannedSelector",
+    "PrometheusRangeAdapter",
+    "PrometheusSampleRecord",
+    "PrometheusSourceResult",
     "RetryDisposition",
     "SelectorFact",
     "SourceCollectionSummary",
+    "SourceAdapterRequest",
     "SourceStatus",
     "TrustedEvent",
     "SCHEMA_VERSION",
