@@ -3,6 +3,7 @@
 from .contracts import (
     BoundsOmissionFacts,
     CaptureCommand,
+    CapturePlan,
     CaptureFailure,
     CaptureSuccess,
     CaptureTerminalOutcome,
@@ -19,10 +20,13 @@ from .contracts import (
     MaterialityJudgement,
     MaterialityRequest,
     MaterialityResult,
+    IncidentCaptureProjection,
+    PlannedSelector,
     QueryProvenance,
     SelectorFact,
     SourceCollectionSummary,
     SourceStatus,
+    TrustedEvent,
 )
 from .errors import (
     DEFAULT_RETRY_DISPOSITIONS,
@@ -56,10 +60,13 @@ from .time_semantics import (
     format_utc,
 )
 from .sqlite_store import SCHEMA_VERSION, STORE_DOMAIN, SqliteEvidenceStore
+from .capture_plan import build_capture_plan
+from .trusted_core import admit_capture_plan
 
 __all__ = [
     "BoundsOmissionFacts",
     "CaptureCommand",
+    "CapturePlan",
     "CaptureFailure",
     "CaptureSuccess",
     "CaptureTerminalOutcome",
@@ -82,19 +89,23 @@ __all__ = [
     "EvidencePolicyConfigError",
     "EvidenceSource",
     "LogicalWindow",
+    "IncidentCaptureProjection",
     "MaterialityEvaluationKind",
     "MaterialityJudgement",
     "MaterialityRequest",
     "MaterialityResult",
     "QueryProvenance",
+    "PlannedSelector",
     "RetryDisposition",
     "SelectorFact",
     "SourceCollectionSummary",
     "SourceStatus",
+    "TrustedEvent",
     "SCHEMA_VERSION",
     "STORE_DOMAIN",
     "SqliteEvidenceStore",
     "build_selector_fact",
+    "build_capture_plan",
     "canonical_json",
     "canonical_unordered_items",
     "canonical_utc",
@@ -108,4 +119,5 @@ __all__ = [
     "sanitize_provenance",
     "semantic_identity",
     "validate_safe_provenance",
+    "admit_capture_plan",
 ]

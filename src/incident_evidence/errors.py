@@ -119,6 +119,13 @@ def invalid_capture_command(message: str, *, field_path: str) -> EvidenceDomainE
     )
 
 
+def trusted_core_failure(
+    kind: EvidenceFailureKind, message: str, *, field_path: str | None = None
+) -> EvidenceDomainError:
+    """Construct a typed fail-closed trusted-core error."""
+    return EvidenceDomainError(kind, message, field_path=field_path)
+
+
 __all__ = [
     "DEFAULT_RETRY_DISPOSITIONS",
     "EvidenceDomainError",
@@ -127,4 +134,5 @@ __all__ = [
     "EvidenceStoreIntegrityError",
     "RetryDisposition",
     "invalid_capture_command",
+    "trusted_core_failure",
 ]

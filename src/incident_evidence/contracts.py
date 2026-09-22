@@ -14,7 +14,7 @@ from .errors import (
     RetryDisposition,
     invalid_capture_command,
 )
-from .time_semantics import LogicalWindow, canonical_utc
+from .time_semantics import CollectionWindows, Episode, LogicalWindow, canonical_utc
 
 
 class CaptureTerminalKind(str, Enum):
@@ -49,6 +49,97 @@ class MaterialityJudgement(str, Enum):
 class MaterialityEvaluationKind(str, Enum):
     PAIRWISE = "PAIRWISE"
     NO_BASELINE = "NO_BASELINE"
+
+
+@dataclass(frozen=True, slots=True)
+class IncidentCaptureProjection:
+    """Normalized SPEC-008 facts consumed by trusted-core admission."""
+
+    incident_id: str
+    event_ids: tuple[str, ...]
+    status: str
+    severity: str
+    created_at: datetime
+    updated_at: datetime
+    last_correlated_at: datetime
+    anchor_event_id: str | None
+    correlation_family: str
+    anchor_strength: str
+    anchor_event_type: str | None
+    normalized_fingerprint: object | None
+    anchor_policy_id: str | None
+    anchor_policy_version: str | None
+    promoted_from_weak: bool
+
+
+@dataclass(frozen=True, slots=True)
+class TrustedEvent:
+    """Validated, capture-relevant projection of one authoritative Event."""
+
+    event_id: str
+    detected_at: datetime
+    event_source: str
+    event_type: str
+    severity: str
+    selector_values: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PlannedSelector:
+    """An escaped selector together with the authoritative Event it came from."""
+
+    selector: SelectorFact
+    source_event_id: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.selector, SelectorFact):
+            raise TypeError("selector must be a SelectorFact")
+        _reference(self.source_event_id, "source_event_id")
+
+
+@dataclass(frozen=True, slots=True)
+class CapturePlan:
+    """Deterministic output of trusted-core admission; contains no source I/O."""
+
+    command: CaptureCommand
+    incident: IncidentCaptureProjection
+    events: tuple[TrustedEvent, ...]
+    episode: Episode
+    windows: CollectionWindows
+    selectors: tuple[PlannedSelector, ...]
+    selector_policy_version: str
+    config_identity: str
+    capture_contract_version: str
+    canonicalization_version: str
+    source_policy_version: str
+    bounds_policy_version: str
+    logs_reached_post_context_boundary: bool
+    metrics_reached_post_context_boundary: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.command, CaptureCommand):
+            raise TypeError("command must be a CaptureCommand")
+        if not isinstance(self.incident, IncidentCaptureProjection):
+            raise TypeError("incident must be an IncidentCaptureProjection")
+        if not isinstance(self.episode, Episode):
+            raise TypeError("episode must be an Episode")
+        if not isinstance(self.windows, CollectionWindows):
+            raise TypeError("windows must be CollectionWindows")
+        object.__setattr__(self, "events", tuple(self.events))
+        object.__setattr__(self, "selectors", tuple(self.selectors))
+        if any(not isinstance(item, TrustedEvent) for item in self.events):
+            raise TypeError("events must contain TrustedEvent values")
+        if any(not isinstance(item, PlannedSelector) for item in self.selectors):
+            raise TypeError("selectors must contain PlannedSelector values")
+        for field in (
+            "selector_policy_version", "config_identity", "capture_contract_version",
+            "canonicalization_version", "source_policy_version", "bounds_policy_version",
+        ):
+            object.__setattr__(self, field, _reference(getattr(self, field), field))
+        if not isinstance(self.logs_reached_post_context_boundary, bool) or not isinstance(
+            self.metrics_reached_post_context_boundary, bool
+        ):
+            raise TypeError("post-context boundary facts must be bool values")
 
 
 class EvidenceReadiness(str, Enum):
