@@ -153,6 +153,8 @@ class EvidenceIntegrityStatus(str, Enum):
 
 MAX_FAILURE_PROVENANCE_ENTRIES = 16
 MAX_FAILURE_PROVENANCE_UTF8_BYTES = 4096
+MAX_MATERIALITY_REASON_FACTS = 16
+MAX_MATERIALITY_REASON_UTF8_BYTES = 4096
 
 
 def _reference(value: object, field: str) -> str:
@@ -848,6 +850,20 @@ class MaterialityResult:
         elif self.judgement is not None:
             raise ValueError("NO_BASELINE result must not fabricate a pairwise judgement")
         facts = tuple(_bounded_text(value, "reason_fact") for value in self.reason_facts)
+        if not facts:
+            raise ValueError("Materiality result requires at least one reason fact")
+        if len(facts) > MAX_MATERIALITY_REASON_FACTS:
+            raise ValueError(
+                f"reason_facts must contain at most {MAX_MATERIALITY_REASON_FACTS} entries"
+            )
+        from .identity import canonical_json
+        from .security import validate_safe_text
+        if len(canonical_json(facts).encode("utf-8")) > MAX_MATERIALITY_REASON_UTF8_BYTES:
+            raise ValueError(
+                f"reason_facts must be at most {MAX_MATERIALITY_REASON_UTF8_BYTES} UTF-8 bytes"
+            )
+        for index, fact in enumerate(facts):
+            validate_safe_text(fact, field_path=f"reason_facts[{index}]")
         object.__setattr__(self, "reason_facts", facts)
 
 
@@ -1255,17 +1271,65 @@ class EvidenceRecoveryFacts:
     snapshots: tuple[EvidenceSnapshot, ...]
     revisions: tuple[EvidenceRevision, ...]
     materiality_results: tuple[MaterialityResult, ...]
+    integrity_status: EvidenceIntegrityStatus = EvidenceIntegrityStatus.VALID
+    local_readiness: EvidenceReadiness = EvidenceReadiness.READY
+    repair_findings: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "capture_outcomes", tuple(self.capture_outcomes))
         object.__setattr__(self, "snapshots", tuple(self.snapshots))
         object.__setattr__(self, "revisions", tuple(self.revisions))
         object.__setattr__(self, "materiality_results", tuple(self.materiality_results))
+        if not isinstance(self.integrity_status, EvidenceIntegrityStatus):
+            raise TypeError("integrity_status must be EvidenceIntegrityStatus")
+        if not isinstance(self.local_readiness, EvidenceReadiness):
+            raise TypeError("local_readiness must be EvidenceReadiness")
+        findings = tuple(_bounded_text(item, "repair_finding") for item in self.repair_findings)
+        object.__setattr__(self, "repair_findings", findings)
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateBAuthorityHandoff:
+    """Reference-only Candidate-B truth for composing domains.
+
+    The DTO deliberately has no Candidate-A Current, RCA, scheduling, or retry fields.
+    """
+
+    snapshot_id: str
+    revision_id: str
+    completeness: EvidenceCompleteness
+    provenance_references: tuple[str, ...]
+    materiality_result_id: str | None = None
+    materiality_judgement: MaterialityJudgement | None = None
+
+    def __post_init__(self) -> None:
+        for field in ("snapshot_id", "revision_id"):
+            object.__setattr__(self, field, _reference(getattr(self, field), field))
+        if not isinstance(self.completeness, EvidenceCompleteness):
+            raise TypeError("completeness must be EvidenceCompleteness")
+        references = tuple(_reference(item, "provenance_reference") for item in self.provenance_references)
+        if not references:
+            raise ValueError("provenance_references must not be empty")
+        object.__setattr__(self, "provenance_references", references)
+        if self.materiality_result_id is None:
+            if self.materiality_judgement is not None:
+                raise ValueError("Materiality judgement requires a result reference")
+        else:
+            object.__setattr__(
+                self,
+                "materiality_result_id",
+                _reference(self.materiality_result_id, "materiality_result_id"),
+            )
+            if self.materiality_judgement is not None and not isinstance(
+                self.materiality_judgement, MaterialityJudgement
+            ):
+                raise TypeError("materiality_judgement must be MaterialityJudgement")
 
 
 __all__ = [
     "BoundsOmissionFacts",
     "CaptureCommand",
+    "CandidateBAuthorityHandoff",
     "CaptureFailure",
     "CaptureFinalizationHandoff",
     "NonTerminalInvocationFailure",
@@ -1275,6 +1339,8 @@ __all__ = [
     "EvidenceIntegrityStatus",
     "MAX_FAILURE_PROVENANCE_ENTRIES",
     "MAX_FAILURE_PROVENANCE_UTF8_BYTES",
+    "MAX_MATERIALITY_REASON_FACTS",
+    "MAX_MATERIALITY_REASON_UTF8_BYTES",
     "EvidenceReadiness",
     "EvidenceRecoveryFacts",
     "EvidenceRevision",

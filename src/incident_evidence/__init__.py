@@ -2,6 +2,7 @@
 
 from .contracts import (
     BoundsOmissionFacts,
+    CandidateBAuthorityHandoff,
     CaptureCommand,
     CapturePlan,
     CaptureFailure,
@@ -21,6 +22,8 @@ from .contracts import (
     MaterialityJudgement,
     MaterialityRequest,
     MaterialityResult,
+    MAX_MATERIALITY_REASON_FACTS,
+    MAX_MATERIALITY_REASON_UTF8_BYTES,
     IncidentCaptureProjection,
     NonTerminalInvocationFailure,
     PlannedSelector,
@@ -84,9 +87,21 @@ from .capture_service import (
     SourceRequestPolicy,
     effective_capture_config_identity,
 )
+from .materiality import (
+    DEFAULT_MATERIALITY_RULE_VERSIONS,
+    MATERIALITY_RULE_V1,
+    MaterialityEvaluator,
+    compare_materiality,
+)
+from .recovery import (
+    build_candidate_b_handoff,
+    enumerate_recovery_facts,
+    validate_local_readiness,
+)
 
 __all__ = [
     "BoundsOmissionFacts",
+    "CandidateBAuthorityHandoff",
     "CaptureCommand",
     "CapturePlan",
     "CaptureFailure",
@@ -97,6 +112,7 @@ __all__ = [
     "CollectionProvenance",
     "CollectionWindows",
     "DEFAULT_RETRY_DISPOSITIONS",
+    "DEFAULT_MATERIALITY_RULE_VERSIONS",
     "Episode",
     "EvidenceCompleteness",
     "EvidenceIntegrityStatus",
@@ -122,6 +138,10 @@ __all__ = [
     "MaterialityJudgement",
     "MaterialityRequest",
     "MaterialityResult",
+    "MaterialityEvaluator",
+    "MATERIALITY_RULE_V1",
+    "MAX_MATERIALITY_REASON_FACTS",
+    "MAX_MATERIALITY_REASON_UTF8_BYTES",
     "QueryProvenance",
     "PlannedSelector",
     "PrometheusRangeAdapter",
@@ -156,4 +176,8 @@ __all__ = [
     "admit_capture_plan",
     "DEFAULT_SOURCE_REQUEST_POLICIES",
     "effective_capture_config_identity",
+    "compare_materiality",
+    "build_candidate_b_handoff",
+    "enumerate_recovery_facts",
+    "validate_local_readiness",
 ]
