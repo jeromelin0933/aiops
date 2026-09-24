@@ -4,21 +4,21 @@
 
 ---
 
-# 0. Document Information and Status
+## 文件資訊
 
-| Field | Value |
+| 欄位 | 內容 |
 |---|---|
 | Document ID | SPEC-013 |
 | Document Name | Incident Evidence Collection & Snapshot |
 | Version | 1.0 |
 | Status | Approved — Implementation Pending |
-| Approval Date | 2026-09-21 |
-| Product Authority | PRD-004 v1.0 Approved |
+| Date | 2026-09-21 |
+| Requirement Authority | PRD-004 v1.0 Approved |
 | Related Product Authorities | PRD-001 v3.5；PRD-003 v1.1 Final |
-| Incident Contract | SPEC-008 v1.2 |
-| Runtime Contract | SPEC-011 v1.1 |
-| Candidate-A Contract | SPEC-012 v1.0 Approved |
-| Repository Baseline | `34e56f501fd9ea9685809a8508bc4ad14f415c64` |
+| Related Incident Contract | SPEC-008 v1.2 |
+| Related Runtime Contract | SPEC-011 v1.1 |
+| Related Candidate-A Contract | SPEC-012 v1.0 Approved |
+| Implementation Owner | 富裕 |
 
 ## 0.1 Status Honesty
 

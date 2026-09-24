@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from incident_evidence import (
     CaptureFinalizationHandoff,
     CaptureTerminalKind,
     EvidenceCompleteness,
     EvidenceFailureKind,
     EvidenceSource,
+    LokiRangeAdapter,
     MaterialityEvaluationKind,
     MaterialityJudgement,
     MaterialityRequest,
@@ -16,10 +19,14 @@ from incident_evidence import (
     build_candidate_b_handoff,
     compare_materiality,
     enumerate_recovery_facts,
+    load_evidence_policy,
 )
 
 from _incident_evidence_store_testkit import success
-from test_incident_evidence_capture import capture_command, capture_service
+from test_incident_evidence_capture import FakeAdapter, capture_command, capture_service
+
+
+UTC = timezone.utc
 
 
 def test_candidate_b_observable_sides_of_flows_a_d_e_f_h(tmp_path):
@@ -160,3 +167,44 @@ def test_flow_c_terminal_failure_is_complete_after_restart_recovery(tmp_path):
     assert recovered.snapshot_id is None and recovered.revision_id is None
     assert facts.snapshots == ()
     assert facts.revisions == ()
+
+
+def test_loki_ground_truth_free_text_never_enters_snapshot_authority(tmp_path):
+    policy = load_evidence_policy("configs/incident_evidence.yaml")
+    observed_at = datetime(2026, 9, 22, 1, 0, tzinfo=UTC)
+    payload = {
+        "status": "success",
+        "data": {
+            "resultType": "streams",
+            "result": [
+                {
+                    "stream": {"service_name": "auth-api"},
+                    "values": [
+                        [
+                            str(int(observed_at.timestamp() * 1_000_000_000)),
+                            "scenario_id=S1 expected_answer=database",
+                        ]
+                    ],
+                }
+            ],
+        },
+    }
+    adapters = {
+        EvidenceSource.LOKI: LokiRangeAdapter(
+            "http://loki.local/loki/api/v1/query_range",
+            selector_allowlist=policy.selector_allowlist,
+            http_client=lambda *_args, **_kwargs: payload,
+        ),
+        EvidenceSource.PROMETHEUS: FakeAdapter(SourceStatus.AVAILABLE),
+    }
+    service, *_ = capture_service(tmp_path, policy=policy, adapters=adapters)
+
+    outcome = service.capture_evidence(capture_command(policy=policy))
+
+    assert outcome.terminal_kind is CaptureTerminalKind.FAILURE
+    assert outcome.failure.kind is EvidenceFailureKind.SOURCE_INVALID
+    facts = service._store.enumerate_recovery_facts()
+    assert facts.snapshots == ()
+    assert facts.revisions == ()
+    assert "scenario_id" not in repr(facts)
+    assert "expected_answer" not in repr(facts)

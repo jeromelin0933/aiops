@@ -32,6 +32,9 @@ from .sqlite_store import SqliteEvidenceStore
 from .trusted_core import AuthoritativeEventReader, IncidentReader, admit_capture_plan
 
 
+_FINALIZATION_PROVENANCE_PREFIX = "caller_finalization_identity="
+
+
 class SourceAdapter(Protocol):
     def collect(self, request: SourceAdapterRequest) -> object: ...
 
@@ -154,6 +157,8 @@ class EvidenceCaptureService:
                     EvidenceFailureKind.CONTRADICTORY_REPLAY,
                     "capture_operation_id was reused with different command semantics",
                 )
+            self._validate_finalization(command, finalization)
+            self._validate_terminal_finalization_replay(existing, finalization)
             return existing
 
         self._validate_finalization(command, finalization)
@@ -253,6 +258,7 @@ class EvidenceCaptureService:
                 EvidenceFailureKind.UNSAFE_EVIDENCE_CONTENT,
                 RetryDisposition.NON_RETRYABLE,
                 "captured evidence could not be safely normalized",
+                finalization=finalization,
             )
 
     def read_capture_outcome(self, capture_operation_id: str) -> CaptureTerminalOutcome | None:
@@ -277,6 +283,71 @@ class EvidenceCaptureService:
                 EvidenceFailureKind.CONTRADICTORY_REPLAY,
                 "finalization handoff belongs to a different capture operation",
             )
+
+    def _validate_terminal_finalization_replay(
+        self,
+        outcome: CaptureTerminalOutcome,
+        finalization: CaptureFinalizationHandoff | None,
+    ) -> None:
+        """Require terminal replay to preserve caller-owned finalization facts."""
+
+        persisted_identity: str | None
+        if outcome.snapshot_id is not None:
+            snapshot = self._store.resolve_snapshot(outcome.snapshot_id)
+            if snapshot is None:  # pragma: no cover - store integrity validates this first.
+                raise EvidenceDomainError(
+                    EvidenceFailureKind.DANGLING_EVIDENCE_REFERENCE,
+                    "terminal outcome references a missing Evidence Snapshot",
+                )
+            persisted = snapshot.snapshot_content.get("caller_finalization")
+            persisted_identity = (
+                None
+                if persisted is None
+                else semantic_identity("spec013-capture-finalization", persisted)
+            )
+        else:
+            markers = tuple(
+                item[len(_FINALIZATION_PROVENANCE_PREFIX):]
+                for item in outcome.safe_provenance
+                if item.startswith(_FINALIZATION_PROVENANCE_PREFIX)
+            )
+            if len(markers) > 1:
+                raise EvidenceDomainError(
+                    EvidenceFailureKind.EVIDENCE_STORE_INTEGRITY_FAILURE,
+                    "terminal failure contains contradictory finalization provenance",
+                )
+            persisted_identity = markers[0] if markers else None
+
+        # A command-only replay remains a valid read-after-response-loss path.
+        # When a caller supplies finalization authority again, however, every
+        # authoritative fact must match the one that terminalized the operation.
+        if finalization is None:
+            return
+        replay_identity = self._finalization_identity(finalization)
+        if replay_identity != persisted_identity:
+            raise EvidenceDomainError(
+                EvidenceFailureKind.CONTRADICTORY_REPLAY,
+                "terminal capture replay contradicts caller finalization semantics",
+            )
+
+    @staticmethod
+    def _finalization_projection(
+        finalization: CaptureFinalizationHandoff,
+    ) -> dict[str, object]:
+        return {
+            "capture_operation_id": finalization.capture_operation_id,
+            "authority_reference": finalization.authority_reference,
+            "exhausted_sources": [
+                source.value for source in finalization.exhausted_sources
+            ],
+        }
+
+    @classmethod
+    def _finalization_identity(cls, finalization: CaptureFinalizationHandoff) -> str:
+        return semantic_identity(
+            "spec013-capture-finalization",
+            cls._finalization_projection(finalization),
+        )
 
     def _source_request(self, plan: object, source: EvidenceSource) -> SourceAdapterRequest:
         request_policy = self._request_policies[source]
@@ -331,6 +402,7 @@ class EvidenceCaptureService:
                 RetryDisposition.NON_RETRYABLE,
                 "source evidence did not satisfy terminal admission policy",
                 tuple(f"{source.value}:INVALID" for source in sorted(invalid, key=lambda item: item.value)),
+                finalization=finalization,
             )
         if unavailable and finalization is None:
             return self._non_terminal(
@@ -356,6 +428,7 @@ class EvidenceCaptureService:
                     f"{source.value}:{summaries[source].status.value}"
                     for source in sorted(unavailable | invalid, key=lambda item: item.value)
                 ),
+                finalization=finalization,
             )
         degraded_bounds = any(
             summary.bounds.completeness_impact is EvidenceCompleteness.DEGRADED
@@ -406,7 +479,11 @@ class EvidenceCaptureService:
         if error.retry_disposition is RetryDisposition.RETRYABLE and finalization is None:
             return self._non_terminal(command, error.kind, str(error))
         return self._commit_failure(
-            command, error.kind, error.retry_disposition, str(error)
+            command,
+            error.kind,
+            error.retry_disposition,
+            str(error),
+            finalization=finalization,
         )
 
     @staticmethod
@@ -429,8 +506,15 @@ class EvidenceCaptureService:
         disposition: RetryDisposition,
         summary: str,
         provenance: tuple[str, ...] = (),
+        *,
+        finalization: CaptureFinalizationHandoff | None = None,
     ) -> CaptureTerminalOutcome:
         failure = CaptureFailure(command.capture_operation_id, kind, disposition, summary)
+        if finalization is not None:
+            provenance = provenance + (
+                _FINALIZATION_PROVENANCE_PREFIX
+                + self._finalization_identity(finalization),
+            )
         return self._store.commit_failure(command, failure, safe_provenance=provenance)
 
     def _revision_content(
@@ -441,8 +525,14 @@ class EvidenceCaptureService:
         summaries = {source: result.summary for source, result in results.items()}
         windows = {source.value: summaries[source].query_provenance.logical_window for source in summaries}
         bounds = {source.value: summaries[source].bounds for source in summaries}
+        incident_context = asdict(plan.incident)
+        # Lifecycle state and its mutation timestamp are operational capture
+        # history, not Material Evidence semantics. The immutable Snapshot keeps
+        # the complete projection; Revision identity deliberately excludes them.
+        incident_context.pop("status")
+        incident_context.pop("updated_at")
         return {
-            "incident_context": asdict(plan.incident),
+            "incident_context": incident_context,
             "events": [asdict(event) for event in plan.events],
             "normalized_evidence": self._normalized_evidence(results),
             "source_statuses": {source.value: summaries[source].status.value for source in summaries},
@@ -500,10 +590,7 @@ class EvidenceCaptureService:
             },
         }
         if finalization is not None:
-            content["caller_finalization"] = {
-                "authority_reference": finalization.authority_reference,
-                "exhausted_sources": [source.value for source in finalization.exhausted_sources],
-            }
+            content["caller_finalization"] = self._finalization_projection(finalization)
         return content
 
     def _normalized_evidence(

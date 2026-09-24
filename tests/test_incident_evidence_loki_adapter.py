@@ -139,6 +139,29 @@ def test_unsafe_label_or_line_and_noncanonical_selector_are_invalid():
     assert forbidden.summary.query_provenance.selectors == ()
 
 
+@pytest.mark.parametrize(
+    "marker",
+    [
+        "scenario_id=S1",
+        "expected_answer=db",
+        "expected_root_cause=database",
+        "ground_truth=database",
+        "expected_event_type=oom_crash_detected",
+    ],
+)
+def test_ground_truth_marker_in_free_text_is_invalid(marker):
+    payload = fixture("loki_success.json")
+    payload["data"]["result"][0]["values"] = [
+        ["1789956010000000000", marker]
+    ]
+
+    result = adapter(payload).collect(request())
+
+    assert result.status is SourceStatus.INVALID
+    assert result.records == ()
+    assert result.summary.safe_failure_kind is EvidenceFailureKind.SOURCE_INVALID
+
+
 @pytest.mark.parametrize("field_name", ["pod", "authorization", "ground_truth"])
 def test_unapproved_selector_is_rejected_before_transport(field_name):
     calls = 0

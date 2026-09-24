@@ -21,6 +21,7 @@ FORBIDDEN_PRODUCTION_FIELDS = frozenset(
         "expected_root_cause",
         "expected_rca_cause",
         "expected_rca_class",
+        "expected_event_type",
         "ground_truth",
         "evaluation_ground_truth",
         "evaluation_run_id",
@@ -67,6 +68,15 @@ _SENSITIVE_ASSIGNMENT = re.compile(
 _SECRET_TEXT_PATTERNS = (
     _SENSITIVE_ASSIGNMENT,
     re.compile(r"\bbearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
+)
+_GROUND_TRUTH_TEXT_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9])(?:"
+    + "|".join(
+        _sensitive_name_expression(name)
+        for name in sorted(FORBIDDEN_PRODUCTION_FIELDS, key=len, reverse=True)
+    )
+    + r")(?![A-Za-z0-9])",
+    re.IGNORECASE,
 )
 _URL_IN_TEXT = re.compile(r"https?://[^\s<>'\"]+", re.IGNORECASE)
 
@@ -127,6 +137,11 @@ def validate_safe_text(value: object, *, field_path: str) -> None:
     """Reject obvious secrets at authoritative bounded-text boundaries."""
     if not isinstance(value, str):
         raise TypeError(f"{field_path} must be a string")
+    if _GROUND_TRUTH_TEXT_PATTERN.search(value):
+        raise _unsafe(
+            "Ground Truth markers are forbidden in production evidence text",
+            field_path=field_path,
+        )
     if any(pattern.search(value) for pattern in _SECRET_TEXT_PATTERNS):
         raise _unsafe(
             "secret-bearing content is forbidden in safe text",
