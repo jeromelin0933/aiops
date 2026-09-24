@@ -742,6 +742,70 @@ class CaptureFailure:
 
 
 @dataclass(frozen=True, slots=True)
+class CaptureFinalizationHandoff:
+    """Caller-owned authority to terminalize retry-governed capture failures.
+
+    The handoff deliberately contains no retry count, deadline, or timing rule:
+    Candidate B verifies the supplied authority but never derives exhaustion.
+    """
+
+    capture_operation_id: str
+    authority_reference: str
+    exhausted_sources: tuple[EvidenceSource, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "capture_operation_id",
+            _reference(self.capture_operation_id, "capture_operation_id"),
+        )
+        from .security import validate_safe_text
+
+        validate_safe_text(self.authority_reference, field_path="authority_reference")
+        object.__setattr__(
+            self,
+            "authority_reference",
+            _bounded_text(self.authority_reference, "authority_reference"),
+        )
+        sources = tuple(self.exhausted_sources)
+        if any(not isinstance(source, EvidenceSource) for source in sources):
+            raise TypeError("exhausted_sources must contain EvidenceSource values")
+        if len(set(sources)) != len(sources):
+            raise ValueError("exhausted_sources must be unique")
+        object.__setattr__(self, "exhausted_sources", tuple(sorted(sources, key=lambda item: item.value)))
+
+
+@dataclass(frozen=True, slots=True)
+class NonTerminalInvocationFailure:
+    """Reliable non-terminal result while caller-owned retry remains possible."""
+
+    command_semantic_identity: str
+    failure: CaptureFailure
+    safe_provenance: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "command_semantic_identity",
+            _reference(self.command_semantic_identity, "command_semantic_identity"),
+        )
+        if not isinstance(self.failure, CaptureFailure):
+            raise TypeError("failure must be a CaptureFailure")
+        if self.failure.retry_disposition is not RetryDisposition.RETRYABLE:
+            raise ValueError("non-terminal invocation failure must be RETRYABLE")
+        from .security import validate_safe_text
+
+        provenance = tuple(_bounded_text(item, "safe_provenance") for item in self.safe_provenance)
+        if len(provenance) > MAX_FAILURE_PROVENANCE_ENTRIES:
+            raise ValueError("safe_provenance contains too many entries")
+        if len(json.dumps(provenance, ensure_ascii=False).encode("utf-8")) > MAX_FAILURE_PROVENANCE_UTF8_BYTES:
+            raise ValueError("safe_provenance is too large")
+        for index, item in enumerate(provenance):
+            validate_safe_text(item, field_path=f"safe_provenance[{index}]")
+        object.__setattr__(self, "safe_provenance", provenance)
+
+
+@dataclass(frozen=True, slots=True)
 class MaterialityRequest:
     evaluation_kind: MaterialityEvaluationKind
     candidate_revision_id: str
@@ -1203,6 +1267,8 @@ __all__ = [
     "BoundsOmissionFacts",
     "CaptureCommand",
     "CaptureFailure",
+    "CaptureFinalizationHandoff",
+    "NonTerminalInvocationFailure",
     "CaptureTerminalKind",
     "CollectionProvenance",
     "EvidenceCompleteness",

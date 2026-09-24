@@ -5,6 +5,7 @@ from .contracts import (
     CaptureCommand,
     CapturePlan,
     CaptureFailure,
+    CaptureFinalizationHandoff,
     CaptureSuccess,
     CaptureTerminalOutcome,
     CaptureTerminalKind,
@@ -21,6 +22,7 @@ from .contracts import (
     MaterialityRequest,
     MaterialityResult,
     IncidentCaptureProjection,
+    NonTerminalInvocationFailure,
     PlannedSelector,
     QueryProvenance,
     SelectorFact,
@@ -43,7 +45,12 @@ from .identity import (
     capture_command_semantic_identity,
     semantic_identity,
 )
-from .policy import EvidencePolicy, EvidencePolicyConfigError, load_evidence_policy
+from .policy import (
+    EvidencePolicy,
+    EvidencePolicyConfigError,
+    SourceAdmissionPolicy,
+    load_evidence_policy,
+)
 from .security import (
     build_selector_fact,
     ensure_no_ground_truth_fields,
@@ -71,12 +78,19 @@ from .adapters import (
     PrometheusSampleRecord,
     PrometheusSourceResult,
 )
+from .capture_service import (
+    DEFAULT_SOURCE_REQUEST_POLICIES,
+    EvidenceCaptureService,
+    SourceRequestPolicy,
+    effective_capture_config_identity,
+)
 
 __all__ = [
     "BoundsOmissionFacts",
     "CaptureCommand",
     "CapturePlan",
     "CaptureFailure",
+    "CaptureFinalizationHandoff",
     "CaptureSuccess",
     "CaptureTerminalOutcome",
     "CaptureTerminalKind",
@@ -97,11 +111,13 @@ __all__ = [
     "EvidencePolicy",
     "EvidencePolicyConfigError",
     "EvidenceSource",
+    "EvidenceCaptureService",
     "LogicalWindow",
     "LokiLogRecord",
     "LokiRangeAdapter",
     "LokiSourceResult",
     "IncidentCaptureProjection",
+    "NonTerminalInvocationFailure",
     "MaterialityEvaluationKind",
     "MaterialityJudgement",
     "MaterialityRequest",
@@ -116,6 +132,8 @@ __all__ = [
     "SourceCollectionSummary",
     "SourceAdapterRequest",
     "SourceStatus",
+    "SourceAdmissionPolicy",
+    "SourceRequestPolicy",
     "TrustedEvent",
     "SCHEMA_VERSION",
     "STORE_DOMAIN",
@@ -136,4 +154,6 @@ __all__ = [
     "semantic_identity",
     "validate_safe_provenance",
     "admit_capture_plan",
+    "DEFAULT_SOURCE_REQUEST_POLICIES",
+    "effective_capture_config_identity",
 ]

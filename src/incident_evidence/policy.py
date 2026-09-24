@@ -55,6 +55,32 @@ class EvidencePolicy:
     bounds: BoundsPolicy
 
 
+@dataclass(frozen=True, slots=True)
+class SourceAdmissionPolicy:
+    """Explicit degradation rules, versioned through CaptureCommand config identity."""
+
+    configured_sources: frozenset[EvidenceSource] = frozenset(EvidenceSource)
+    degraded_unavailable_sources: frozenset[EvidenceSource] = frozenset()
+    degraded_invalid_sources: frozenset[EvidenceSource] = frozenset()
+    require_remaining_valid_source: bool = True
+
+    def __post_init__(self) -> None:
+        configured = frozenset(self.configured_sources)
+        unavailable = frozenset(self.degraded_unavailable_sources)
+        invalid = frozenset(self.degraded_invalid_sources)
+        if not configured or any(not isinstance(item, EvidenceSource) for item in configured):
+            raise ValueError("configured_sources must contain EvidenceSource values")
+        if any(not isinstance(item, EvidenceSource) for item in unavailable | invalid):
+            raise ValueError("degraded source policies must contain EvidenceSource values")
+        if not unavailable <= configured or not invalid <= configured:
+            raise ValueError("degraded sources must be configured sources")
+        if not isinstance(self.require_remaining_valid_source, bool):
+            raise TypeError("require_remaining_valid_source must be bool")
+        object.__setattr__(self, "configured_sources", configured)
+        object.__setattr__(self, "degraded_unavailable_sources", unavailable)
+        object.__setattr__(self, "degraded_invalid_sources", invalid)
+
+
 _ROOT_KEYS = {
     "config_version",
     "config_identity",
@@ -227,6 +253,7 @@ __all__ = [
     "BoundsPolicy",
     "EvidencePolicy",
     "EvidencePolicyConfigError",
+    "SourceAdmissionPolicy",
     "WindowPolicy",
     "load_evidence_policy",
 ]
