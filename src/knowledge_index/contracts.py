@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import re
+from typing import Protocol, runtime_checkable
 
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$")
@@ -326,3 +327,265 @@ class ManifestAdmissionResult:
             _identifier(self.manifest_commitment, "manifest_commitment")
         elif self.manifest_commitment is not None or self.admitted_documents:
             raise KnowledgeValidationError("rejected admission cannot publish a commitment or documents")
+
+
+# Slice 2 durable contracts deliberately describe Candidate-C persistence facts only.
+class KnowledgeReadStatus(str, Enum):
+    FOUND = "FOUND"
+    NOT_FOUND = "NOT_FOUND"
+    UNAVAILABLE = "UNAVAILABLE"
+    INVALID = "INVALID"
+    REPAIR_REQUIRED = "REPAIR_REQUIRED"
+
+
+class KnowledgeLocalReadiness(str, Enum):
+    READY = "READY"
+    NOT_INITIALIZED = "NOT_INITIALIZED"
+    UNAVAILABLE = "UNAVAILABLE"
+    MISMATCH = "MISMATCH"
+    REPAIR_REQUIRED = "REPAIR_REQUIRED"
+
+
+class RetentionSubjectKind(str, Enum):
+    BUILD = "BUILD"
+    SNAPSHOT = "SNAPSHOT"
+    CONTENT = "CONTENT"
+
+
+class RetentionObligationKind(str, Enum):
+    PUBLISHED_RCA = "PUBLISHED_RCA"
+    MATERIAL_FAILED_ATTEMPT = "MATERIAL_FAILED_ATTEMPT"
+    OUTSTANDING_OPERATION = "OUTSTANDING_OPERATION"
+    RECONCILIATION_RECOVERY = "RECONCILIATION_RECOVERY"
+
+
+class RetentionHoldStatus(str, Enum):
+    ACTIVE = "ACTIVE"
+    RELEASED = "RELEASED"
+
+
+def _durable_key(value: object, field: str) -> str:
+    result = _identifier(value, field)
+    if _contains_secret_shape(result, identity_value=True):
+        raise KnowledgeValidationError(f"{field} must be non-secret")
+    return result
+
+
+@dataclass(frozen=True, slots=True)
+class ActivationOperationKey:
+    value: str
+
+    def __post_init__(self) -> None:
+        _durable_key(self.value, "activation operation key")
+
+
+@dataclass(frozen=True, slots=True)
+class RetrievalOperationKey:
+    value: str
+
+    def __post_init__(self) -> None:
+        _durable_key(self.value, "retrieval operation key")
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeSnapshotKey:
+    value: str
+
+    def __post_init__(self) -> None:
+        _durable_key(self.value, "Knowledge Snapshot key")
+
+
+@dataclass(frozen=True, slots=True)
+class RetentionHoldKey:
+    value: str
+
+    def __post_init__(self) -> None:
+        _durable_key(self.value, "retention hold key")
+
+
+@dataclass(frozen=True, slots=True)
+class BuildLineageRecord:
+    build_identity: str
+    manifest_commitment: str
+    lineage_commitment: str
+    record_version: int = 1
+
+    def __post_init__(self) -> None:
+        _typed_identity(self.build_identity, "kbld", "build_identity")
+        _typed_identity(self.manifest_commitment, "kmf", "manifest_commitment")
+        _hash(self.lineage_commitment, "lineage_commitment")
+        if self.record_version != 1:
+            raise KnowledgeValidationError("unsupported build lineage record version")
+
+
+@dataclass(frozen=True, slots=True)
+class ActivationAuthorityRecord:
+    generation: int
+    operation_key: ActivationOperationKey
+    active_build_identity: str
+    validated_build_commitment: str
+    result_commitment: str
+    record_version: int = 1
+
+    def __post_init__(self) -> None:
+        if isinstance(self.generation, bool) or not isinstance(self.generation, int) or self.generation < 1:
+            raise KnowledgeValidationError("activation generation must be a positive integer")
+        if not isinstance(self.operation_key, ActivationOperationKey):
+            raise KnowledgeValidationError("operation_key must be an ActivationOperationKey")
+        _typed_identity(self.active_build_identity, "kbld", "active_build_identity")
+        _hash(self.validated_build_commitment, "validated_build_commitment")
+        _hash(self.result_commitment, "result_commitment")
+        if self.record_version != 1:
+            raise KnowledgeValidationError("unsupported activation record version")
+
+
+@dataclass(frozen=True, slots=True)
+class OperationEnvelope:
+    operation_key: RetrievalOperationKey
+    semantic_commitment: str
+    frozen_build_identity: str | None = None
+    snapshot_key: KnowledgeSnapshotKey | None = None
+    completed: bool = False
+    revision: int = 1
+    record_version: int = 1
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.operation_key, RetrievalOperationKey):
+            raise KnowledgeValidationError("operation_key must be a RetrievalOperationKey")
+        _hash(self.semantic_commitment, "semantic_commitment")
+        if self.frozen_build_identity is not None:
+            _typed_identity(self.frozen_build_identity, "kbld", "frozen_build_identity")
+        if self.snapshot_key is not None and not isinstance(self.snapshot_key, KnowledgeSnapshotKey):
+            raise KnowledgeValidationError("snapshot_key must be a KnowledgeSnapshotKey")
+        if not isinstance(self.completed, bool):
+            raise KnowledgeValidationError("completed must be boolean")
+        if self.completed != (self.snapshot_key is not None):
+            raise KnowledgeValidationError("completed operation and snapshot_key must agree")
+        if isinstance(self.revision, bool) or not isinstance(self.revision, int) or self.revision < 1:
+            raise KnowledgeValidationError("operation revision must be positive")
+        if self.record_version != 1:
+            raise KnowledgeValidationError("unsupported operation record version")
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeSnapshotEnvelope:
+    snapshot_key: KnowledgeSnapshotKey
+    operation_key: RetrievalOperationKey
+    frozen_build_identity: str
+    snapshot_commitment: str
+    lineage_commitment: str
+    record_version: int = 1
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.snapshot_key, KnowledgeSnapshotKey):
+            raise KnowledgeValidationError("snapshot_key must be a KnowledgeSnapshotKey")
+        if not isinstance(self.operation_key, RetrievalOperationKey):
+            raise KnowledgeValidationError("operation_key must be a RetrievalOperationKey")
+        _typed_identity(self.frozen_build_identity, "kbld", "frozen_build_identity")
+        _hash(self.snapshot_commitment, "snapshot_commitment")
+        _hash(self.lineage_commitment, "lineage_commitment")
+        if self.record_version != 1:
+            raise KnowledgeValidationError("unsupported Snapshot envelope record version")
+
+
+@dataclass(frozen=True, slots=True)
+class RetentionHoldRecord:
+    hold_key: RetentionHoldKey
+    subject_kind: RetentionSubjectKind
+    subject_identity: str
+    owner: OpaqueExternalReference
+    obligation_kind: RetentionObligationKind
+    semantic_commitment: str
+    status: RetentionHoldStatus = RetentionHoldStatus.ACTIVE
+    revision: int = 1
+    record_version: int = 1
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.hold_key, RetentionHoldKey):
+            raise KnowledgeValidationError("hold_key must be a RetentionHoldKey")
+        if not isinstance(self.subject_kind, RetentionSubjectKind):
+            raise KnowledgeValidationError("subject_kind must be a RetentionSubjectKind")
+        _durable_key(self.subject_identity, "retention subject identity")
+        if self.subject_kind is RetentionSubjectKind.BUILD:
+            _typed_identity(self.subject_identity, "kbld", "retention build identity")
+        if not isinstance(self.owner, OpaqueExternalReference):
+            raise KnowledgeValidationError("owner must be an OpaqueExternalReference")
+        if not isinstance(self.obligation_kind, RetentionObligationKind):
+            raise KnowledgeValidationError("obligation_kind must be a RetentionObligationKind")
+        _hash(self.semantic_commitment, "semantic_commitment")
+        if not isinstance(self.status, RetentionHoldStatus):
+            raise KnowledgeValidationError("status must be a RetentionHoldStatus")
+        if isinstance(self.revision, bool) or not isinstance(self.revision, int) or self.revision < 1:
+            raise KnowledgeValidationError("retention revision must be positive")
+        if self.record_version != 1:
+            raise KnowledgeValidationError("unsupported retention record version")
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeCorruptionFinding:
+    code: str
+    record_kind: str
+    record_key: str
+    detail: str
+
+    def __post_init__(self) -> None:
+        for field in ("code", "record_kind", "record_key"):
+            _durable_key(getattr(self, field), field)
+        if (
+            not isinstance(self.detail, str)
+            or not self.detail
+            or self.detail != self.detail.strip()
+            or len(self.detail) > 256
+            or _contains_secret_shape(self.detail)
+        ):
+            raise KnowledgeValidationError("corruption detail must be bounded and non-secret")
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeReadResult:
+    status: KnowledgeReadStatus
+    value: object | None = None
+    findings: tuple[KnowledgeCorruptionFinding, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.status, KnowledgeReadStatus):
+            raise KnowledgeValidationError("status must be a KnowledgeReadStatus")
+        if self.status is KnowledgeReadStatus.FOUND and self.value is None:
+            raise KnowledgeValidationError("FOUND requires a value")
+        if self.status is not KnowledgeReadStatus.FOUND and self.value is not None:
+            raise KnowledgeValidationError("non-FOUND result cannot contain a value")
+        if any(not isinstance(item, KnowledgeCorruptionFinding) for item in self.findings):
+            raise KnowledgeValidationError("findings must contain KnowledgeCorruptionFinding values")
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeReadinessFact:
+    status: KnowledgeLocalReadiness
+    active_build_identity: str | None = None
+    generation: int | None = None
+    findings: tuple[KnowledgeCorruptionFinding, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.status, KnowledgeLocalReadiness):
+            raise KnowledgeValidationError("status must be a KnowledgeLocalReadiness")
+        if self.active_build_identity is not None:
+            _typed_identity(self.active_build_identity, "kbld", "active_build_identity")
+        if self.generation is not None and (
+            isinstance(self.generation, bool) or not isinstance(self.generation, int) or self.generation < 1
+        ):
+            raise KnowledgeValidationError("generation must be positive")
+        if self.status is KnowledgeLocalReadiness.READY and (
+            self.active_build_identity is None or self.generation is None or self.findings
+        ):
+            raise KnowledgeValidationError("READY requires exact active authority without findings")
+
+
+@runtime_checkable
+class KnowledgePersistence(Protocol):
+    """Public Candidate-C persistence boundary, without workflow policy."""
+
+    def get_build_lineage(self, build_identity: str) -> KnowledgeReadResult: ...
+
+    def read_activation(self) -> KnowledgeReadResult: ...
+
+    def local_readiness(self) -> KnowledgeReadinessFact: ...

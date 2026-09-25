@@ -14,14 +14,10 @@ def _production_source() -> str:
     )
 
 
-def test_slice_one_public_api_contains_only_foundation_capabilities() -> None:
+def test_public_api_contains_only_slice_one_and_two_capabilities() -> None:
     exported = set(knowledge_index.__all__)
     forbidden_fragments = {
-        "store",
-        "sqlite",
         "retrieve",
-        "snapshot",
-        "activate",
         "provider",
         "runtime",
         "scheduler",
@@ -34,7 +30,7 @@ def test_slice_one_public_api_contains_only_foundation_capabilities() -> None:
     )
 
 
-def test_slice_one_does_not_import_forbidden_domain_or_private_helpers() -> None:
+def test_candidate_c_store_does_not_import_forbidden_domain_or_private_helpers() -> None:
     source = _production_source()
     forbidden_imports = (
         "runtime_orchestration",
@@ -45,7 +41,6 @@ def test_slice_one_does_not_import_forbidden_domain_or_private_helpers() -> None
         "event_detection.runner",
         "_stable_identity",
         "_sanitize_error_message",
-        "sqlite3",
         "chromadb",
         "google.",
     )
@@ -53,7 +48,7 @@ def test_slice_one_does_not_import_forbidden_domain_or_private_helpers() -> None
         assert forbidden not in source
 
 
-def test_slice_one_defines_no_foreign_authority_or_future_placeholder() -> None:
+def test_slice_two_defines_no_foreign_authority_or_future_placeholder() -> None:
     source = _production_source().lower()
     forbidden_definitions = (
         "class evidencesnapshot",
@@ -61,14 +56,38 @@ def test_slice_one_defines_no_foreign_authority_or_future_placeholder() -> None:
         "class rcaaggregate",
         "class rcaattempt",
         "class incident",
-        "class knowledgesnapshot",
-        "class retrieval",
+        "class retrieval:",
         "class scheduler",
         "class credentialregistry",
-        "class sqlite",
     )
     for forbidden in forbidden_definitions:
         assert forbidden not in source
+
+
+def test_slice_two_store_is_candidate_c_owned_and_stdlib_only() -> None:
+    source = (PACKAGE / "sqlite_store.py").read_text(encoding="utf-8")
+    assert "class SqliteKnowledgeStore" in source
+    assert "import sqlite3" in source
+    assert "runtime_orchestration" not in source
+    assert "incident_evidence" not in source
+    assert "rca_" not in source
+    assert "google." not in source
+    assert "chromadb" not in source
+
+
+def test_slice_two_does_not_define_next_slice_workflow() -> None:
+    source = _production_source().lower()
+    forbidden = (
+        "def retrieve",
+        "def rank",
+        "class applicability",
+        "class embeddingprovider",
+        "class buildlifecycle",
+        "class scheduler",
+        "class runtimeclock",
+    )
+    for definition in forbidden:
+        assert definition not in source
 
 
 def test_opaque_references_retain_only_discriminator_and_value() -> None:
