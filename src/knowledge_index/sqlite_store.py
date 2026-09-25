@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import replace
+import json
 from pathlib import Path
 import sqlite3
 from typing import Iterator
@@ -16,7 +17,19 @@ from typing import Iterator
 from .contracts import (
     ActivationAuthorityRecord,
     ActivationOperationKey,
+    ArtifactTrust,
+    BuildChunk,
+    BuildDocumentProvenance,
+    BuildFailureCode,
+    BuildIdentityInput,
     BuildLineageRecord,
+    BuildOperationKey,
+    BuildOperationClaim,
+    BuildStageState,
+    BuildValidationFinding,
+    BuildValidationRecord,
+    BuildValidationState,
+    ContentType,
     KnowledgeCorruptionFinding,
     KnowledgeLocalReadiness,
     KnowledgeReadinessFact,
@@ -24,6 +37,9 @@ from .contracts import (
     KnowledgeReadStatus,
     KnowledgeSnapshotEnvelope,
     KnowledgeSnapshotKey,
+    MetadataItem,
+    IndexArtifactFacts,
+    IndexEntryFact,
     OpaqueExternalReference,
     OpaqueReferenceType,
     OperationEnvelope,
@@ -33,10 +49,20 @@ from .contracts import (
     RetentionObligationKind,
     RetentionSubjectKind,
     RetrievalOperationKey,
+    SourceClassification,
+    StagedBuildRecord,
 )
+from .build_validation import (
+    derive_build_lineage_commitment,
+    derive_build_operation_commitment,
+    derive_build_validation_commitment,
+    derive_chunk_metadata_commitment,
+    derive_staged_build_commitment,
+)
+from .identity import build_identity, canonical_serialize
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 RECORD_VERSION = 1
 
 
@@ -97,6 +123,18 @@ _TABLE_COLUMNS = {
         "hold_id", "record_version", "subject_kind", "subject_id", "owner_type", "owner_value",
         "obligation_kind", "semantic_commitment", "status", "revision",
     ),
+    "build_operation_claims": (
+        "operation_id", "record_version", "semantic_commitment", "build_identity",
+        "profile_type", "profile_value", "capability_identity",
+    ),
+    "staged_builds": (
+        "build_identity", "record_version", "operation_id", "manifest_commitment",
+        "lineage_commitment", "staged_commitment", "payload_json",
+    ),
+    "build_validations": (
+        "build_identity", "record_version", "operation_id", "staged_commitment",
+        "validation_commitment", "validation_state", "payload_json",
+    ),
 }
 
 _NULLABLE_COLUMNS = {
@@ -109,6 +147,9 @@ _NULLABLE_COLUMNS = {
     ("operation_envelopes", "snapshot_id"),
     ("snapshot_envelopes", "snapshot_id"),
     ("retention_holds", "hold_id"),
+    ("build_operation_claims", "operation_id"),
+    ("staged_builds", "build_identity"),
+    ("build_validations", "build_identity"),
 }
 
 _INTEGER_COLUMNS = {
@@ -127,6 +168,9 @@ _INTEGER_COLUMNS = {
     ("snapshot_envelopes", "record_version"),
     ("retention_holds", "record_version"),
     ("retention_holds", "revision"),
+    ("build_operation_claims", "record_version"),
+    ("staged_builds", "record_version"),
+    ("build_validations", "record_version"),
 }
 
 _CREATE_SCHEMA = """
@@ -188,7 +232,34 @@ CREATE TABLE retention_holds (
     status TEXT NOT NULL CHECK (status IN ('ACTIVE', 'RELEASED')),
     revision INTEGER NOT NULL CHECK (revision > 0)
 );
-INSERT INTO knowledge_store_metadata(singleton, schema_version) VALUES (1, 1);
+CREATE TABLE build_operation_claims (
+    operation_id TEXT PRIMARY KEY,
+    record_version INTEGER NOT NULL CHECK (record_version = 1),
+    semantic_commitment TEXT NOT NULL,
+    build_identity TEXT NOT NULL UNIQUE,
+    profile_type TEXT NOT NULL,
+    profile_value TEXT NOT NULL,
+    capability_identity TEXT NOT NULL
+);
+CREATE TABLE staged_builds (
+    build_identity TEXT PRIMARY KEY REFERENCES build_lineage(build_identity),
+    record_version INTEGER NOT NULL CHECK (record_version = 1),
+    operation_id TEXT NOT NULL UNIQUE REFERENCES build_operation_claims(operation_id),
+    manifest_commitment TEXT NOT NULL,
+    lineage_commitment TEXT NOT NULL,
+    staged_commitment TEXT NOT NULL,
+    payload_json TEXT NOT NULL
+);
+CREATE TABLE build_validations (
+    build_identity TEXT PRIMARY KEY REFERENCES staged_builds(build_identity),
+    record_version INTEGER NOT NULL CHECK (record_version = 1),
+    operation_id TEXT NOT NULL UNIQUE,
+    staged_commitment TEXT NOT NULL,
+    validation_commitment TEXT NOT NULL,
+    validation_state TEXT NOT NULL CHECK (validation_state IN ('VALIDATED', 'FAILED')),
+    payload_json TEXT NOT NULL
+);
+INSERT INTO knowledge_store_metadata(singleton, schema_version) VALUES (1, 2);
 """
 
 
@@ -295,6 +366,9 @@ class SqliteKnowledgeStore:
             "operation_envelopes": ("operation_id",),
             "snapshot_envelopes": ("snapshot_id",),
             "retention_holds": ("hold_id",),
+            "build_operation_claims": ("operation_id",),
+            "staged_builds": ("build_identity",),
+            "build_validations": ("build_identity",),
         }
         for table, expected in expected_primary_keys.items():
             primary = tuple(
@@ -315,6 +389,12 @@ class SqliteKnowledgeStore:
             ("snapshot_envelopes", ("snapshot_id",)),
             ("snapshot_envelopes", ("operation_id",)),
             ("retention_holds", ("hold_id",)),
+            ("build_operation_claims", ("operation_id",)),
+            ("build_operation_claims", ("build_identity",)),
+            ("staged_builds", ("build_identity",)),
+            ("staged_builds", ("operation_id",)),
+            ("build_validations", ("build_identity",)),
+            ("build_validations", ("operation_id",)),
         }
         actual_unique: set[tuple[str, tuple[str, ...]]] = set()
         for table in _TABLE_COLUMNS:
@@ -333,6 +413,9 @@ class SqliteKnowledgeStore:
             ("operation_envelopes", "frozen_build_identity", "build_lineage", "build_identity"),
             ("snapshot_envelopes", "operation_id", "operation_envelopes", "operation_id"),
             ("snapshot_envelopes", "frozen_build_identity", "build_lineage", "build_identity"),
+            ("staged_builds", "build_identity", "build_lineage", "build_identity"),
+            ("staged_builds", "operation_id", "build_operation_claims", "operation_id"),
+            ("build_validations", "build_identity", "staged_builds", "build_identity"),
         }
         actual_foreign_keys = {
             (table, row[3], row[2], row[4])
@@ -352,6 +435,7 @@ class SqliteKnowledgeStore:
         versioned_tables = (
             "build_lineage", "activation_receipts", "activation_authority",
             "operation_envelopes", "snapshot_envelopes", "retention_holds",
+            "build_operation_claims", "staged_builds", "build_validations",
         )
         for table in versioned_tables:
             if connection.execute(
@@ -430,6 +514,43 @@ class SqliteKnowledgeStore:
 
             for row in connection.execute("SELECT * FROM retention_holds"):
                 self._decode_hold(row)
+
+            operation_claims: dict[str, BuildOperationClaim] = {}
+            for row in connection.execute("SELECT * FROM build_operation_claims"):
+                claim = self._decode_build_operation_claim(row)
+                if claim.semantic_commitment != derive_build_operation_commitment(
+                    claim.operation_key,
+                    claim.build_identity,
+                    claim.profile_reference,
+                    claim.capability_identity,
+                ):
+                    raise ValueError("build operation claim commitment is inconsistent")
+                operation_claims[claim.operation_key.value] = claim
+
+            staged_builds: dict[str, StagedBuildRecord] = {}
+            for row in connection.execute("SELECT * FROM staged_builds"):
+                staged = self._decode_staged_build(row)
+                lineage = builds.get(staged.build_identity)
+                claim = operation_claims.get(staged.operation_key.value)
+                if (
+                    lineage is None
+                    or claim is None
+                    or claim.build_identity != staged.build_identity
+                    or claim.profile_reference != staged.profile_reference
+                    or claim.capability_identity != staged.capability_identity
+                    or lineage.manifest_commitment != staged.manifest_commitment
+                    or lineage.lineage_commitment != staged.lineage_commitment
+                ):
+                    raise ValueError("staged build does not match immutable build lineage")
+                _validate_staged_record_semantics(staged)
+                staged_builds[staged.build_identity] = staged
+
+            for row in connection.execute("SELECT * FROM build_validations"):
+                validation = self._decode_build_validation(row)
+                staged = staged_builds.get(validation.build_identity)
+                if staged is None or validation.staged_commitment != staged.staged_commitment:
+                    raise ValueError("build validation does not match its staged build")
+                _validate_build_validation_semantics(validation)
         except (ValueError, TypeError, KeyError) as exc:
             raise KnowledgeStoreIntegrityError(
                 "knowledge store contains a semantically invalid durable record"
@@ -476,6 +597,176 @@ class SqliteKnowledgeStore:
         return self._read_one(
             "build_lineage", build_identity,
             "SELECT * FROM build_lineage WHERE build_identity = ?", self._decode_build,
+        )
+
+    def claim_build_operation(self, claim: BuildOperationClaim) -> BuildOperationClaim:
+        if not isinstance(claim, BuildOperationClaim):
+            raise TypeError("claim must be a BuildOperationClaim")
+        _validate_build_operation_claim_semantics(claim)
+        with self._transaction(immediate=True) as connection:
+            operation_row = connection.execute(
+                "SELECT * FROM build_operation_claims WHERE operation_id = ?",
+                (claim.operation_key.value,),
+            ).fetchone()
+            if operation_row is not None:
+                existing = self._decode_build_operation_claim(operation_row)
+                if existing == claim:
+                    return existing
+                raise KnowledgeStoreConflictError("contradictory build operation replay")
+            build_row = connection.execute(
+                "SELECT * FROM build_operation_claims WHERE build_identity = ?",
+                (claim.build_identity,),
+            ).fetchone()
+            if build_row is not None:
+                existing = self._decode_build_operation_claim(build_row)
+                if existing == claim:
+                    return existing
+                raise KnowledgeStoreConflictError(
+                    "build identity is already bound to another operation"
+                )
+            connection.execute(
+                "INSERT INTO build_operation_claims VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    claim.operation_key.value,
+                    claim.record_version,
+                    claim.semantic_commitment,
+                    claim.build_identity,
+                    claim.profile_reference.reference_type.value,
+                    claim.profile_reference.value,
+                    claim.capability_identity,
+                ),
+            )
+        return claim
+
+    def get_build_operation_claim(
+        self, operation_key: BuildOperationKey
+    ) -> KnowledgeReadResult:
+        if not isinstance(operation_key, BuildOperationKey):
+            raise TypeError("operation_key must be BuildOperationKey")
+        return self._read_one(
+            "build_operation_claim",
+            operation_key.value,
+            "SELECT * FROM build_operation_claims WHERE operation_id = ?",
+            self._decode_build_operation_claim,
+        )
+
+    def create_staged_build(self, record: StagedBuildRecord) -> StagedBuildRecord:
+        if not isinstance(record, StagedBuildRecord):
+            raise TypeError("record must be a StagedBuildRecord")
+        try:
+            _validate_staged_record_semantics(record)
+        except ValueError as exc:
+            raise KnowledgeStoreConflictError("staged build semantic identity is invalid") from exc
+        lineage = BuildLineageRecord(
+            record.build_identity, record.manifest_commitment, record.lineage_commitment
+        )
+        with self._transaction(immediate=True) as connection:
+            claim_row = connection.execute(
+                "SELECT * FROM build_operation_claims WHERE operation_id = ?",
+                (record.operation_key.value,),
+            ).fetchone()
+            if claim_row is None:
+                raise KnowledgeStoreConflictError(
+                    "staged build requires a durable build operation claim"
+                )
+            claim = self._decode_build_operation_claim(claim_row)
+            if (
+                claim.build_identity != record.build_identity
+                or claim.profile_reference != record.profile_reference
+                or claim.capability_identity != record.capability_identity
+            ):
+                raise KnowledgeStoreConflictError(
+                    "staged build contradicts its durable operation claim"
+                )
+            operation_row = connection.execute(
+                "SELECT * FROM staged_builds WHERE operation_id = ?",
+                (record.operation_key.value,),
+            ).fetchone()
+            if operation_row is not None:
+                existing = self._decode_staged_build(operation_row)
+                if existing == record:
+                    return existing
+                raise KnowledgeStoreConflictError("contradictory staged-build operation replay")
+            row = connection.execute(
+                "SELECT * FROM staged_builds WHERE build_identity = ?", (record.build_identity,)
+            ).fetchone()
+            if row is not None:
+                existing = self._decode_staged_build(row)
+                if existing == record:
+                    return existing
+                raise KnowledgeStoreConflictError("contradictory immutable staged build")
+            lineage_row = connection.execute(
+                "SELECT * FROM build_lineage WHERE build_identity = ?", (record.build_identity,)
+            ).fetchone()
+            if lineage_row is None:
+                connection.execute(
+                    "INSERT INTO build_lineage VALUES (?, ?, ?, ?)",
+                    (lineage.build_identity, lineage.record_version, lineage.manifest_commitment,
+                     lineage.lineage_commitment),
+                )
+            elif self._decode_build(lineage_row) != lineage:
+                raise KnowledgeStoreConflictError("staged build contradicts durable build lineage")
+            connection.execute(
+                "INSERT INTO staged_builds VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (record.build_identity, record.record_version, record.operation_key.value,
+                 record.manifest_commitment, record.lineage_commitment,
+                 record.staged_commitment, canonical_serialize(record)),
+            )
+        return record
+
+    def get_staged_build(self, build_identity: str) -> KnowledgeReadResult:
+        return self._read_one(
+            "staged_build", build_identity,
+            "SELECT * FROM staged_builds WHERE build_identity = ?", self._decode_staged_build,
+        )
+
+    def create_build_validation(
+        self, record: BuildValidationRecord
+    ) -> BuildValidationRecord:
+        if not isinstance(record, BuildValidationRecord):
+            raise TypeError("record must be a BuildValidationRecord")
+        try:
+            _validate_build_validation_semantics(record)
+        except ValueError as exc:
+            raise KnowledgeStoreConflictError(
+                "build validation semantic commitment is invalid"
+            ) from exc
+        with self._transaction(immediate=True) as connection:
+            operation_row = connection.execute(
+                "SELECT * FROM build_validations WHERE operation_id = ?",
+                (record.operation_key.value,),
+            ).fetchone()
+            if operation_row is not None:
+                existing = self._decode_build_validation(operation_row)
+                if existing == record:
+                    return existing
+                raise KnowledgeStoreConflictError("contradictory build-validation operation replay")
+            row = connection.execute(
+                "SELECT * FROM build_validations WHERE build_identity = ?", (record.build_identity,)
+            ).fetchone()
+            if row is not None:
+                existing = self._decode_build_validation(row)
+                if existing == record:
+                    return existing
+                raise KnowledgeStoreConflictError("contradictory immutable build validation")
+            staged = connection.execute(
+                "SELECT * FROM staged_builds WHERE build_identity = ?", (record.build_identity,)
+            ).fetchone()
+            if staged is None or self._decode_staged_build(staged).staged_commitment != record.staged_commitment:
+                raise KnowledgeStoreConflictError("validation does not reference the exact staged build")
+            connection.execute(
+                "INSERT INTO build_validations VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (record.build_identity, record.record_version, record.operation_key.value,
+                 record.staged_commitment, record.validation_commitment, record.state.value,
+                 canonical_serialize(record)),
+            )
+        return record
+
+    def get_build_validation(self, build_identity: str) -> KnowledgeReadResult:
+        return self._read_one(
+            "build_validation", build_identity,
+            "SELECT * FROM build_validations WHERE build_identity = ?",
+            self._decode_build_validation,
         )
 
     def commit_activation(
@@ -779,3 +1070,255 @@ class SqliteKnowledgeStore:
             RetentionObligationKind(row["obligation_kind"]), row["semantic_commitment"],
             RetentionHoldStatus(row["status"]), row["revision"], row["record_version"],
         )
+
+    @staticmethod
+    def _decode_build_operation_claim(row: sqlite3.Row) -> BuildOperationClaim:
+        return BuildOperationClaim(
+            BuildOperationKey(row["operation_id"]),
+            row["semantic_commitment"],
+            row["build_identity"],
+            OpaqueExternalReference(
+                OpaqueReferenceType(row["profile_type"]), row["profile_value"]
+            ),
+            row["capability_identity"],
+            row["record_version"],
+        )
+
+    @staticmethod
+    def _decode_staged_build(row: sqlite3.Row) -> StagedBuildRecord:
+        payload = _json_object(row["payload_json"], {
+            "build_identity", "operation_key", "manifest_commitment", "lineage_commitment",
+            "staged_commitment", "build_input", "profile_reference", "capability_identity",
+            "document_count", "document_provenance", "chunks", "artifact", "state",
+            "record_version",
+        })
+        build_input_data = _object(payload["build_input"])
+        chunks = tuple(_decode_build_chunk(item) for item in _list(payload["chunks"]))
+        document_provenance = tuple(
+            _decode_build_document_provenance(item)
+            for item in _list(payload["document_provenance"])
+        )
+        artifact = _decode_index_artifact(_object(payload["artifact"]))
+        profile = _decode_opaque_reference(_object(payload["profile_reference"]))
+        operation = BuildOperationKey(_object(payload["operation_key"])["value"])
+        build_input = BuildIdentityInput(
+            manifest_commitment=build_input_data["manifest_commitment"],
+            ordered_chunk_identities=tuple(_list(build_input_data["ordered_chunk_identities"])),
+            chunking_profile_identity=build_input_data["chunking_profile_identity"],
+            canonicalization_version=build_input_data["canonicalization_version"],
+            embedding_provider=build_input_data["embedding_provider"],
+            embedding_model=build_input_data["embedding_model"],
+            embedding_profile_identity=build_input_data["embedding_profile_identity"],
+            embedding_dimension=build_input_data["embedding_dimension"],
+            normalization_semantics=build_input_data["normalization_semantics"],
+            index_engine=build_input_data["index_engine"],
+            index_schema_identity=build_input_data["index_schema_identity"],
+            metadata_schema_identity=build_input_data["metadata_schema_identity"],
+            build_contract_version=build_input_data["build_contract_version"],
+        )
+        record = StagedBuildRecord(
+            payload["build_identity"], operation, payload["manifest_commitment"],
+            payload["lineage_commitment"], payload["staged_commitment"], build_input,
+            profile, payload["capability_identity"], payload["document_count"],
+            document_provenance, chunks, artifact, BuildStageState(payload["state"]),
+            payload["record_version"],
+        )
+        if (
+            record.build_identity != row["build_identity"]
+            or record.record_version != row["record_version"]
+            or record.operation_key.value != row["operation_id"]
+            or record.manifest_commitment != row["manifest_commitment"]
+            or record.lineage_commitment != row["lineage_commitment"]
+            or record.staged_commitment != row["staged_commitment"]
+        ):
+            raise ValueError("staged build columns contradict semantic payload")
+        return record
+
+    @staticmethod
+    def _decode_build_validation(row: sqlite3.Row) -> BuildValidationRecord:
+        payload = _json_object(row["payload_json"], {
+            "build_identity", "operation_key", "staged_commitment", "validation_commitment",
+            "state", "findings", "record_version",
+        })
+        findings = tuple(
+            BuildValidationFinding(
+                BuildFailureCode(_object(item)["code"]),
+                _object(item)["field"],
+                _object(item)["detail"],
+            )
+            for item in _list(payload["findings"])
+        )
+        record = BuildValidationRecord(
+            payload["build_identity"],
+            BuildOperationKey(_object(payload["operation_key"])["value"]),
+            payload["staged_commitment"], payload["validation_commitment"],
+            BuildValidationState(payload["state"]), findings, payload["record_version"],
+        )
+        if (
+            record.build_identity != row["build_identity"]
+            or record.record_version != row["record_version"]
+            or record.operation_key.value != row["operation_id"]
+            or record.staged_commitment != row["staged_commitment"]
+            or record.validation_commitment != row["validation_commitment"]
+            or record.state.value != row["validation_state"]
+        ):
+            raise ValueError("build validation columns contradict semantic payload")
+        return record
+
+
+def _object(value: object) -> dict[str, object]:
+    if not isinstance(value, dict) or any(not isinstance(key, str) for key in value):
+        raise ValueError("durable JSON value must be an object")
+    return value
+
+
+def _list(value: object) -> list[object]:
+    if not isinstance(value, list):
+        raise ValueError("durable JSON value must be a list")
+    return value
+
+
+def _json_object(value: object, expected_keys: set[str]) -> dict[str, object]:
+    if not isinstance(value, str):
+        raise ValueError("durable payload must be text")
+    payload = _object(json.loads(value))
+    if set(payload) != expected_keys:
+        raise ValueError("durable payload has an incompatible field set")
+    return payload
+
+
+def _decode_opaque_reference(value: dict[str, object]) -> OpaqueExternalReference:
+    if set(value) != {"reference_type", "value"}:
+        raise ValueError("opaque reference payload has incompatible fields")
+    return OpaqueExternalReference(OpaqueReferenceType(value["reference_type"]), value["value"])
+
+
+def _decode_build_document_provenance(value: object) -> BuildDocumentProvenance:
+    data = _object(value)
+    if set(data) != {
+        "document_identity", "document_version_identity", "source_path", "content_hash",
+        "approval_reference", "source_classification", "outbound_eligible", "content_type",
+        "metadata",
+    }:
+        raise ValueError("build document provenance payload has incompatible fields")
+    metadata = tuple(
+        MetadataItem(_object(item)["key"], _object(item)["value"])
+        for item in _list(data["metadata"])
+    )
+    return BuildDocumentProvenance(
+        data["document_identity"],
+        data["document_version_identity"],
+        data["source_path"],
+        data["content_hash"],
+        data["approval_reference"],
+        SourceClassification(data["source_classification"]),
+        data["outbound_eligible"],
+        ContentType(data["content_type"]),
+        metadata,
+    )
+
+
+def _decode_build_chunk(value: object) -> BuildChunk:
+    data = _object(value)
+    if set(data) != {
+        "chunk_identity", "document_identity", "document_version_identity", "section_identity",
+        "ordinal", "content", "content_hash", "metadata_commitment",
+    }:
+        raise ValueError("build chunk payload has incompatible fields")
+    return BuildChunk(
+        data["chunk_identity"], data["document_identity"], data["document_version_identity"],
+        data["section_identity"], data["ordinal"], data["content"], data["content_hash"],
+        data["metadata_commitment"],
+    )
+
+
+def _decode_index_artifact(value: dict[str, object]) -> IndexArtifactFacts:
+    if set(value) != {
+        "build_identity", "artifact_commitment", "artifact_trust", "provider", "model",
+        "embedding_profile_identity", "embedding_dimension", "index_engine",
+        "index_schema_identity", "entries", "integrity_ok",
+    }:
+        raise ValueError("index artifact payload has incompatible fields")
+    entries = tuple(
+        IndexEntryFact(
+            _object(item)["chunk_identity"],
+            _object(item)["metadata_commitment"],
+            _object(item)["embedding_dimension"],
+        )
+        for item in _list(value["entries"])
+    )
+    return IndexArtifactFacts(
+        value["build_identity"], value["artifact_commitment"],
+        ArtifactTrust(value["artifact_trust"]), value["provider"], value["model"],
+        value["embedding_profile_identity"], value["embedding_dimension"],
+        value["index_engine"], value["index_schema_identity"], entries,
+        value["integrity_ok"],
+    )
+
+
+def _validate_staged_record_semantics(record: StagedBuildRecord) -> None:
+    chunk_identities = tuple(chunk.chunk_identity for chunk in record.chunks)
+    build_input = record.build_input
+    artifact = record.artifact
+    provenance_by_version = {
+        item.document_version_identity: item for item in record.document_provenance
+    }
+    if (
+        build_identity(build_input) != record.build_identity
+        or build_input.manifest_commitment != record.manifest_commitment
+        or build_input.ordered_chunk_identities != chunk_identities
+        or len(set(chunk_identities)) != len(chunk_identities)
+        or record.document_count != len(record.document_provenance)
+        or artifact.provider != build_input.embedding_provider
+        or artifact.model != build_input.embedding_model
+        or artifact.embedding_profile_identity != build_input.embedding_profile_identity
+        or artifact.embedding_dimension != build_input.embedding_dimension
+        or artifact.index_engine != build_input.index_engine
+        or artifact.index_schema_identity != build_input.index_schema_identity
+        or derive_build_lineage_commitment(
+            record.build_identity,
+            record.manifest_commitment,
+            record.chunks,
+            record.profile_reference,
+            record.capability_identity,
+        ) != record.lineage_commitment
+        or derive_staged_build_commitment(
+            record.lineage_commitment, record.artifact, record.build_input
+        ) != record.staged_commitment
+        or any(
+            (provenance := provenance_by_version.get(chunk.document_version_identity)) is None
+            or provenance.document_identity != chunk.document_identity
+            or chunk.metadata_commitment
+            != derive_chunk_metadata_commitment(
+                record.manifest_commitment,
+                provenance,
+                chunk_identity=chunk.chunk_identity,
+                section_identity=chunk.section_identity,
+                ordinal=chunk.ordinal,
+                content_hash=chunk.content_hash,
+            )
+            for chunk in record.chunks
+        )
+    ):
+        raise ValueError("staged build semantic inputs are inconsistent")
+
+
+def _validate_build_operation_claim_semantics(claim: BuildOperationClaim) -> None:
+    if claim.semantic_commitment != derive_build_operation_commitment(
+        claim.operation_key,
+        claim.build_identity,
+        claim.profile_reference,
+        claim.capability_identity,
+    ):
+        raise ValueError("build operation semantic commitment is inconsistent")
+
+
+def _validate_build_validation_semantics(record: BuildValidationRecord) -> None:
+    if record.validation_commitment != derive_build_validation_commitment(
+        record.build_identity,
+        record.operation_key,
+        record.staged_commitment,
+        record.state,
+        record.findings,
+    ):
+        raise ValueError("build validation semantic commitment is inconsistent")

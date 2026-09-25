@@ -58,5 +58,9 @@ def test_sqlite_store_implements_candidate_c_protocol(tmp_path) -> None:
     try:
         assert isinstance(store, KnowledgePersistence)
         assert "KnowledgeReadResult" in str(get_type_hints(KnowledgePersistence.get_build_lineage)["return"])
+        assert callable(store.create_staged_build)
+        assert callable(store.create_build_validation)
+        assert callable(store.get_staged_build)
+        assert callable(store.get_build_validation)
     finally:
         store.close()

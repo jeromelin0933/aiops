@@ -1,8 +1,11 @@
+import json
 import sqlite3
 
 import pytest
 
 from knowledge_index import (
+    BuildOperationKey,
+    KnowledgeBuildService,
     KnowledgeLocalReadiness,
     KnowledgeReadStatus,
     KnowledgeStoreIntegrityError,
@@ -15,11 +18,43 @@ from knowledge_index import (
     SqliteKnowledgeStore,
     UnsupportedKnowledgeStoreVersion,
 )
+from _knowledge_build_testkit import (
+    DeterministicIndex,
+    DeterministicProvider,
+    limits,
+    manifest_and_plan,
+)
 from _knowledge_store_testkit import activation, build, digest, operation, snapshot
 
 
 def _create(path) -> None:
     SqliteKnowledgeStore(path).close()
+
+
+def _create_staged_build(path, source_root, *, validate: bool):
+    source_root.mkdir()
+    raw, chunks, identity_input = manifest_and_plan(source_root)
+    with SqliteKnowledgeStore(path) as store:
+        service = KnowledgeBuildService(
+            store, DeterministicProvider(), DeterministicIndex()
+        )
+        staged = service.stage(
+            operation_key=BuildOperationKey("stage-integrity"),
+            raw_manifest=raw,
+            source_root=source_root,
+            chunks=chunks,
+            identity_input=identity_input,
+            limits=limits(),
+            required_capability_identity="embedding-capability-v1",
+        ).record
+        assert staged is not None
+        if validate:
+            service.validate(
+                staged.build_identity,
+                BuildOperationKey("validate-integrity"),
+                maximum_probe_results=2,
+            )
+    return staged
 
 
 def test_unsupported_schema_version_fails_reopen(tmp_path) -> None:
@@ -225,3 +260,90 @@ def test_all_valid_durable_record_types_survive_strict_reopen(tmp_path) -> None:
         assert reopened.read_activation().status is KnowledgeReadStatus.FOUND
         assert reopened.get_snapshot(snapshot(record).snapshot_key).status is KnowledgeReadStatus.FOUND
         assert reopened.get_retention_hold(hold.hold_key).value == hold
+
+
+def test_malformed_staged_build_payload_fails_strict_reopen(tmp_path) -> None:
+    path = tmp_path / "knowledge.sqlite3"
+    _create(path)
+    record = build()
+    connection = sqlite3.connect(path)
+    connection.execute(
+        "INSERT INTO build_lineage VALUES (?, 1, ?, ?)",
+        (record.build_identity, record.manifest_commitment, record.lineage_commitment),
+    )
+    connection.execute(
+        "INSERT INTO staged_builds VALUES (?, 1, ?, ?, ?, ?, ?)",
+        (
+            record.build_identity, "stage-corrupt", record.manifest_commitment,
+            record.lineage_commitment, digest("staged"), '{"unexpected":true}',
+        ),
+    )
+    connection.commit()
+    assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+    connection.close()
+    with pytest.raises(KnowledgeStoreIntegrityError):
+        SqliteKnowledgeStore(path)
+
+
+def test_lineage_commitment_tampering_fails_strict_reopen(tmp_path) -> None:
+    path = tmp_path / "knowledge.sqlite3"
+    staged = _create_staged_build(path, tmp_path / "source", validate=False)
+    replacement = digest("tampered-lineage")
+    connection = sqlite3.connect(path)
+    payload = json.loads(connection.execute(
+        "SELECT payload_json FROM staged_builds WHERE build_identity = ?",
+        (staged.build_identity,),
+    ).fetchone()[0])
+    payload["lineage_commitment"] = replacement
+    connection.execute(
+        "UPDATE build_lineage SET lineage_commitment = ? WHERE build_identity = ?",
+        (replacement, staged.build_identity),
+    )
+    connection.execute(
+        "UPDATE staged_builds SET lineage_commitment = ?, payload_json = ? WHERE build_identity = ?",
+        (replacement, json.dumps(payload, sort_keys=True), staged.build_identity),
+    )
+    connection.commit()
+    connection.close()
+    with pytest.raises(KnowledgeStoreIntegrityError):
+        SqliteKnowledgeStore(path)
+
+
+def test_staged_commitment_tampering_fails_strict_reopen(tmp_path) -> None:
+    path = tmp_path / "knowledge.sqlite3"
+    staged = _create_staged_build(path, tmp_path / "source", validate=False)
+    replacement = digest("tampered-stage")
+    connection = sqlite3.connect(path)
+    payload = json.loads(connection.execute(
+        "SELECT payload_json FROM staged_builds WHERE build_identity = ?",
+        (staged.build_identity,),
+    ).fetchone()[0])
+    payload["staged_commitment"] = replacement
+    connection.execute(
+        "UPDATE staged_builds SET staged_commitment = ?, payload_json = ? WHERE build_identity = ?",
+        (replacement, json.dumps(payload, sort_keys=True), staged.build_identity),
+    )
+    connection.commit()
+    connection.close()
+    with pytest.raises(KnowledgeStoreIntegrityError):
+        SqliteKnowledgeStore(path)
+
+
+def test_validation_commitment_tampering_fails_strict_reopen(tmp_path) -> None:
+    path = tmp_path / "knowledge.sqlite3"
+    staged = _create_staged_build(path, tmp_path / "source", validate=True)
+    replacement = digest("tampered-validation")
+    connection = sqlite3.connect(path)
+    payload = json.loads(connection.execute(
+        "SELECT payload_json FROM build_validations WHERE build_identity = ?",
+        (staged.build_identity,),
+    ).fetchone()[0])
+    payload["validation_commitment"] = replacement
+    connection.execute(
+        "UPDATE build_validations SET validation_commitment = ?, payload_json = ? WHERE build_identity = ?",
+        (replacement, json.dumps(payload, sort_keys=True), staged.build_identity),
+    )
+    connection.commit()
+    connection.close()
+    with pytest.raises(KnowledgeStoreIntegrityError):
+        SqliteKnowledgeStore(path)

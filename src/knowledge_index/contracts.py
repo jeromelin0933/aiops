@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import hashlib
+import math
 import re
 from typing import Protocol, runtime_checkable
 
@@ -589,3 +591,512 @@ class KnowledgePersistence(Protocol):
     def read_activation(self) -> KnowledgeReadResult: ...
 
     def local_readiness(self) -> KnowledgeReadinessFact: ...
+
+    def claim_build_operation(self, claim: BuildOperationClaim) -> BuildOperationClaim: ...
+
+    def get_build_operation_claim(self, operation_key: BuildOperationKey) -> KnowledgeReadResult: ...
+
+    def create_staged_build(self, record: StagedBuildRecord) -> StagedBuildRecord: ...
+
+    def get_staged_build(self, build_identity: str) -> KnowledgeReadResult: ...
+
+    def create_build_validation(self, record: BuildValidationRecord) -> BuildValidationRecord: ...
+
+    def get_build_validation(self, build_identity: str) -> KnowledgeReadResult: ...
+
+    def commit_activation(
+        self, record: ActivationAuthorityRecord, *, expected_generation: int
+    ) -> ActivationAuthorityRecord: ...
+
+
+# Slice 3 immutable build, validation, and activation contracts.
+class BuildStageState(str, Enum):
+    STAGED = "STAGED"
+
+
+class BuildValidationState(str, Enum):
+    VALIDATED = "VALIDATED"
+    FAILED = "FAILED"
+
+
+class ArtifactTrust(str, Enum):
+    APPROVED = "APPROVED"
+    TEST_ONLY = "TEST_ONLY"
+
+
+class RetrySafetyDisposition(str, Enum):
+    SAME_OPERATION_ONLY = "SAME_OPERATION_ONLY"
+    DO_NOT_RETRY = "DO_NOT_RETRY"
+    EXTERNAL_AUTHORIZATION_REQUIRED = "EXTERNAL_AUTHORIZATION_REQUIRED"
+
+
+class BuildFailureCode(str, Enum):
+    ADMISSION_REJECTED = "ADMISSION_REJECTED"
+    INVALID_CHUNK_PLAN = "INVALID_CHUNK_PLAN"
+    PROFILE_MISMATCH = "PROFILE_MISMATCH"
+    PROVIDER_BOUNDS_EXCEEDED = "PROVIDER_BOUNDS_EXCEEDED"
+    PROVIDER_UNAVAILABLE = "PROVIDER_UNAVAILABLE"
+    PROVIDER_EXHAUSTED = "PROVIDER_EXHAUSTED"
+    PROVIDER_CONTRACT_INVALID = "PROVIDER_CONTRACT_INVALID"
+    INDEX_UNAVAILABLE = "INDEX_UNAVAILABLE"
+    INDEX_CONFLICT = "INDEX_CONFLICT"
+    ARTIFACT_MISSING = "ARTIFACT_MISSING"
+    ARTIFACT_MISMATCH = "ARTIFACT_MISMATCH"
+    CARDINALITY_MISMATCH = "CARDINALITY_MISMATCH"
+    DUPLICATE_CHUNK = "DUPLICATE_CHUNK"
+    MISSING_CHUNK = "MISSING_CHUNK"
+    ORPHAN_CHUNK = "ORPHAN_CHUNK"
+    METADATA_INVALID = "METADATA_INVALID"
+    EMBEDDING_MISMATCH = "EMBEDDING_MISMATCH"
+    INDEX_INTEGRITY_FAILED = "INDEX_INTEGRITY_FAILED"
+    PROBE_FAILED = "PROBE_FAILED"
+    BUILD_NOT_STAGED = "BUILD_NOT_STAGED"
+    BUILD_NOT_VALIDATED = "BUILD_NOT_VALIDATED"
+    ACTIVATION_INELIGIBLE = "ACTIVATION_INELIGIBLE"
+    REPAIR_REQUIRED = "REPAIR_REQUIRED"
+
+
+@dataclass(frozen=True, slots=True)
+class BuildOperationKey:
+    value: str
+
+    def __post_init__(self) -> None:
+        _durable_key(self.value, "build operation key")
+
+
+@dataclass(frozen=True, slots=True)
+class BuildOperationClaim:
+    operation_key: BuildOperationKey
+    semantic_commitment: str
+    build_identity: str
+    profile_reference: OpaqueExternalReference
+    capability_identity: str
+    record_version: int = 1
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.operation_key, BuildOperationKey):
+            raise KnowledgeValidationError("operation_key must be BuildOperationKey")
+        _hash(self.semantic_commitment, "semantic_commitment")
+        _typed_identity(self.build_identity, "kbld", "build_identity")
+        if (
+            not isinstance(self.profile_reference, OpaqueExternalReference)
+            or self.profile_reference.reference_type is not OpaqueReferenceType.CREDENTIAL_PROFILE
+        ):
+            raise KnowledgeValidationError("profile_reference must be an opaque Credential Profile")
+        _durable_key(self.capability_identity, "capability_identity")
+        if self.record_version != 1:
+            raise KnowledgeValidationError("unsupported build operation claim record version")
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderInvocationLimits:
+    timeout_seconds: float
+    maximum_request_bytes: int
+    maximum_batch_items: int
+    maximum_invocations: int
+    maximum_cost_units: int
+    maximum_rate_units: int
+    maximum_quota_units: int
+    maximum_resource_units: int
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.timeout_seconds, bool)
+            or not isinstance(self.timeout_seconds, (int, float))
+            or not math.isfinite(float(self.timeout_seconds))
+            or self.timeout_seconds <= 0
+        ):
+            raise KnowledgeValidationError("timeout_seconds must be finite and positive")
+        for field in (
+            "maximum_request_bytes", "maximum_batch_items", "maximum_invocations",
+            "maximum_cost_units", "maximum_rate_units", "maximum_quota_units",
+            "maximum_resource_units",
+        ):
+            value = getattr(self, field)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise KnowledgeValidationError(f"{field} must be a positive integer")
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderCapability:
+    profile_reference: OpaqueExternalReference
+    capability_identity: str
+    provider: str
+    model: str
+    embedding_profile_identity: str
+    embedding_dimension: int
+    hidden_retries_disabled: bool
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.profile_reference, OpaqueExternalReference)
+            or self.profile_reference.reference_type is not OpaqueReferenceType.CREDENTIAL_PROFILE
+        ):
+            raise KnowledgeValidationError("provider capability requires an opaque Credential Profile")
+        for field in (
+            "capability_identity", "provider", "model", "embedding_profile_identity"
+        ):
+            _durable_key(getattr(self, field), field)
+        if (
+            isinstance(self.embedding_dimension, bool)
+            or not isinstance(self.embedding_dimension, int)
+            or self.embedding_dimension <= 0
+        ):
+            raise KnowledgeValidationError("embedding_dimension must be positive")
+        if not isinstance(self.hidden_retries_disabled, bool):
+            raise KnowledgeValidationError("hidden_retries_disabled must be boolean")
+
+
+@dataclass(frozen=True, slots=True)
+class BuildChunk:
+    chunk_identity: str
+    document_identity: str
+    document_version_identity: str
+    section_identity: str
+    ordinal: int
+    content: str
+    content_hash: str
+    metadata_commitment: str
+
+    def __post_init__(self) -> None:
+        _typed_identity(self.chunk_identity, "kchk", "chunk_identity")
+        _typed_identity(self.document_identity, "kdoc", "document_identity")
+        _typed_identity(self.document_version_identity, "kver", "document_version_identity")
+        _durable_key(self.section_identity, "section_identity")
+        if isinstance(self.ordinal, bool) or not isinstance(self.ordinal, int) or self.ordinal < 0:
+            raise KnowledgeValidationError("ordinal must be non-negative")
+        if (
+            not isinstance(self.content, str)
+            or not self.content
+            or len(self.content.encode("utf-8")) > 1_000_000
+            or _contains_secret_shape(self.content)
+        ):
+            raise KnowledgeValidationError("chunk content must be non-empty and bounded")
+        _hash(self.content_hash, "content_hash")
+        if hashlib.sha256(self.content.encode("utf-8")).hexdigest() != self.content_hash:
+            raise KnowledgeValidationError("chunk content hash does not match content")
+        _hash(self.metadata_commitment, "metadata_commitment")
+
+
+@dataclass(frozen=True, slots=True)
+class BuildDocumentProvenance:
+    document_identity: str
+    document_version_identity: str
+    source_path: str
+    content_hash: str
+    approval_reference: str
+    source_classification: SourceClassification
+    outbound_eligible: bool
+    content_type: ContentType
+    metadata: tuple[MetadataItem, ...]
+
+    def __post_init__(self) -> None:
+        _typed_identity(self.document_identity, "kdoc", "document_identity")
+        _typed_identity(self.document_version_identity, "kver", "document_version_identity")
+        if not isinstance(self.source_path, str) or not self.source_path or len(self.source_path) > 512:
+            raise KnowledgeValidationError("source_path must be non-empty and bounded")
+        _hash(self.content_hash, "content_hash")
+        _identifier(self.approval_reference, "approval_reference")
+        if self.source_classification is not SourceClassification.APPROVED_OPERATIONAL_KNOWLEDGE:
+            raise KnowledgeValidationError("build provenance requires approved source classification")
+        if self.outbound_eligible is not True:
+            raise KnowledgeValidationError("build provenance must be outbound eligible")
+        if self.content_type is not ContentType.TEXT_UTF8:
+            raise KnowledgeValidationError("build provenance requires supported content type")
+        if (
+            not isinstance(self.metadata, tuple)
+            or any(not isinstance(item, MetadataItem) for item in self.metadata)
+            or tuple(sorted(self.metadata)) != self.metadata
+            or len({item.key for item in self.metadata}) != len(self.metadata)
+            or any(
+                _contains_secret_shape(item.key, metadata_key=True)
+                or _contains_secret_shape(item.value)
+                for item in self.metadata
+            )
+        ):
+            raise KnowledgeValidationError(
+                "build provenance metadata must be canonical, unique, and non-secret"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class BuildFailureFact:
+    code: BuildFailureCode
+    field: str
+    detail: str
+    retry_safety: RetrySafetyDisposition
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.code, BuildFailureCode):
+            raise KnowledgeValidationError("code must be a BuildFailureCode")
+        _durable_key(self.field, "failure field")
+        if (
+            not isinstance(self.detail, str)
+            or not self.detail
+            or self.detail != self.detail.strip()
+            or len(self.detail) > 256
+            or _contains_secret_shape(self.detail)
+        ):
+            raise KnowledgeValidationError("failure detail must be bounded and non-secret")
+        if not isinstance(self.retry_safety, RetrySafetyDisposition):
+            raise KnowledgeValidationError("retry_safety must be a RetrySafetyDisposition")
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderEmbeddingRequest:
+    build_identity: str
+    capability: ProviderCapability
+    chunks: tuple[BuildChunk, ...]
+    limits: ProviderInvocationLimits
+
+    def __post_init__(self) -> None:
+        _typed_identity(self.build_identity, "kbld", "build_identity")
+        if not isinstance(self.capability, ProviderCapability):
+            raise KnowledgeValidationError("capability must be a ProviderCapability")
+        if not isinstance(self.chunks, tuple) or not self.chunks or any(
+            not isinstance(chunk, BuildChunk) for chunk in self.chunks
+        ):
+            raise KnowledgeValidationError("chunks must be a non-empty tuple of BuildChunk")
+        if not isinstance(self.limits, ProviderInvocationLimits):
+            raise KnowledgeValidationError("limits must be ProviderInvocationLimits")
+
+
+@dataclass(frozen=True, slots=True)
+class EmbeddingVector:
+    chunk_identity: str
+    values: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        _typed_identity(self.chunk_identity, "kchk", "chunk_identity")
+        if not isinstance(self.values, tuple) or not self.values:
+            raise KnowledgeValidationError("embedding values must be a non-empty tuple")
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            for value in self.values
+        ):
+            raise KnowledgeValidationError("embedding values must be finite numbers")
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderEmbeddingResult:
+    capability: ProviderCapability
+    embeddings: tuple[EmbeddingVector, ...]
+    invocation_count: int
+    cost_units: int
+    rate_units: int
+    quota_units: int
+    resource_units: int
+    failure: BuildFailureFact | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.capability, ProviderCapability):
+            raise KnowledgeValidationError("capability must be a ProviderCapability")
+        if any(not isinstance(item, EmbeddingVector) for item in self.embeddings):
+            raise KnowledgeValidationError("embeddings contains an invalid value")
+        for field in (
+            "invocation_count", "cost_units", "rate_units", "quota_units", "resource_units"
+        ):
+            value = getattr(self, field)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise KnowledgeValidationError(f"{field} must be non-negative")
+        if self.failure is not None and not isinstance(self.failure, BuildFailureFact):
+            raise KnowledgeValidationError("failure must be a BuildFailureFact")
+        if self.failure is not None and self.embeddings:
+            raise KnowledgeValidationError("failed provider result cannot contain embeddings")
+
+
+@dataclass(frozen=True, slots=True)
+class IndexEntryFact:
+    chunk_identity: str
+    metadata_commitment: str
+    embedding_dimension: int
+
+    def __post_init__(self) -> None:
+        _typed_identity(self.chunk_identity, "kchk", "chunk_identity")
+        _hash(self.metadata_commitment, "metadata_commitment")
+        if isinstance(self.embedding_dimension, bool) or not isinstance(self.embedding_dimension, int) or self.embedding_dimension <= 0:
+            raise KnowledgeValidationError("embedding_dimension must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class IndexArtifactFacts:
+    build_identity: str
+    artifact_commitment: str
+    artifact_trust: ArtifactTrust
+    provider: str
+    model: str
+    embedding_profile_identity: str
+    embedding_dimension: int
+    index_engine: str
+    index_schema_identity: str
+    entries: tuple[IndexEntryFact, ...]
+    integrity_ok: bool
+
+    def __post_init__(self) -> None:
+        _typed_identity(self.build_identity, "kbld", "build_identity")
+        _hash(self.artifact_commitment, "artifact_commitment")
+        if not isinstance(self.artifact_trust, ArtifactTrust):
+            raise KnowledgeValidationError("artifact_trust must be ArtifactTrust")
+        for field in ("provider", "model", "embedding_profile_identity", "index_engine", "index_schema_identity"):
+            _durable_key(getattr(self, field), field)
+        if isinstance(self.embedding_dimension, bool) or not isinstance(self.embedding_dimension, int) or self.embedding_dimension <= 0:
+            raise KnowledgeValidationError("embedding_dimension must be positive")
+        if not isinstance(self.entries, tuple) or any(not isinstance(item, IndexEntryFact) for item in self.entries):
+            raise KnowledgeValidationError("entries must be a tuple of IndexEntryFact")
+        if not isinstance(self.integrity_ok, bool):
+            raise KnowledgeValidationError("integrity_ok must be boolean")
+
+
+@dataclass(frozen=True, slots=True)
+class IndexProbeFacts:
+    build_identity: str
+    succeeded: bool
+    returned_count: int
+    inspected_limit: int
+
+    def __post_init__(self) -> None:
+        _typed_identity(self.build_identity, "kbld", "build_identity")
+        if not isinstance(self.succeeded, bool):
+            raise KnowledgeValidationError("succeeded must be boolean")
+        for field in ("returned_count", "inspected_limit"):
+            value = getattr(self, field)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise KnowledgeValidationError(f"{field} must be non-negative")
+        if self.returned_count > self.inspected_limit:
+            raise KnowledgeValidationError("probe returned_count exceeds inspected_limit")
+
+
+@dataclass(frozen=True, slots=True)
+class StagedBuildRecord:
+    build_identity: str
+    operation_key: BuildOperationKey
+    manifest_commitment: str
+    lineage_commitment: str
+    staged_commitment: str
+    build_input: BuildIdentityInput
+    profile_reference: OpaqueExternalReference
+    capability_identity: str
+    document_count: int
+    document_provenance: tuple[BuildDocumentProvenance, ...]
+    chunks: tuple[BuildChunk, ...]
+    artifact: IndexArtifactFacts
+    state: BuildStageState = BuildStageState.STAGED
+    record_version: int = 1
+
+    def __post_init__(self) -> None:
+        _typed_identity(self.build_identity, "kbld", "build_identity")
+        if not isinstance(self.operation_key, BuildOperationKey):
+            raise KnowledgeValidationError("operation_key must be BuildOperationKey")
+        _typed_identity(self.manifest_commitment, "kmf", "manifest_commitment")
+        _hash(self.lineage_commitment, "lineage_commitment")
+        _hash(self.staged_commitment, "staged_commitment")
+        if not isinstance(self.build_input, BuildIdentityInput):
+            raise KnowledgeValidationError("build_input must be BuildIdentityInput")
+        if not isinstance(self.profile_reference, OpaqueExternalReference) or self.profile_reference.reference_type is not OpaqueReferenceType.CREDENTIAL_PROFILE:
+            raise KnowledgeValidationError("profile_reference must be an opaque Credential Profile")
+        _durable_key(self.capability_identity, "capability_identity")
+        if isinstance(self.document_count, bool) or not isinstance(self.document_count, int) or self.document_count <= 0:
+            raise KnowledgeValidationError("document_count must be positive")
+        if (
+            not isinstance(self.document_provenance, tuple)
+            or not self.document_provenance
+            or any(not isinstance(item, BuildDocumentProvenance) for item in self.document_provenance)
+            or tuple(sorted(
+                self.document_provenance,
+                key=lambda item: (item.document_identity, item.document_version_identity),
+            )) != self.document_provenance
+            or len({item.document_version_identity for item in self.document_provenance})
+            != len(self.document_provenance)
+        ):
+            raise KnowledgeValidationError("document provenance must be complete, unique, and canonical")
+        if not isinstance(self.chunks, tuple) or not self.chunks or any(not isinstance(item, BuildChunk) for item in self.chunks):
+            raise KnowledgeValidationError("chunks must be a non-empty tuple of BuildChunk")
+        if not isinstance(self.artifact, IndexArtifactFacts):
+            raise KnowledgeValidationError("artifact must be IndexArtifactFacts")
+        if self.artifact.build_identity != self.build_identity:
+            raise KnowledgeValidationError("artifact build identity mismatch")
+        if self.state is not BuildStageState.STAGED or self.record_version != 1:
+            raise KnowledgeValidationError("unsupported staged build state or record version")
+
+
+@dataclass(frozen=True, slots=True, order=True)
+class BuildValidationFinding:
+    code: BuildFailureCode
+    field: str
+    detail: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.code, BuildFailureCode):
+            raise KnowledgeValidationError("code must be BuildFailureCode")
+        _durable_key(self.field, "validation field")
+        if not isinstance(self.detail, str) or not self.detail or len(self.detail) > 256 or _contains_secret_shape(self.detail):
+            raise KnowledgeValidationError("validation detail must be bounded and non-secret")
+
+
+@dataclass(frozen=True, slots=True)
+class BuildValidationRecord:
+    build_identity: str
+    operation_key: BuildOperationKey
+    staged_commitment: str
+    validation_commitment: str
+    state: BuildValidationState
+    findings: tuple[BuildValidationFinding, ...]
+    record_version: int = 1
+
+    def __post_init__(self) -> None:
+        _typed_identity(self.build_identity, "kbld", "build_identity")
+        if not isinstance(self.operation_key, BuildOperationKey):
+            raise KnowledgeValidationError("operation_key must be BuildOperationKey")
+        _hash(self.staged_commitment, "staged_commitment")
+        _hash(self.validation_commitment, "validation_commitment")
+        if not isinstance(self.state, BuildValidationState):
+            raise KnowledgeValidationError("state must be BuildValidationState")
+        if any(not isinstance(item, BuildValidationFinding) for item in self.findings):
+            raise KnowledgeValidationError("findings must contain BuildValidationFinding")
+        if tuple(sorted(set(self.findings))) != self.findings:
+            raise KnowledgeValidationError("findings must be unique and canonically sorted")
+        if (self.state is BuildValidationState.VALIDATED) != (not self.findings):
+            raise KnowledgeValidationError("validation state and findings disagree")
+        if self.record_version != 1:
+            raise KnowledgeValidationError("unsupported validation record version")
+
+
+@dataclass(frozen=True, slots=True)
+class BuildStageResult:
+    record: StagedBuildRecord | None
+    failures: tuple[BuildFailureFact, ...] = ()
+
+    def __post_init__(self) -> None:
+        if any(not isinstance(item, BuildFailureFact) for item in self.failures):
+            raise KnowledgeValidationError("failures must contain BuildFailureFact")
+        if (self.record is None) == (not self.failures):
+            raise KnowledgeValidationError("stage result must contain exactly one success or failures")
+
+
+@dataclass(frozen=True, slots=True)
+class BuildActivationRequest:
+    build_identity: str
+    operation_key: ActivationOperationKey
+    expected_generation: int
+
+    def __post_init__(self) -> None:
+        _typed_identity(self.build_identity, "kbld", "build_identity")
+        if not isinstance(self.operation_key, ActivationOperationKey):
+            raise KnowledgeValidationError("operation_key must be ActivationOperationKey")
+        if isinstance(self.expected_generation, bool) or not isinstance(self.expected_generation, int) or self.expected_generation < 0:
+            raise KnowledgeValidationError("expected_generation must be non-negative")
+
+
+@dataclass(frozen=True, slots=True)
+class BuildActivationResult:
+    authority: ActivationAuthorityRecord
+    staged_commitment: str
+    validation_commitment: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.authority, ActivationAuthorityRecord):
+            raise KnowledgeValidationError("authority must be ActivationAuthorityRecord")
+        _hash(self.staged_commitment, "staged_commitment")
+        _hash(self.validation_commitment, "validation_commitment")

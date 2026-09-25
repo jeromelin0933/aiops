@@ -18,7 +18,6 @@ def test_public_api_contains_only_slice_one_and_two_capabilities() -> None:
     exported = set(knowledge_index.__all__)
     forbidden_fragments = {
         "retrieve",
-        "provider",
         "runtime",
         "scheduler",
         "credentialregistry",
@@ -81,7 +80,8 @@ def test_slice_two_does_not_define_next_slice_workflow() -> None:
         "def retrieve",
         "def rank",
         "class applicability",
-        "class embeddingprovider",
+        "class googleembedding",
+        "class chroma",
         "class buildlifecycle",
         "class scheduler",
         "class runtimeclock",

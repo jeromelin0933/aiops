@@ -16,7 +16,7 @@ def test_new_store_creates_explicit_schema_and_enables_foreign_keys(tmp_path) ->
     store = SqliteKnowledgeStore(path)
     store.close()
     connection = sqlite3.connect(path)
-    assert connection.execute("SELECT schema_version FROM knowledge_store_metadata").fetchone() == (1,)
+    assert connection.execute("SELECT schema_version FROM knowledge_store_metadata").fetchone() == (2,)
     connection.close()
 
 
