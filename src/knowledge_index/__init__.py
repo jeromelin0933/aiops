@@ -1,4 +1,4 @@
-"""Public SPEC-014 Slice 1 governed Knowledge foundation."""
+"""Public Candidate-C contracts through SPEC-014 Slice 4."""
 
 from .contracts import (
     AdmittedDocument,
@@ -59,6 +59,24 @@ from .contracts import (
     RetrySafetyDisposition,
     SourceClassification,
     StagedBuildRecord,
+    ApplicabilityPolicy,
+    CanonicalKnowledgeQuery,
+    FrozenRetrievalOperation,
+    OrderedRetrievalCandidate,
+    QueryEmbeddingRequest,
+    QueryEmbeddingResult,
+    QueryFilter,
+    RawRetrievalBatch,
+    RawRetrievalCandidate,
+    RetrievalApplicability,
+    RetrievalFailureCode,
+    RetrievalFailureFact,
+    RetrievalOperationRequest,
+    RetrievalProfile,
+    RetrievalQueryDisposition,
+    RetrievalResolution,
+    RetrievalResult,
+    RetrievalScoreDirection,
 )
 from .build import KnowledgeBuildError, KnowledgeBuildService
 from .build_ports import EmbeddingProviderPort, StagedIndexPort
@@ -96,6 +114,12 @@ from .sqlite_store import (
     KnowledgeStoreUnavailableError,
     SqliteKnowledgeStore,
     UnsupportedKnowledgeStoreVersion,
+)
+from .retrieval import KnowledgeRetrievalService
+from .retrieval_ports import QueryEmbeddingProviderPort, RetrievalIndexPort
+from .retrieval_resolution import (
+    derive_retrieval_operation_commitment,
+    resolve_retrieval,
 )
 
 __all__ = [
@@ -157,6 +181,24 @@ __all__ = [
     "RetrySafetyDisposition",
     "SourceClassification",
     "StagedBuildRecord",
+    "ApplicabilityPolicy",
+    "CanonicalKnowledgeQuery",
+    "FrozenRetrievalOperation",
+    "OrderedRetrievalCandidate",
+    "QueryEmbeddingRequest",
+    "QueryEmbeddingResult",
+    "QueryFilter",
+    "RawRetrievalBatch",
+    "RawRetrievalCandidate",
+    "RetrievalApplicability",
+    "RetrievalFailureCode",
+    "RetrievalFailureFact",
+    "RetrievalOperationRequest",
+    "RetrievalProfile",
+    "RetrievalQueryDisposition",
+    "RetrievalResolution",
+    "RetrievalResult",
+    "RetrievalScoreDirection",
     "admit_manifest",
     "build_identity",
     "canonical_serialize",
@@ -188,4 +230,9 @@ __all__ = [
     "derive_build_validation_commitment",
     "derive_chunk_metadata_commitment",
     "derive_staged_build_commitment",
+    "KnowledgeRetrievalService",
+    "QueryEmbeddingProviderPort",
+    "RetrievalIndexPort",
+    "derive_retrieval_operation_commitment",
+    "resolve_retrieval",
 ]

@@ -347,3 +347,54 @@ def test_validation_commitment_tampering_fails_strict_reopen(tmp_path) -> None:
     connection.close()
     with pytest.raises(KnowledgeStoreIntegrityError):
         SqliteKnowledgeStore(path)
+
+
+@pytest.mark.parametrize("field", ["artifact_commitment", "validation_commitment"])
+def test_frozen_retrieval_semantic_tampering_fails_reopen(tmp_path, field) -> None:
+    from dataclasses import replace
+
+    from knowledge_index import canonical_serialize
+    from _knowledge_retrieval_testkit import request, stage_activate
+
+    path = tmp_path / "knowledge.sqlite3"
+    with SqliteKnowledgeStore(path) as store:
+        stage_activate(store, tmp_path / "retrieval-source", "retrieval")
+        frozen = store.freeze_retrieval_operation(request())
+    changed = replace(frozen, **{field: "f" * 64})
+    connection = sqlite3.connect(path)
+    connection.execute(
+        f"UPDATE frozen_retrieval_operations SET {field} = ?, payload_json = ? WHERE operation_id = ?",
+        ("f" * 64, canonical_serialize(changed), request().operation_key.value),
+    )
+    connection.commit()
+    connection.close()
+    with pytest.raises(KnowledgeStoreIntegrityError):
+        SqliteKnowledgeStore(path)
+
+
+def test_frozen_retrieval_profile_tampering_with_new_commitment_fails_reopen(tmp_path) -> None:
+    from dataclasses import replace
+
+    from knowledge_index import canonical_serialize, derive_retrieval_operation_commitment
+    from _knowledge_retrieval_testkit import request, stage_activate
+
+    path = tmp_path / "knowledge.sqlite3"
+    with SqliteKnowledgeStore(path) as store:
+        stage_activate(store, tmp_path / "retrieval-source", "retrieval")
+        frozen = store.freeze_retrieval_operation(request())
+    changed_request = replace(frozen.request, capability_identity="embedding-capability-v2")
+    commitment = derive_retrieval_operation_commitment(changed_request)
+    changed = replace(frozen, request=changed_request, semantic_commitment=commitment)
+    connection = sqlite3.connect(path)
+    connection.execute(
+        "UPDATE operation_envelopes SET semantic_commitment = ? WHERE operation_id = ?",
+        (commitment, frozen.request.operation_key.value),
+    )
+    connection.execute(
+        "UPDATE frozen_retrieval_operations SET semantic_commitment = ?, payload_json = ? WHERE operation_id = ?",
+        (commitment, canonical_serialize(changed), frozen.request.operation_key.value),
+    )
+    connection.commit()
+    connection.close()
+    with pytest.raises(KnowledgeStoreIntegrityError):
+        SqliteKnowledgeStore(path)

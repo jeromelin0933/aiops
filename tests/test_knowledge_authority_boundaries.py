@@ -14,10 +14,9 @@ def _production_source() -> str:
     )
 
 
-def test_public_api_contains_only_slice_one_and_two_capabilities() -> None:
+def test_public_api_contains_only_approved_candidate_c_capabilities() -> None:
     exported = set(knowledge_index.__all__)
     forbidden_fragments = {
-        "retrieve",
         "runtime",
         "scheduler",
         "credentialregistry",
@@ -47,7 +46,7 @@ def test_candidate_c_store_does_not_import_forbidden_domain_or_private_helpers()
         assert forbidden not in source
 
 
-def test_slice_two_defines_no_foreign_authority_or_future_placeholder() -> None:
+def test_candidate_c_defines_no_foreign_authority_or_future_placeholder() -> None:
     source = _production_source().lower()
     forbidden_definitions = (
         "class evidencesnapshot",
@@ -74,12 +73,9 @@ def test_slice_two_store_is_candidate_c_owned_and_stdlib_only() -> None:
     assert "chromadb" not in source
 
 
-def test_slice_two_does_not_define_next_slice_workflow() -> None:
+def test_slice_four_does_not_define_forbidden_next_slice_workflow() -> None:
     source = _production_source().lower()
     forbidden = (
-        "def retrieve",
-        "def rank",
-        "class applicability",
         "class googleembedding",
         "class chroma",
         "class buildlifecycle",
@@ -97,3 +93,16 @@ def test_opaque_references_retain_only_discriminator_and_value() -> None:
     assert not hasattr(reference, "evidence")
     assert not hasattr(reference, "payload")
     assert not hasattr(reference, "rca")
+
+
+def test_slice_four_retrieval_modules_do_not_publish_snapshot_or_foreign_authority() -> None:
+    retrieval_source = "\n".join(
+        (PACKAGE / name).read_text(encoding="utf-8")
+        for name in ("retrieval.py", "retrieval_ports.py", "retrieval_resolution.py")
+    ).lower()
+    for forbidden in (
+        "knowledgesnapshot", "publish_snapshot", "chromadb", "google.",
+        "runtime_orchestration", "credentialregistry", "incident_mutation",
+        "rcaaggregate", "evidencesnapshot",
+    ):
+        assert forbidden not in retrieval_source

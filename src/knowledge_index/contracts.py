@@ -608,6 +608,14 @@ class KnowledgePersistence(Protocol):
         self, record: ActivationAuthorityRecord, *, expected_generation: int
     ) -> ActivationAuthorityRecord: ...
 
+    def freeze_retrieval_operation(
+        self, request: RetrievalOperationRequest
+    ) -> FrozenRetrievalOperation: ...
+
+    def get_frozen_retrieval_operation(
+        self, key: RetrievalOperationKey
+    ) -> KnowledgeReadResult: ...
+
 
 # Slice 3 immutable build, validation, and activation contracts.
 class BuildStageState(str, Enum):
@@ -1100,3 +1108,380 @@ class BuildActivationResult:
             raise KnowledgeValidationError("authority must be ActivationAuthorityRecord")
         _hash(self.staged_commitment, "staged_commitment")
         _hash(self.validation_commitment, "validation_commitment")
+
+
+# Slice 4 retrieval contracts.  These values describe Candidate-C retrieval
+# semantics only; they deliberately do not publish a Knowledge Snapshot.
+class RetrievalScoreDirection(str, Enum):
+    HIGHER_IS_BETTER = "HIGHER_IS_BETTER"
+    LOWER_IS_BETTER = "LOWER_IS_BETTER"
+
+
+class RetrievalQueryDisposition(str, Enum):
+    """Frozen v1 handling for non-retrievable query inputs."""
+
+    INVALID = "INVALID"
+
+
+class RetrievalApplicability(str, Enum):
+    DIRECT = "DIRECT"
+    PARTIAL = "PARTIAL"
+    CONTEXTUAL = "CONTEXTUAL"
+    NONE = "NONE"
+
+
+class RetrievalResolution(str, Enum):
+    MATCH = "MATCH"
+    NO_MATCH = "NO_MATCH"
+    RETRIEVAL_UNAVAILABLE = "RETRIEVAL_UNAVAILABLE"
+    INVALID = "INVALID"
+    REPAIR_REQUIRED = "REPAIR_REQUIRED"
+
+
+class RetrievalFailureCode(str, Enum):
+    QUERY_INVALID = "QUERY_INVALID"
+    REPLAY_CONTRADICTION = "REPLAY_CONTRADICTION"
+    PROVIDER_UNAVAILABLE = "PROVIDER_UNAVAILABLE"
+    PROVIDER_INVALID = "PROVIDER_INVALID"
+    INDEX_UNAVAILABLE = "INDEX_UNAVAILABLE"
+    INDEX_INVALID = "INDEX_INVALID"
+    FROZEN_BUILD_INVALID = "FROZEN_BUILD_INVALID"
+    CANDIDATE_INVALID = "CANDIDATE_INVALID"
+    COMPATIBILITY_MISMATCH = "COMPATIBILITY_MISMATCH"
+
+
+@dataclass(frozen=True, slots=True, order=True)
+class QueryFilter:
+    key: str
+    value: str
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.key, str) or not _METADATA_KEY.fullmatch(self.key)
+            or _contains_secret_shape(self.key, metadata_key=True)
+        ):
+            raise KnowledgeValidationError("query filter key is invalid")
+        if (
+            not isinstance(self.value, str) or not self.value or self.value != self.value.strip()
+            or len(self.value.encode("utf-8")) > 512 or _contains_secret_shape(self.value)
+        ):
+            raise KnowledgeValidationError("query filter value must be bounded and non-secret")
+
+
+@dataclass(frozen=True, slots=True)
+class CanonicalKnowledgeQuery:
+    schema_version: str
+    canonicalization_version: str
+    text: str
+    filters: tuple[QueryFilter, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.schema_version != "1.0" or self.canonicalization_version != "1.0":
+            raise KnowledgeValidationError("unsupported query contract version")
+        if (
+            not isinstance(self.text, str) or self.text != self.text.strip()
+            or len(self.text.encode("utf-8")) > 16384 or _contains_secret_shape(self.text)
+        ):
+            raise KnowledgeValidationError("query text must be canonical, bounded, and non-secret")
+        if (
+            not isinstance(self.filters, tuple)
+            or any(not isinstance(item, QueryFilter) for item in self.filters)
+            or len(self.filters) > 32
+            or tuple(sorted(self.filters)) != self.filters
+            or len({item.key for item in self.filters}) != len(self.filters)
+        ):
+            raise KnowledgeValidationError("query filters must be unique and canonically sorted")
+
+
+@dataclass(frozen=True, slots=True)
+class RetrievalProfile:
+    profile_identity: str
+    version: str
+    canonicalization_version: str
+    embedding_profile_identity: str
+    provider: str
+    model: str
+    embedding_dimension: int
+    index_engine: str
+    index_schema_identity: str
+    max_query_bytes: int
+    allowed_filter_keys: tuple[str, ...]
+    top_k: int
+    candidate_limit: int
+    score_direction: RetrievalScoreDirection
+    score_precision: int
+    max_content_bytes_per_result: int
+    max_metadata_bytes_per_result: int
+    max_total_payload_bytes: int
+    empty_query_disposition: RetrievalQueryDisposition
+    unsupported_query_disposition: RetrievalQueryDisposition
+
+    def __post_init__(self) -> None:
+        for field in (
+            "profile_identity", "version", "canonicalization_version",
+            "embedding_profile_identity", "provider", "model", "index_engine",
+            "index_schema_identity",
+        ):
+            _durable_key(getattr(self, field), field)
+        if not isinstance(self.allowed_filter_keys, tuple) or len(self.allowed_filter_keys) > 64 or any(
+            not isinstance(item, str) or not _METADATA_KEY.fullmatch(item)
+            or _contains_secret_shape(item, metadata_key=True)
+            for item in self.allowed_filter_keys
+        ) or tuple(sorted(set(self.allowed_filter_keys))) != self.allowed_filter_keys:
+            raise KnowledgeValidationError("allowed filter keys must be canonical")
+        for field in (
+            "embedding_dimension", "max_query_bytes", "top_k", "candidate_limit",
+            "max_content_bytes_per_result", "max_metadata_bytes_per_result",
+            "max_total_payload_bytes",
+        ):
+            value = getattr(self, field)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise KnowledgeValidationError(f"{field} must be positive")
+        if self.top_k > self.candidate_limit:
+            raise KnowledgeValidationError("top_k cannot exceed candidate_limit")
+        if not isinstance(self.score_direction, RetrievalScoreDirection):
+            raise KnowledgeValidationError("score_direction is invalid")
+        if isinstance(self.score_precision, bool) or not isinstance(self.score_precision, int) or not 0 <= self.score_precision <= 12:
+            raise KnowledgeValidationError("score_precision must be between zero and twelve")
+        if (
+            not isinstance(self.empty_query_disposition, RetrievalQueryDisposition)
+            or not isinstance(self.unsupported_query_disposition, RetrievalQueryDisposition)
+        ):
+            raise KnowledgeValidationError("query dispositions must use the closed retrieval vocabulary")
+
+
+@dataclass(frozen=True, slots=True)
+class ApplicabilityPolicy:
+    policy_identity: str
+    version: str
+    required_filter_keys: tuple[str, ...]
+    direct_threshold: float
+    partial_threshold: float
+    contextual_threshold: float
+
+    def __post_init__(self) -> None:
+        _durable_key(self.policy_identity, "policy_identity")
+        _durable_key(self.version, "policy version")
+        if (
+            not isinstance(self.required_filter_keys, tuple) or not self.required_filter_keys
+            or len(self.required_filter_keys) > 32
+            or tuple(sorted(set(self.required_filter_keys))) != self.required_filter_keys
+            or any(
+                not _METADATA_KEY.fullmatch(item)
+                or _contains_secret_shape(item, metadata_key=True)
+                for item in self.required_filter_keys
+            )
+        ):
+            raise KnowledgeValidationError("applicability requires canonical metadata predicates")
+        for field in ("direct_threshold", "partial_threshold", "contextual_threshold"):
+            value = getattr(self, field)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+                raise KnowledgeValidationError(f"{field} must be finite")
+
+
+@dataclass(frozen=True, slots=True)
+class RetrievalOperationRequest:
+    operation_key: RetrievalOperationKey
+    query: CanonicalKnowledgeQuery
+    retrieval_profile: RetrievalProfile
+    applicability_policy: ApplicabilityPolicy
+    external_references: tuple[OpaqueExternalReference, ...]
+    profile_reference: OpaqueExternalReference
+    capability_identity: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.operation_key, RetrievalOperationKey):
+            raise KnowledgeValidationError("operation_key must be RetrievalOperationKey")
+        if not isinstance(self.query, CanonicalKnowledgeQuery):
+            raise KnowledgeValidationError("query is invalid")
+        if not isinstance(self.retrieval_profile, RetrievalProfile):
+            raise KnowledgeValidationError("retrieval_profile is invalid")
+        if not isinstance(self.applicability_policy, ApplicabilityPolicy):
+            raise KnowledgeValidationError("applicability_policy is invalid")
+        if (
+            not isinstance(self.external_references, tuple)
+            or any(not isinstance(item, OpaqueExternalReference) for item in self.external_references)
+            or len(self.external_references) > 16
+            or tuple(sorted(self.external_references, key=lambda item: (item.reference_type.value, item.value))) != self.external_references
+            or len(set(self.external_references)) != len(self.external_references)
+        ):
+            raise KnowledgeValidationError("external references must be bounded and canonical")
+        if not isinstance(self.profile_reference, OpaqueExternalReference) or self.profile_reference.reference_type is not OpaqueReferenceType.CREDENTIAL_PROFILE:
+            raise KnowledgeValidationError("profile_reference must be an opaque Credential Profile")
+        _durable_key(self.capability_identity, "capability_identity")
+        policy = self.applicability_policy
+        if self.retrieval_profile.score_direction is RetrievalScoreDirection.HIGHER_IS_BETTER:
+            ordered = policy.direct_threshold >= policy.partial_threshold >= policy.contextual_threshold
+        else:
+            ordered = policy.direct_threshold <= policy.partial_threshold <= policy.contextual_threshold
+        if not ordered:
+            raise KnowledgeValidationError("applicability score bands contradict score direction")
+
+
+@dataclass(frozen=True, slots=True)
+class FrozenRetrievalOperation:
+    request: RetrievalOperationRequest
+    semantic_commitment: str
+    frozen_build_identity: str
+    activation_generation: int
+    activation_operation_key: ActivationOperationKey
+    validation_commitment: str
+    staged_commitment: str
+    artifact_commitment: str
+    lineage_commitment: str
+    revision: int = 1
+    record_version: int = 1
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.request, RetrievalOperationRequest):
+            raise KnowledgeValidationError("request is invalid")
+        _hash(self.semantic_commitment, "semantic_commitment")
+        _typed_identity(self.frozen_build_identity, "kbld", "frozen_build_identity")
+        if isinstance(self.activation_generation, bool) or not isinstance(self.activation_generation, int) or self.activation_generation <= 0:
+            raise KnowledgeValidationError("activation_generation must be positive")
+        if not isinstance(self.activation_operation_key, ActivationOperationKey):
+            raise KnowledgeValidationError("activation operation key is invalid")
+        for field in ("validation_commitment", "staged_commitment", "artifact_commitment", "lineage_commitment"):
+            _hash(getattr(self, field), field)
+        if self.revision != 1 or self.record_version != 1:
+            raise KnowledgeValidationError("unsupported frozen retrieval record version")
+
+
+@dataclass(frozen=True, slots=True)
+class QueryEmbeddingRequest:
+    frozen_build_identity: str
+    query: CanonicalKnowledgeQuery
+    capability: ProviderCapability
+    limits: ProviderInvocationLimits
+
+    def __post_init__(self) -> None:
+        _typed_identity(self.frozen_build_identity, "kbld", "frozen_build_identity")
+        if not isinstance(self.query, CanonicalKnowledgeQuery) or not isinstance(self.capability, ProviderCapability) or not isinstance(self.limits, ProviderInvocationLimits):
+            raise KnowledgeValidationError("query embedding request is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class QueryEmbeddingResult:
+    capability: ProviderCapability
+    vector: tuple[float, ...]
+    invocation_count: int
+    failure_detail: str | None = None
+    cost_units: int = 0
+    rate_units: int = 0
+    quota_units: int = 0
+    resource_units: int = 0
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.capability, ProviderCapability):
+            raise KnowledgeValidationError("capability is invalid")
+        if any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)) for value in self.vector):
+            raise KnowledgeValidationError("query vector must contain finite numbers")
+        if isinstance(self.invocation_count, bool) or not isinstance(self.invocation_count, int) or self.invocation_count < 0:
+            raise KnowledgeValidationError("invocation_count must be non-negative")
+        for field in ("cost_units", "rate_units", "quota_units", "resource_units"):
+            value = getattr(self, field)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise KnowledgeValidationError(f"{field} must be non-negative")
+        if self.invocation_count > 1:
+            raise KnowledgeValidationError("hidden query embedding retries are forbidden")
+        if self.failure_detail is None:
+            if not self.vector or self.invocation_count != 1:
+                raise KnowledgeValidationError("successful query embedding must contain one invocation")
+        elif (
+            self.vector or not self.failure_detail or self.failure_detail != self.failure_detail.strip()
+            or len(self.failure_detail) > 256 or _contains_secret_shape(self.failure_detail)
+        ):
+            raise KnowledgeValidationError("provider failure must be bounded and non-secret")
+
+
+@dataclass(frozen=True, slots=True)
+class RawRetrievalCandidate:
+    chunk_identity: str
+    score: float
+    metadata_commitment: str
+
+    def __post_init__(self) -> None:
+        _typed_identity(self.chunk_identity, "kchk", "chunk_identity")
+        if isinstance(self.score, bool) or not isinstance(self.score, (int, float)) or not math.isfinite(float(self.score)):
+            raise KnowledgeValidationError("candidate score must be finite")
+        _hash(self.metadata_commitment, "metadata_commitment")
+
+
+@dataclass(frozen=True, slots=True)
+class RawRetrievalBatch:
+    build_identity: str
+    artifact_commitment: str
+    candidates: tuple[RawRetrievalCandidate, ...]
+
+    def __post_init__(self) -> None:
+        _typed_identity(self.build_identity, "kbld", "build_identity")
+        _hash(self.artifact_commitment, "artifact_commitment")
+        if not isinstance(self.candidates, tuple) or any(not isinstance(item, RawRetrievalCandidate) for item in self.candidates):
+            raise KnowledgeValidationError("candidates must be RawRetrievalCandidate values")
+
+
+@dataclass(frozen=True, slots=True)
+class OrderedRetrievalCandidate:
+    chunk_identity: str
+    document_identity: str
+    document_version_identity: str
+    score: float
+    applicability: RetrievalApplicability
+    content: str
+    metadata: tuple[MetadataItem, ...]
+    content_truncated: bool = False
+
+    def __post_init__(self) -> None:
+        _typed_identity(self.chunk_identity, "kchk", "chunk_identity")
+        _typed_identity(self.document_identity, "kdoc", "document_identity")
+        _typed_identity(self.document_version_identity, "kver", "document_version_identity")
+        if (
+            isinstance(self.score, bool) or not isinstance(self.score, (int, float))
+            or not math.isfinite(float(self.score))
+            or not isinstance(self.applicability, RetrievalApplicability)
+        ):
+            raise KnowledgeValidationError("ordered candidate score/applicability is invalid")
+        if not isinstance(self.content, str) or not isinstance(self.metadata, tuple) or any(not isinstance(item, MetadataItem) for item in self.metadata):
+            raise KnowledgeValidationError("ordered candidate content/metadata is invalid")
+
+
+@dataclass(frozen=True, slots=True, order=True)
+class RetrievalFailureFact:
+    code: RetrievalFailureCode
+    field: str
+    detail: str
+    retry_safety: RetrySafetyDisposition
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.code, RetrievalFailureCode) or not isinstance(self.retry_safety, RetrySafetyDisposition):
+            raise KnowledgeValidationError("retrieval failure vocabulary is invalid")
+        _durable_key(self.field, "failure field")
+        if not isinstance(self.detail, str) or not self.detail or len(self.detail) > 256 or _contains_secret_shape(self.detail):
+            raise KnowledgeValidationError("failure detail must be bounded and non-secret")
+
+
+@dataclass(frozen=True, slots=True)
+class RetrievalResult:
+    operation_key: RetrievalOperationKey
+    frozen_build_identity: str | None
+    resolution: RetrievalResolution
+    candidates: tuple[OrderedRetrievalCandidate, ...] = ()
+    knowledge_gap: bool = False
+    failures: tuple[RetrievalFailureFact, ...] = ()
+    payload_truncated: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.operation_key, RetrievalOperationKey) or not isinstance(self.resolution, RetrievalResolution):
+            raise KnowledgeValidationError("retrieval result identity/resolution is invalid")
+        if self.frozen_build_identity is not None:
+            _typed_identity(self.frozen_build_identity, "kbld", "frozen_build_identity")
+        if any(not isinstance(item, OrderedRetrievalCandidate) for item in self.candidates) or any(not isinstance(item, RetrievalFailureFact) for item in self.failures):
+            raise KnowledgeValidationError("retrieval result facts are invalid")
+        if self.resolution is RetrievalResolution.MATCH:
+            if not self.candidates or self.knowledge_gap or self.failures:
+                raise KnowledgeValidationError("MATCH requires candidates only")
+        elif self.resolution is RetrievalResolution.NO_MATCH:
+            if self.candidates or not self.knowledge_gap or self.failures:
+                raise KnowledgeValidationError("NO_MATCH requires a knowledge gap only")
+        elif self.candidates or self.knowledge_gap or not self.failures:
+            raise KnowledgeValidationError("failure resolution requires failures only")

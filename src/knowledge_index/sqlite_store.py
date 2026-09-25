@@ -49,6 +49,14 @@ from .contracts import (
     RetentionObligationKind,
     RetentionSubjectKind,
     RetrievalOperationKey,
+    RetrievalOperationRequest,
+    FrozenRetrievalOperation,
+    RetrievalProfile,
+    RetrievalScoreDirection,
+    RetrievalQueryDisposition,
+    ApplicabilityPolicy,
+    CanonicalKnowledgeQuery,
+    QueryFilter,
     SourceClassification,
     StagedBuildRecord,
 )
@@ -60,9 +68,10 @@ from .build_validation import (
     derive_staged_build_commitment,
 )
 from .identity import build_identity, canonical_serialize
+from .retrieval_resolution import derive_retrieval_operation_commitment
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 RECORD_VERSION = 1
 
 
@@ -135,6 +144,12 @@ _TABLE_COLUMNS = {
         "build_identity", "record_version", "operation_id", "staged_commitment",
         "validation_commitment", "validation_state", "payload_json",
     ),
+    "frozen_retrieval_operations": (
+        "operation_id", "record_version", "semantic_commitment", "frozen_build_identity",
+        "activation_generation", "activation_operation_id", "validation_commitment",
+        "staged_commitment", "artifact_commitment", "lineage_commitment", "revision",
+        "payload_json",
+    ),
 }
 
 _NULLABLE_COLUMNS = {
@@ -150,6 +165,7 @@ _NULLABLE_COLUMNS = {
     ("build_operation_claims", "operation_id"),
     ("staged_builds", "build_identity"),
     ("build_validations", "build_identity"),
+    ("frozen_retrieval_operations", "operation_id"),
 }
 
 _INTEGER_COLUMNS = {
@@ -171,6 +187,9 @@ _INTEGER_COLUMNS = {
     ("build_operation_claims", "record_version"),
     ("staged_builds", "record_version"),
     ("build_validations", "record_version"),
+    ("frozen_retrieval_operations", "record_version"),
+    ("frozen_retrieval_operations", "activation_generation"),
+    ("frozen_retrieval_operations", "revision"),
 }
 
 _CREATE_SCHEMA = """
@@ -259,7 +278,21 @@ CREATE TABLE build_validations (
     validation_state TEXT NOT NULL CHECK (validation_state IN ('VALIDATED', 'FAILED')),
     payload_json TEXT NOT NULL
 );
-INSERT INTO knowledge_store_metadata(singleton, schema_version) VALUES (1, 2);
+CREATE TABLE frozen_retrieval_operations (
+    operation_id TEXT PRIMARY KEY REFERENCES operation_envelopes(operation_id),
+    record_version INTEGER NOT NULL CHECK (record_version = 1),
+    semantic_commitment TEXT NOT NULL,
+    frozen_build_identity TEXT NOT NULL REFERENCES staged_builds(build_identity),
+    activation_generation INTEGER NOT NULL CHECK (activation_generation > 0),
+    activation_operation_id TEXT NOT NULL REFERENCES activation_receipts(operation_id),
+    validation_commitment TEXT NOT NULL,
+    staged_commitment TEXT NOT NULL,
+    artifact_commitment TEXT NOT NULL,
+    lineage_commitment TEXT NOT NULL,
+    revision INTEGER NOT NULL CHECK (revision = 1),
+    payload_json TEXT NOT NULL
+);
+INSERT INTO knowledge_store_metadata(singleton, schema_version) VALUES (1, 3);
 """
 
 
@@ -369,6 +402,7 @@ class SqliteKnowledgeStore:
             "build_operation_claims": ("operation_id",),
             "staged_builds": ("build_identity",),
             "build_validations": ("build_identity",),
+            "frozen_retrieval_operations": ("operation_id",),
         }
         for table, expected in expected_primary_keys.items():
             primary = tuple(
@@ -395,6 +429,7 @@ class SqliteKnowledgeStore:
             ("staged_builds", ("operation_id",)),
             ("build_validations", ("build_identity",)),
             ("build_validations", ("operation_id",)),
+            ("frozen_retrieval_operations", ("operation_id",)),
         }
         actual_unique: set[tuple[str, tuple[str, ...]]] = set()
         for table in _TABLE_COLUMNS:
@@ -416,6 +451,9 @@ class SqliteKnowledgeStore:
             ("staged_builds", "build_identity", "build_lineage", "build_identity"),
             ("staged_builds", "operation_id", "build_operation_claims", "operation_id"),
             ("build_validations", "build_identity", "staged_builds", "build_identity"),
+            ("frozen_retrieval_operations", "operation_id", "operation_envelopes", "operation_id"),
+            ("frozen_retrieval_operations", "frozen_build_identity", "staged_builds", "build_identity"),
+            ("frozen_retrieval_operations", "activation_operation_id", "activation_receipts", "operation_id"),
         }
         actual_foreign_keys = {
             (table, row[3], row[2], row[4])
@@ -436,6 +474,7 @@ class SqliteKnowledgeStore:
             "build_lineage", "activation_receipts", "activation_authority",
             "operation_envelopes", "snapshot_envelopes", "retention_holds",
             "build_operation_claims", "staged_builds", "build_validations",
+            "frozen_retrieval_operations",
         )
         for table in versioned_tables:
             if connection.execute(
@@ -551,6 +590,45 @@ class SqliteKnowledgeStore:
                 if staged is None or validation.staged_commitment != staged.staged_commitment:
                     raise ValueError("build validation does not match its staged build")
                 _validate_build_validation_semantics(validation)
+
+            for row in connection.execute("SELECT * FROM frozen_retrieval_operations"):
+                frozen = self._decode_frozen_retrieval(row)
+                staged = staged_builds.get(frozen.frozen_build_identity)
+                validation_row = connection.execute(
+                    "SELECT * FROM build_validations WHERE build_identity = ?",
+                    (frozen.frozen_build_identity,),
+                ).fetchone()
+                receipt_row = connection.execute(
+                    "SELECT * FROM activation_receipts WHERE operation_id = ?",
+                    (frozen.activation_operation_key.value,),
+                ).fetchone()
+                operation_row = connection.execute(
+                    "SELECT * FROM operation_envelopes WHERE operation_id = ?",
+                    (frozen.request.operation_key.value,),
+                ).fetchone()
+                if staged is None or validation_row is None or receipt_row is None or operation_row is None:
+                    raise ValueError("frozen retrieval lineage is incomplete")
+                validation = self._decode_build_validation(validation_row)
+                receipt = self._activation_from_receipt(receipt_row)
+                operation = self._decode_operation(operation_row)
+                if (
+                    derive_retrieval_operation_commitment(frozen.request)
+                    != frozen.semantic_commitment
+                    or operation.semantic_commitment != frozen.semantic_commitment
+                    or operation.frozen_build_identity != frozen.frozen_build_identity
+                    or operation.completed
+                    or receipt.generation != frozen.activation_generation
+                    or receipt.active_build_identity != frozen.frozen_build_identity
+                    or receipt.validated_build_commitment != frozen.validation_commitment
+                    or validation.state is not BuildValidationState.VALIDATED
+                    or validation.validation_commitment != frozen.validation_commitment
+                    or validation.staged_commitment != frozen.staged_commitment
+                    or staged.staged_commitment != frozen.staged_commitment
+                    or staged.artifact.artifact_commitment != frozen.artifact_commitment
+                    or staged.lineage_commitment != frozen.lineage_commitment
+                    or not _retrieval_compatibility_matches(frozen.request, staged)
+                ):
+                    raise ValueError("frozen retrieval semantic lineage is inconsistent")
         except (ValueError, TypeError, KeyError) as exc:
             raise KnowledgeStoreIntegrityError(
                 "knowledge store contains a semantically invalid durable record"
@@ -935,6 +1013,107 @@ class SqliteKnowledgeStore:
             "SELECT * FROM operation_envelopes WHERE operation_id = ?", self._decode_operation,
         )
 
+    def freeze_retrieval_operation(
+        self, request: RetrievalOperationRequest
+    ) -> FrozenRetrievalOperation:
+        """Atomically bind one retrieval operation to the current exact Active build."""
+        if not isinstance(request, RetrievalOperationRequest):
+            raise TypeError("request must be RetrievalOperationRequest")
+        commitment = derive_retrieval_operation_commitment(request)
+        with self._transaction(immediate=True) as connection:
+            existing_row = connection.execute(
+                "SELECT * FROM frozen_retrieval_operations WHERE operation_id = ?",
+                (request.operation_key.value,),
+            ).fetchone()
+            if existing_row is not None:
+                existing = self._decode_frozen_retrieval(existing_row)
+                if existing.request == request and existing.semantic_commitment == commitment:
+                    return existing
+                raise KnowledgeStoreConflictError("contradictory retrieval operation replay")
+            if connection.execute(
+                "SELECT 1 FROM operation_envelopes WHERE operation_id = ?",
+                (request.operation_key.value,),
+            ).fetchone() is not None:
+                raise KnowledgeStoreConflictError("operation key is already bound")
+            activation_row = connection.execute(
+                "SELECT * FROM activation_authority WHERE singleton = 1"
+            ).fetchone()
+            if activation_row is None:
+                raise KnowledgeStoreConflictError("retrieval requires an active build")
+            activation = self._decode_activation(activation_row)
+            receipt_row = connection.execute(
+                "SELECT * FROM activation_receipts WHERE operation_id = ?",
+                (activation.operation_key.value,),
+            ).fetchone()
+            staged_row = connection.execute(
+                "SELECT * FROM staged_builds WHERE build_identity = ?",
+                (activation.active_build_identity,),
+            ).fetchone()
+            validation_row = connection.execute(
+                "SELECT * FROM build_validations WHERE build_identity = ?",
+                (activation.active_build_identity,),
+            ).fetchone()
+            if receipt_row is None or staged_row is None or validation_row is None:
+                raise KnowledgeStoreIntegrityError("active retrieval lineage is incomplete")
+            receipt = self._activation_from_receipt(receipt_row)
+            staged = self._decode_staged_build(staged_row)
+            validation = self._decode_build_validation(validation_row)
+            if (
+                receipt != activation
+                or validation.state is not BuildValidationState.VALIDATED
+                or validation.validation_commitment != activation.validated_build_commitment
+                or validation.staged_commitment != staged.staged_commitment
+                or not staged.artifact.integrity_ok
+                or staged.artifact.artifact_trust is not ArtifactTrust.APPROVED
+                or not _retrieval_compatibility_matches(request, staged)
+            ):
+                raise KnowledgeStoreIntegrityError("active build is not retrieval compatible")
+            frozen = FrozenRetrievalOperation(
+                request,
+                commitment,
+                staged.build_identity,
+                activation.generation,
+                activation.operation_key,
+                validation.validation_commitment,
+                staged.staged_commitment,
+                staged.artifact.artifact_commitment,
+                staged.lineage_commitment,
+            )
+            connection.execute(
+                "INSERT INTO operation_envelopes VALUES (?, 1, ?, ?, NULL, 0, 1)",
+                (request.operation_key.value, commitment, staged.build_identity),
+            )
+            connection.execute(
+                "INSERT INTO frozen_retrieval_operations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    request.operation_key.value,
+                    frozen.record_version,
+                    frozen.semantic_commitment,
+                    frozen.frozen_build_identity,
+                    frozen.activation_generation,
+                    frozen.activation_operation_key.value,
+                    frozen.validation_commitment,
+                    frozen.staged_commitment,
+                    frozen.artifact_commitment,
+                    frozen.lineage_commitment,
+                    frozen.revision,
+                    canonical_serialize(frozen),
+                ),
+            )
+        return frozen
+
+    def get_frozen_retrieval_operation(
+        self, key: RetrievalOperationKey
+    ) -> KnowledgeReadResult:
+        if not isinstance(key, RetrievalOperationKey):
+            raise TypeError("key must be RetrievalOperationKey")
+        return self._read_one(
+            "frozen_retrieval_operation",
+            key.value,
+            "SELECT * FROM frozen_retrieval_operations WHERE operation_id = ?",
+            self._decode_frozen_retrieval,
+        )
+
     def get_snapshot(self, key: KnowledgeSnapshotKey) -> KnowledgeReadResult:
         return self._read_one(
             "snapshot", key.value,
@@ -1165,6 +1344,116 @@ class SqliteKnowledgeStore:
             raise ValueError("build validation columns contradict semantic payload")
         return record
 
+    @staticmethod
+    def _decode_frozen_retrieval(row: sqlite3.Row) -> FrozenRetrievalOperation:
+        payload = _json_object(row["payload_json"], {
+            "request", "semantic_commitment", "frozen_build_identity",
+            "activation_generation", "activation_operation_key", "validation_commitment",
+            "staged_commitment", "artifact_commitment", "lineage_commitment", "revision",
+            "record_version",
+        })
+        request_data = _object(payload["request"])
+        if set(request_data) != {
+            "operation_key", "query", "retrieval_profile", "applicability_policy",
+            "external_references", "profile_reference", "capability_identity",
+        }:
+            raise ValueError("retrieval request payload has incompatible fields")
+        query_data = _object(request_data["query"])
+        if set(query_data) != {"schema_version", "canonicalization_version", "text", "filters"}:
+            raise ValueError("query payload has incompatible fields")
+        filter_values: list[QueryFilter] = []
+        for item in _list(query_data["filters"]):
+            filter_data = _object(item)
+            if set(filter_data) != {"key", "value"}:
+                raise ValueError("query filter payload has incompatible fields")
+            filter_values.append(QueryFilter(filter_data["key"], filter_data["value"]))
+        filters = tuple(filter_values)
+        query = CanonicalKnowledgeQuery(
+            query_data["schema_version"], query_data["canonicalization_version"],
+            query_data["text"], filters,
+        )
+        profile_data = _object(request_data["retrieval_profile"])
+        if set(profile_data) != {
+            "profile_identity", "version", "canonicalization_version",
+            "embedding_profile_identity", "provider", "model", "embedding_dimension",
+            "index_engine", "index_schema_identity", "max_query_bytes",
+            "allowed_filter_keys", "top_k", "candidate_limit", "score_direction",
+            "score_precision", "max_content_bytes_per_result",
+            "max_metadata_bytes_per_result", "max_total_payload_bytes",
+            "empty_query_disposition", "unsupported_query_disposition",
+        }:
+            raise ValueError("retrieval profile payload has incompatible fields")
+        profile = RetrievalProfile(
+            profile_identity=profile_data["profile_identity"],
+            version=profile_data["version"],
+            canonicalization_version=profile_data["canonicalization_version"],
+            embedding_profile_identity=profile_data["embedding_profile_identity"],
+            provider=profile_data["provider"], model=profile_data["model"],
+            embedding_dimension=profile_data["embedding_dimension"],
+            index_engine=profile_data["index_engine"],
+            index_schema_identity=profile_data["index_schema_identity"],
+            max_query_bytes=profile_data["max_query_bytes"],
+            allowed_filter_keys=tuple(_list(profile_data["allowed_filter_keys"])),
+            top_k=profile_data["top_k"], candidate_limit=profile_data["candidate_limit"],
+            score_direction=RetrievalScoreDirection(profile_data["score_direction"]),
+            score_precision=profile_data["score_precision"],
+            max_content_bytes_per_result=profile_data["max_content_bytes_per_result"],
+            max_metadata_bytes_per_result=profile_data["max_metadata_bytes_per_result"],
+            max_total_payload_bytes=profile_data["max_total_payload_bytes"],
+            empty_query_disposition=RetrievalQueryDisposition(
+                profile_data["empty_query_disposition"]
+            ),
+            unsupported_query_disposition=RetrievalQueryDisposition(
+                profile_data["unsupported_query_disposition"]
+            ),
+        )
+        policy_data = _object(request_data["applicability_policy"])
+        if set(policy_data) != {
+            "policy_identity", "version", "required_filter_keys", "direct_threshold",
+            "partial_threshold", "contextual_threshold",
+        }:
+            raise ValueError("applicability policy payload has incompatible fields")
+        policy = ApplicabilityPolicy(
+            policy_data["policy_identity"], policy_data["version"],
+            tuple(_list(policy_data["required_filter_keys"])),
+            policy_data["direct_threshold"], policy_data["partial_threshold"],
+            policy_data["contextual_threshold"],
+        )
+        request = RetrievalOperationRequest(
+            RetrievalOperationKey(_single_value(request_data["operation_key"], "operation key")),
+            query, profile, policy,
+            tuple(
+                _decode_opaque_reference(_object(item))
+                for item in _list(request_data["external_references"])
+            ),
+            _decode_opaque_reference(_object(request_data["profile_reference"])),
+            request_data["capability_identity"],
+        )
+        record = FrozenRetrievalOperation(
+            request,
+            payload["semantic_commitment"], payload["frozen_build_identity"],
+            payload["activation_generation"],
+            ActivationOperationKey(_single_value(payload["activation_operation_key"], "activation operation key")),
+            payload["validation_commitment"], payload["staged_commitment"],
+            payload["artifact_commitment"], payload["lineage_commitment"],
+            payload["revision"], payload["record_version"],
+        )
+        if (
+            record.request.operation_key.value != row["operation_id"]
+            or record.record_version != row["record_version"]
+            or record.semantic_commitment != row["semantic_commitment"]
+            or record.frozen_build_identity != row["frozen_build_identity"]
+            or record.activation_generation != row["activation_generation"]
+            or record.activation_operation_key.value != row["activation_operation_id"]
+            or record.validation_commitment != row["validation_commitment"]
+            or record.staged_commitment != row["staged_commitment"]
+            or record.artifact_commitment != row["artifact_commitment"]
+            or record.lineage_commitment != row["lineage_commitment"]
+            or record.revision != row["revision"]
+        ):
+            raise ValueError("frozen retrieval columns contradict semantic payload")
+        return record
+
 
 def _object(value: object) -> dict[str, object]:
     if not isinstance(value, dict) or any(not isinstance(key, str) for key in value):
@@ -1191,6 +1480,13 @@ def _decode_opaque_reference(value: dict[str, object]) -> OpaqueExternalReferenc
     if set(value) != {"reference_type", "value"}:
         raise ValueError("opaque reference payload has incompatible fields")
     return OpaqueExternalReference(OpaqueReferenceType(value["reference_type"]), value["value"])
+
+
+def _single_value(value: object, name: str) -> object:
+    data = _object(value)
+    if set(data) != {"value"}:
+        raise ValueError(f"{name} payload has incompatible fields")
+    return data["value"]
 
 
 def _decode_build_document_provenance(value: object) -> BuildDocumentProvenance:
@@ -1322,3 +1618,21 @@ def _validate_build_validation_semantics(record: BuildValidationRecord) -> None:
         record.findings,
     ):
         raise ValueError("build validation semantic commitment is inconsistent")
+
+
+def _retrieval_compatibility_matches(
+    request: RetrievalOperationRequest, staged: StagedBuildRecord
+) -> bool:
+    profile = request.retrieval_profile
+    artifact = staged.artifact
+    return (
+        request.profile_reference == staged.profile_reference
+        and request.capability_identity == staged.capability_identity
+        and profile.embedding_profile_identity == artifact.embedding_profile_identity
+        and profile.provider == artifact.provider
+        and profile.model == artifact.model
+        and profile.embedding_dimension == artifact.embedding_dimension
+        and profile.index_engine == artifact.index_engine
+        and profile.index_schema_identity == artifact.index_schema_identity
+        and profile.canonicalization_version == staged.build_input.canonicalization_version
+    )
