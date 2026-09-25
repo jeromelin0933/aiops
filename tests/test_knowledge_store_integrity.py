@@ -24,7 +24,9 @@ from _knowledge_build_testkit import (
     limits,
     manifest_and_plan,
 )
-from _knowledge_store_testkit import activation, build, digest, operation, snapshot
+from _knowledge_store_testkit import activation, build, digest, operation
+from _knowledge_retrieval_testkit import request
+from _knowledge_snapshot_testkit import environment
 
 
 def _create(path) -> None:
@@ -99,6 +101,39 @@ def test_malformed_schema_metadata_fails_reopen(tmp_path) -> None:
     connection.close()
     with pytest.raises(KnowledgeStoreIntegrityError):
         SqliteKnowledgeStore(path)
+
+
+@pytest.mark.parametrize("mutation", ["missing", "weakened"])
+def test_missing_or_weakened_check_constraint_fails_strict_reopen(tmp_path, mutation) -> None:
+    path = tmp_path / f"knowledge-{mutation}.sqlite3"
+    _create(path)
+    connection = sqlite3.connect(path)
+    sql = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'snapshot_envelopes'"
+    ).fetchone()[0]
+    original = "CHECK (resolution IN ('MATCH', 'NO_MATCH', 'RETRIEVAL_UNAVAILABLE'))"
+    replacement = "" if mutation == "missing" else (
+        "CHECK (resolution IN ('MATCH', 'NO_MATCH', 'RETRIEVAL_UNAVAILABLE', 'INVALID'))"
+    )
+    assert original in sql
+    connection.execute("PRAGMA writable_schema = ON")
+    connection.execute(
+        "UPDATE sqlite_master SET sql = ? WHERE type = 'table' AND name = 'snapshot_envelopes'",
+        (sql.replace(original, replacement),),
+    )
+    version = connection.execute("PRAGMA schema_version").fetchone()[0]
+    connection.execute(f"PRAGMA schema_version = {version + 1}")
+    connection.commit()
+    connection.close()
+    with pytest.raises(KnowledgeStoreIntegrityError, match="constraints"):
+        SqliteKnowledgeStore(path)
+
+
+def test_valid_schema_v4_check_constraints_survive_reopen(tmp_path) -> None:
+    path = tmp_path / "knowledge-valid-v4.sqlite3"
+    _create(path)
+    with SqliteKnowledgeStore(path) as reopened:
+        assert reopened.local_readiness().status is KnowledgeLocalReadiness.NOT_INITIALIZED
 
 
 def test_invalid_record_version_is_repair_required_not_not_found(tmp_path) -> None:
@@ -215,11 +250,9 @@ def test_invalid_durable_enum_fails_strict_reopen(tmp_path) -> None:
 
 def test_semantically_wrong_snapshot_lineage_fails_strict_reopen(tmp_path) -> None:
     path = tmp_path / "knowledge.sqlite3"
-    record = build()
-    with SqliteKnowledgeStore(path) as store:
-        store.create_build_lineage(record)
-        store.create_operation(operation(record))
-        store.complete_operation_with_snapshot(snapshot(record), expected_revision=1)
+    store, _, _, _, service = environment(tmp_path)
+    service.resolve(request(), limits())
+    store.close()
     connection = sqlite3.connect(path)
     connection.execute(
         "UPDATE snapshot_envelopes SET lineage_commitment = ?", (digest("e"),)
@@ -241,24 +274,22 @@ def test_legitimate_empty_store_remains_not_initialized_after_reopen(tmp_path) -
 
 def test_all_valid_durable_record_types_survive_strict_reopen(tmp_path) -> None:
     path = tmp_path / "knowledge.sqlite3"
-    record = build()
+    store, staged, _, _, service = environment(tmp_path)
+    snapshot = service.resolve(request(), limits()).snapshot
+    assert snapshot is not None
     hold = RetentionHoldRecord(
         RetentionHoldKey("hold-valid-reopen"),
         RetentionSubjectKind.BUILD,
-        record.build_identity,
+        staged.build_identity,
         OpaqueExternalReference(OpaqueReferenceType.RCA_ATTEMPT, "opaque-owner"),
         RetentionObligationKind.OUTSTANDING_OPERATION,
         digest("e"),
     )
-    with SqliteKnowledgeStore(path) as store:
-        store.create_build_lineage(record)
-        store.commit_activation(activation(record), expected_generation=0)
-        store.create_operation(operation(record))
-        store.complete_operation_with_snapshot(snapshot(record), expected_revision=1)
-        store.create_retention_hold(hold)
+    store.create_retention_hold(hold)
+    store.close()
     with SqliteKnowledgeStore(path) as reopened:
         assert reopened.read_activation().status is KnowledgeReadStatus.FOUND
-        assert reopened.get_snapshot(snapshot(record).snapshot_key).status is KnowledgeReadStatus.FOUND
+        assert reopened.get_snapshot(snapshot.snapshot_key).status is KnowledgeReadStatus.FOUND
         assert reopened.get_retention_hold(hold.hold_key).value == hold
 
 

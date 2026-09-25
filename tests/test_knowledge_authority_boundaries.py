@@ -106,3 +106,13 @@ def test_slice_four_retrieval_modules_do_not_publish_snapshot_or_foreign_authori
         "rcaaggregate", "evidencesnapshot",
     ):
         assert forbidden not in retrieval_source
+
+
+def test_slice_five_snapshot_module_owns_no_runtime_or_foreign_authority() -> None:
+    source = (PACKAGE / "snapshot.py").read_text(encoding="utf-8").lower()
+    for forbidden in (
+        "runtime_orchestration", "scheduler", "runtimeclock", "retry_budget",
+        "credentialregistry", "chromadb", "google.", "incident_mutation",
+        "rcaaggregate", "evidencesnapshot", "startup recovery",
+    ):
+        assert forbidden not in source

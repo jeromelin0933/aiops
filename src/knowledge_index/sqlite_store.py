@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import replace
+from functools import lru_cache
 import json
 from pathlib import Path
 import sqlite3
@@ -30,6 +31,7 @@ from .contracts import (
     BuildValidationRecord,
     BuildValidationState,
     ContentType,
+    DurableRetrievalCompletion,
     KnowledgeCorruptionFinding,
     KnowledgeLocalReadiness,
     KnowledgeReadinessFact,
@@ -37,6 +39,7 @@ from .contracts import (
     KnowledgeReadStatus,
     KnowledgeSnapshotEnvelope,
     KnowledgeSnapshotKey,
+    KnowledgeSnapshotChunk,
     MetadataItem,
     IndexArtifactFacts,
     IndexEntryFact,
@@ -49,6 +52,21 @@ from .contracts import (
     RetentionObligationKind,
     RetentionSubjectKind,
     RetrievalOperationKey,
+    RetrievalOperationRead,
+    RetrievalOperationState,
+    RetrievalRecoveryFact,
+    RetrievalFailureCode,
+    RetrievalFailureFact,
+    RetrievalResolution,
+    RetrievalApplicability,
+    RetrievalEvaluationDisposition,
+    RetrievalEvaluationFact,
+    RetrievalRejectionReason,
+    ApplicabilityRuleFact,
+    ApplicabilityRuleIdentity,
+    RetrySafetyDisposition,
+    SnapshotFinalizationKey,
+    SnapshotSourceStatus,
     RetrievalOperationRequest,
     FrozenRetrievalOperation,
     RetrievalProfile,
@@ -57,6 +75,8 @@ from .contracts import (
     ApplicabilityPolicy,
     CanonicalKnowledgeQuery,
     QueryFilter,
+    RawRetrievalBatch,
+    RawRetrievalCandidate,
     SourceClassification,
     StagedBuildRecord,
 )
@@ -69,9 +89,16 @@ from .build_validation import (
 )
 from .identity import build_identity, canonical_serialize
 from .retrieval_resolution import derive_retrieval_operation_commitment
+from .snapshot import (
+    derive_retrieval_completion_commitment,
+    derive_recovery_commitment,
+    derive_snapshot_commitment,
+    validate_retrieval_completion_authority,
+    validate_snapshot_against_authority,
+)
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 RECORD_VERSION = 1
 
 
@@ -126,7 +153,15 @@ _TABLE_COLUMNS = {
     ),
     "snapshot_envelopes": (
         "snapshot_id", "record_version", "operation_id", "frozen_build_identity",
-        "snapshot_commitment", "lineage_commitment",
+        "snapshot_commitment", "lineage_commitment", "resolution", "source_status",
+        "finalization_id", "payload_json",
+    ),
+    "retrieval_completion_facts": (
+        "operation_id", "record_version", "semantic_commitment", "resolution",
+        "candidate_count", "payload_json",
+    ),
+    "retrieval_recovery_facts": (
+        "operation_id", "record_version", "semantic_commitment", "revision", "payload_json",
     ),
     "retention_holds": (
         "hold_id", "record_version", "subject_kind", "subject_id", "owner_type", "owner_value",
@@ -161,11 +196,14 @@ _NULLABLE_COLUMNS = {
     ("operation_envelopes", "frozen_build_identity"),
     ("operation_envelopes", "snapshot_id"),
     ("snapshot_envelopes", "snapshot_id"),
+    ("snapshot_envelopes", "finalization_id"),
+    ("retrieval_completion_facts", "operation_id"),
     ("retention_holds", "hold_id"),
     ("build_operation_claims", "operation_id"),
     ("staged_builds", "build_identity"),
     ("build_validations", "build_identity"),
     ("frozen_retrieval_operations", "operation_id"),
+    ("retrieval_recovery_facts", "operation_id"),
 }
 
 _INTEGER_COLUMNS = {
@@ -190,6 +228,10 @@ _INTEGER_COLUMNS = {
     ("frozen_retrieval_operations", "record_version"),
     ("frozen_retrieval_operations", "activation_generation"),
     ("frozen_retrieval_operations", "revision"),
+    ("retrieval_recovery_facts", "record_version"),
+    ("retrieval_recovery_facts", "revision"),
+    ("retrieval_completion_facts", "record_version"),
+    ("retrieval_completion_facts", "candidate_count"),
 }
 
 _CREATE_SCHEMA = """
@@ -237,7 +279,26 @@ CREATE TABLE snapshot_envelopes (
     operation_id TEXT NOT NULL UNIQUE REFERENCES operation_envelopes(operation_id),
     frozen_build_identity TEXT NOT NULL REFERENCES build_lineage(build_identity),
     snapshot_commitment TEXT NOT NULL,
-    lineage_commitment TEXT NOT NULL
+    lineage_commitment TEXT NOT NULL,
+    resolution TEXT NOT NULL CHECK (resolution IN ('MATCH', 'NO_MATCH', 'RETRIEVAL_UNAVAILABLE')),
+    source_status TEXT NOT NULL CHECK (source_status IN ('AVAILABLE', 'UNAVAILABLE')),
+    finalization_id TEXT UNIQUE,
+    payload_json TEXT NOT NULL
+);
+CREATE TABLE retrieval_completion_facts (
+    operation_id TEXT PRIMARY KEY REFERENCES frozen_retrieval_operations(operation_id),
+    record_version INTEGER NOT NULL CHECK (record_version = 1),
+    semantic_commitment TEXT NOT NULL UNIQUE,
+    resolution TEXT NOT NULL CHECK (resolution IN ('MATCH', 'NO_MATCH')),
+    candidate_count INTEGER NOT NULL CHECK (candidate_count >= 0),
+    payload_json TEXT NOT NULL
+);
+CREATE TABLE retrieval_recovery_facts (
+    operation_id TEXT PRIMARY KEY REFERENCES frozen_retrieval_operations(operation_id),
+    record_version INTEGER NOT NULL CHECK (record_version = 1),
+    semantic_commitment TEXT NOT NULL,
+    revision INTEGER NOT NULL CHECK (revision > 0),
+    payload_json TEXT NOT NULL
 );
 CREATE TABLE retention_holds (
     hold_id TEXT PRIMARY KEY,
@@ -292,8 +353,46 @@ CREATE TABLE frozen_retrieval_operations (
     revision INTEGER NOT NULL CHECK (revision = 1),
     payload_json TEXT NOT NULL
 );
-INSERT INTO knowledge_store_metadata(singleton, schema_version) VALUES (1, 3);
+INSERT INTO knowledge_store_metadata(singleton, schema_version) VALUES (1, 4);
 """
+
+
+def _normalize_schema_sql(value: str) -> str:
+    output: list[str] = []
+    in_literal = False
+    index = 0
+    while index < len(value):
+        character = value[index]
+        if character == "'":
+            output.append(character)
+            if in_literal and index + 1 < len(value) and value[index + 1] == "'":
+                output.append("'")
+                index += 2
+                continue
+            in_literal = not in_literal
+        elif in_literal:
+            output.append(character)
+        elif character.isspace() or character in '`"[]':
+            pass
+        else:
+            output.append(character.lower())
+        index += 1
+    return "".join(output).rstrip(";")
+
+
+@lru_cache(maxsize=1)
+def _expected_table_sql() -> dict[str, str]:
+    connection = sqlite3.connect(":memory:")
+    try:
+        connection.executescript(_CREATE_SCHEMA)
+        return {
+            name: _normalize_schema_sql(sql)
+            for name, sql in connection.execute(
+                "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+            )
+        }
+    finally:
+        connection.close()
 
 
 def _finding(code: str, kind: str, key: str, detail: str) -> KnowledgeCorruptionFinding:
@@ -371,6 +470,16 @@ class SqliteKnowledgeStore:
         connection = self._require_connection()
         if self._table_names() != set(_TABLE_COLUMNS):
             raise KnowledgeStoreIntegrityError("knowledge store table set is incompatible")
+        actual_table_sql = {
+            row["name"]: _normalize_schema_sql(row["sql"])
+            for row in connection.execute(
+                "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+            )
+        }
+        if actual_table_sql != _expected_table_sql():
+            raise KnowledgeStoreIntegrityError(
+                "knowledge store table constraints are incompatible"
+            )
         for table, expected_columns in _TABLE_COLUMNS.items():
             table_info = connection.execute(f'PRAGMA table_info("{table}")').fetchall()
             actual = tuple(row[1] for row in table_info)
@@ -398,11 +507,13 @@ class SqliteKnowledgeStore:
             "activation_authority": ("singleton",),
             "operation_envelopes": ("operation_id",),
             "snapshot_envelopes": ("snapshot_id",),
+            "retrieval_completion_facts": ("operation_id",),
             "retention_holds": ("hold_id",),
             "build_operation_claims": ("operation_id",),
             "staged_builds": ("build_identity",),
             "build_validations": ("build_identity",),
             "frozen_retrieval_operations": ("operation_id",),
+            "retrieval_recovery_facts": ("operation_id",),
         }
         for table, expected in expected_primary_keys.items():
             primary = tuple(
@@ -422,6 +533,9 @@ class SqliteKnowledgeStore:
             ("operation_envelopes", ("snapshot_id",)),
             ("snapshot_envelopes", ("snapshot_id",)),
             ("snapshot_envelopes", ("operation_id",)),
+            ("snapshot_envelopes", ("finalization_id",)),
+            ("retrieval_completion_facts", ("operation_id",)),
+            ("retrieval_completion_facts", ("semantic_commitment",)),
             ("retention_holds", ("hold_id",)),
             ("build_operation_claims", ("operation_id",)),
             ("build_operation_claims", ("build_identity",)),
@@ -430,6 +544,7 @@ class SqliteKnowledgeStore:
             ("build_validations", ("build_identity",)),
             ("build_validations", ("operation_id",)),
             ("frozen_retrieval_operations", ("operation_id",)),
+            ("retrieval_recovery_facts", ("operation_id",)),
         }
         actual_unique: set[tuple[str, tuple[str, ...]]] = set()
         for table in _TABLE_COLUMNS:
@@ -454,6 +569,8 @@ class SqliteKnowledgeStore:
             ("frozen_retrieval_operations", "operation_id", "operation_envelopes", "operation_id"),
             ("frozen_retrieval_operations", "frozen_build_identity", "staged_builds", "build_identity"),
             ("frozen_retrieval_operations", "activation_operation_id", "activation_receipts", "operation_id"),
+            ("retrieval_completion_facts", "operation_id", "frozen_retrieval_operations", "operation_id"),
+            ("retrieval_recovery_facts", "operation_id", "frozen_retrieval_operations", "operation_id"),
         }
         actual_foreign_keys = {
             (table, row[3], row[2], row[4])
@@ -475,6 +592,8 @@ class SqliteKnowledgeStore:
             "operation_envelopes", "snapshot_envelopes", "retention_holds",
             "build_operation_claims", "staged_builds", "build_validations",
             "frozen_retrieval_operations",
+            "retrieval_completion_facts",
+            "retrieval_recovery_facts",
         )
         for table in versioned_tables:
             if connection.execute(
@@ -545,11 +664,13 @@ class SqliteKnowledgeStore:
             for row in connection.execute("SELECT * FROM operation_envelopes"):
                 self._decode_operation(row)
 
+            snapshots: dict[str, KnowledgeSnapshotEnvelope] = {}
             for row in connection.execute("SELECT * FROM snapshot_envelopes"):
                 snapshot = self._decode_snapshot(row)
                 build = builds.get(snapshot.frozen_build_identity)
                 if build is None or snapshot.lineage_commitment != build.lineage_commitment:
                     raise ValueError("Snapshot lineage does not match its durable build")
+                snapshots[snapshot.operation_key.value] = snapshot
 
             for row in connection.execute("SELECT * FROM retention_holds"):
                 self._decode_hold(row)
@@ -591,6 +712,7 @@ class SqliteKnowledgeStore:
                     raise ValueError("build validation does not match its staged build")
                 _validate_build_validation_semantics(validation)
 
+            frozen_operations: dict[str, FrozenRetrievalOperation] = {}
             for row in connection.execute("SELECT * FROM frozen_retrieval_operations"):
                 frozen = self._decode_frozen_retrieval(row)
                 staged = staged_builds.get(frozen.frozen_build_identity)
@@ -616,7 +738,7 @@ class SqliteKnowledgeStore:
                     != frozen.semantic_commitment
                     or operation.semantic_commitment != frozen.semantic_commitment
                     or operation.frozen_build_identity != frozen.frozen_build_identity
-                    or operation.completed
+                    or (operation.completed and operation.snapshot_key is None)
                     or receipt.generation != frozen.activation_generation
                     or receipt.active_build_identity != frozen.frozen_build_identity
                     or receipt.validated_build_commitment != frozen.validation_commitment
@@ -629,6 +751,35 @@ class SqliteKnowledgeStore:
                     or not _retrieval_compatibility_matches(frozen.request, staged)
                 ):
                     raise ValueError("frozen retrieval semantic lineage is inconsistent")
+                frozen_operations[frozen.request.operation_key.value] = frozen
+
+            completions: dict[str, DurableRetrievalCompletion] = {}
+            for row in connection.execute("SELECT * FROM retrieval_completion_facts"):
+                completion = self._decode_retrieval_completion(row)
+                frozen = frozen_operations.get(completion.operation_key.value)
+                staged = staged_builds.get(completion.frozen_build_identity)
+                if frozen is None or staged is None:
+                    raise ValueError("retrieval completion frozen lineage is incomplete")
+                validate_retrieval_completion_authority(completion, frozen, staged)
+                completions[completion.operation_key.value] = completion
+
+            for operation_id, snapshot in snapshots.items():
+                frozen = frozen_operations.get(operation_id)
+                staged = staged_builds.get(snapshot.frozen_build_identity)
+                if frozen is None or staged is None:
+                    raise ValueError("Snapshot frozen lineage is incomplete")
+                validate_snapshot_against_authority(
+                    snapshot, frozen, staged, completions.get(operation_id)
+                )
+
+            for row in connection.execute("SELECT * FROM retrieval_recovery_facts"):
+                recovery = self._decode_recovery(row)
+                if recovery.operation_key.value not in frozen_operations:
+                    raise ValueError("recovery fact lacks frozen operation")
+                if recovery.semantic_commitment != derive_recovery_commitment(
+                    recovery.operation_key, recovery.failures
+                ):
+                    raise ValueError("recovery commitment is inconsistent")
         except (ValueError, TypeError, KeyError) as exc:
             raise KnowledgeStoreIntegrityError(
                 "knowledge store contains a semantically invalid durable record"
@@ -917,11 +1068,63 @@ class SqliteKnowledgeStore:
         except sqlite3.Error:
             return KnowledgeReadResult(KnowledgeReadStatus.UNAVAILABLE)
 
-    def local_readiness(self) -> KnowledgeReadinessFact:
+    def local_readiness(
+        self,
+        *,
+        required_profile_reference: OpaqueExternalReference | None = None,
+        required_capability_identity: str | None = None,
+    ) -> KnowledgeReadinessFact:
+        if required_profile_reference is not None and not isinstance(
+            required_profile_reference, OpaqueExternalReference
+        ):
+            raise TypeError("required_profile_reference must be an OpaqueExternalReference")
+        if required_capability_identity is not None:
+            if (
+                not isinstance(required_capability_identity, str)
+                or not required_capability_identity
+                or required_capability_identity != required_capability_identity.strip()
+                or len(required_capability_identity.encode("utf-8")) > 256
+            ):
+                raise ValueError("required_capability_identity is invalid")
         result = self.read_activation()
         if result.status is KnowledgeReadStatus.FOUND:
             activation = result.value
             assert isinstance(activation, ActivationAuthorityRecord)
+            if required_profile_reference is not None or required_capability_identity is not None:
+                staged_read = self.get_staged_build(activation.active_build_identity)
+                if staged_read.status is not KnowledgeReadStatus.FOUND:
+                    if staged_read.status is KnowledgeReadStatus.NOT_FOUND:
+                        return KnowledgeReadinessFact(
+                            KnowledgeLocalReadiness.REPAIR_REQUIRED,
+                            findings=(_finding(
+                                "ACTIVE_BUILD_INCOMPLETE", "staged_build",
+                                activation.active_build_identity,
+                                "active build lacks durable compatibility authority",
+                            ),),
+                        )
+                    mapping = {
+                        KnowledgeReadStatus.UNAVAILABLE: KnowledgeLocalReadiness.UNAVAILABLE,
+                        KnowledgeReadStatus.INVALID: KnowledgeLocalReadiness.MISMATCH,
+                        KnowledgeReadStatus.REPAIR_REQUIRED: KnowledgeLocalReadiness.REPAIR_REQUIRED,
+                    }
+                    return KnowledgeReadinessFact(mapping[staged_read.status], findings=staged_read.findings)
+                staged = staged_read.value
+                assert isinstance(staged, StagedBuildRecord)
+                if (
+                    required_profile_reference is not None
+                    and staged.profile_reference != required_profile_reference
+                ) or (
+                    required_capability_identity is not None
+                    and staged.capability_identity != required_capability_identity
+                ):
+                    return KnowledgeReadinessFact(
+                        KnowledgeLocalReadiness.MISMATCH,
+                        findings=(_finding(
+                            "COMPATIBILITY_MISMATCH", "active_build",
+                            activation.active_build_identity,
+                            "active build does not match required Candidate-C compatibility",
+                        ),),
+                    )
             return KnowledgeReadinessFact(
                 KnowledgeLocalReadiness.READY,
                 active_build_identity=activation.active_build_identity,
@@ -989,10 +1192,40 @@ class SqliteKnowledgeStore:
             ).fetchone()
             if build is None or self._decode_build(build).lineage_commitment != snapshot.lineage_commitment:
                 raise KnowledgeStoreConflictError("Snapshot lineage does not match durable build lineage")
+            frozen_row = connection.execute(
+                "SELECT * FROM frozen_retrieval_operations WHERE operation_id = ?",
+                (snapshot.operation_key.value,),
+            ).fetchone()
+            staged_row = connection.execute(
+                "SELECT * FROM staged_builds WHERE build_identity = ?",
+                (snapshot.frozen_build_identity,),
+            ).fetchone()
+            if frozen_row is None or staged_row is None:
+                raise KnowledgeStoreConflictError("Snapshot requires exact frozen build authority")
+            completion_row = connection.execute(
+                "SELECT * FROM retrieval_completion_facts WHERE operation_id = ?",
+                (snapshot.operation_key.value,),
+            ).fetchone()
+            completion = (
+                self._decode_retrieval_completion(completion_row)
+                if completion_row is not None else None
+            )
+            try:
+                validate_snapshot_against_authority(
+                    snapshot,
+                    self._decode_frozen_retrieval(frozen_row),
+                    self._decode_staged_build(staged_row),
+                    completion,
+                )
+            except (ValueError, TypeError, KeyError) as exc:
+                raise KnowledgeStoreConflictError("Snapshot semantic provenance is invalid") from exc
             connection.execute(
-                "INSERT INTO snapshot_envelopes VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO snapshot_envelopes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (snapshot.snapshot_key.value, snapshot.record_version, snapshot.operation_key.value,
-                 snapshot.frozen_build_identity, snapshot.snapshot_commitment, snapshot.lineage_commitment),
+                 snapshot.frozen_build_identity, snapshot.snapshot_commitment, snapshot.lineage_commitment,
+                 snapshot.resolution.value, snapshot.source_status.value,
+                 snapshot.finalization_key.value if snapshot.finalization_key else None,
+                 canonical_serialize(snapshot)),
             )
             cursor = connection.execute(
                 """UPDATE operation_envelopes SET snapshot_id = ?, completed = 1, revision = revision + 1
@@ -1114,11 +1347,167 @@ class SqliteKnowledgeStore:
             self._decode_frozen_retrieval,
         )
 
+    def record_retrieval_completion(
+        self, fact: DurableRetrievalCompletion
+    ) -> DurableRetrievalCompletion:
+        if not isinstance(fact, DurableRetrievalCompletion):
+            raise TypeError("fact must be DurableRetrievalCompletion")
+        with self._transaction(immediate=True) as connection:
+            frozen_row = connection.execute(
+                "SELECT * FROM frozen_retrieval_operations WHERE operation_id = ?",
+                (fact.operation_key.value,),
+            ).fetchone()
+            staged_row = connection.execute(
+                "SELECT * FROM staged_builds WHERE build_identity = ?",
+                (fact.frozen_build_identity,),
+            ).fetchone()
+            if frozen_row is None or staged_row is None:
+                raise KnowledgeStoreConflictError(
+                    "retrieval completion requires exact frozen build authority"
+                )
+            try:
+                validate_retrieval_completion_authority(
+                    fact,
+                    self._decode_frozen_retrieval(frozen_row),
+                    self._decode_staged_build(staged_row),
+                )
+            except (ValueError, TypeError, KeyError) as exc:
+                raise KnowledgeStoreConflictError(
+                    "retrieval completion semantic provenance is invalid"
+                ) from exc
+            existing_row = connection.execute(
+                "SELECT * FROM retrieval_completion_facts WHERE operation_id = ?",
+                (fact.operation_key.value,),
+            ).fetchone()
+            if existing_row is not None:
+                existing = self._decode_retrieval_completion(existing_row)
+                if existing == fact:
+                    return existing
+                raise KnowledgeStoreConflictError("contradictory retrieval completion replay")
+            operation_row = connection.execute(
+                "SELECT * FROM operation_envelopes WHERE operation_id = ?",
+                (fact.operation_key.value,),
+            ).fetchone()
+            if operation_row is None or self._decode_operation(operation_row).completed:
+                raise KnowledgeStoreConflictError(
+                    "retrieval completion requires an incomplete frozen operation"
+                )
+            connection.execute(
+                "INSERT INTO retrieval_completion_facts VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    fact.operation_key.value,
+                    fact.record_version,
+                    fact.semantic_commitment,
+                    fact.resolution.value,
+                    len(fact.raw_batch.candidates),
+                    canonical_serialize(fact),
+                ),
+            )
+            return fact
+
+    def get_retrieval_completion(
+        self, key: RetrievalOperationKey
+    ) -> KnowledgeReadResult:
+        if not isinstance(key, RetrievalOperationKey):
+            return KnowledgeReadResult(KnowledgeReadStatus.INVALID)
+        return self._read_one(
+            "retrieval_completion", key.value,
+            "SELECT * FROM retrieval_completion_facts WHERE operation_id = ?",
+            self._decode_retrieval_completion,
+        )
+
     def get_snapshot(self, key: KnowledgeSnapshotKey) -> KnowledgeReadResult:
+        if not isinstance(key, KnowledgeSnapshotKey):
+            return KnowledgeReadResult(KnowledgeReadStatus.INVALID)
         return self._read_one(
             "snapshot", key.value,
             "SELECT * FROM snapshot_envelopes WHERE snapshot_id = ?", self._decode_snapshot,
         )
+
+    def record_retrieval_recovery(
+        self, fact: RetrievalRecoveryFact
+    ) -> RetrievalRecoveryFact:
+        if not isinstance(fact, RetrievalRecoveryFact):
+            raise TypeError("fact must be RetrievalRecoveryFact")
+        with self._transaction(immediate=True) as connection:
+            if connection.execute(
+                "SELECT 1 FROM frozen_retrieval_operations WHERE operation_id = ?",
+                (fact.operation_key.value,),
+            ).fetchone() is None:
+                raise KnowledgeStoreConflictError("recovery fact requires frozen operation")
+            row = connection.execute(
+                "SELECT * FROM retrieval_recovery_facts WHERE operation_id = ?",
+                (fact.operation_key.value,),
+            ).fetchone()
+            if row is not None:
+                existing = self._decode_recovery(row)
+                if existing.semantic_commitment == fact.semantic_commitment and existing.failures == fact.failures:
+                    return existing
+                updated = replace(fact, revision=existing.revision + 1)
+                connection.execute(
+                    """UPDATE retrieval_recovery_facts
+                       SET semantic_commitment = ?, revision = ?, payload_json = ?
+                       WHERE operation_id = ? AND revision = ?""",
+                    (updated.semantic_commitment, updated.revision, canonical_serialize(updated),
+                     updated.operation_key.value, existing.revision),
+                )
+                return updated
+            connection.execute(
+                "INSERT INTO retrieval_recovery_facts VALUES (?, ?, ?, ?, ?)",
+                (fact.operation_key.value, fact.record_version, fact.semantic_commitment,
+                 fact.revision, canonical_serialize(fact)),
+            )
+            return fact
+
+    def get_retrieval_operation_read(
+        self, key: RetrievalOperationKey
+    ) -> KnowledgeReadResult:
+        if not isinstance(key, RetrievalOperationKey):
+            return KnowledgeReadResult(KnowledgeReadStatus.INVALID)
+        try:
+            with self._transaction(immediate=False) as connection:
+                self._assert_integrity()
+                frozen_row = connection.execute(
+                    "SELECT * FROM frozen_retrieval_operations WHERE operation_id = ?", (key.value,)
+                ).fetchone()
+                if frozen_row is None:
+                    return KnowledgeReadResult(KnowledgeReadStatus.NOT_FOUND)
+                frozen = self._decode_frozen_retrieval(frozen_row)
+                operation_row = connection.execute(
+                    "SELECT * FROM operation_envelopes WHERE operation_id = ?", (key.value,)
+                ).fetchone()
+                if operation_row is None:
+                    return self._repair_result("BROKEN_OPERATION", "operation", key.value)
+                operation = self._decode_operation(operation_row)
+                recovery_row = connection.execute(
+                    "SELECT * FROM retrieval_recovery_facts WHERE operation_id = ?", (key.value,)
+                ).fetchone()
+                recovery = self._decode_recovery(recovery_row) if recovery_row is not None else None
+                completion_row = connection.execute(
+                    "SELECT * FROM retrieval_completion_facts WHERE operation_id = ?", (key.value,)
+                ).fetchone()
+                completion = (
+                    self._decode_retrieval_completion(completion_row)
+                    if completion_row is not None else None
+                )
+                if operation.completed:
+                    state = RetrievalOperationState.COMPLETED
+                elif completion is not None:
+                    state = RetrievalOperationState.RETRIEVAL_COMPLETED
+                elif recovery is not None:
+                    state = RetrievalOperationState.TRANSIENT_UNAVAILABLE
+                else:
+                    state = RetrievalOperationState.FROZEN
+                return KnowledgeReadResult(
+                    KnowledgeReadStatus.FOUND,
+                    RetrievalOperationRead(
+                        frozen, state, recovery, completion, operation.snapshot_key
+                    ),
+                )
+        except KnowledgeStoreIntegrityError:
+            return self._repair_result("STORE_INTEGRITY", "store", "singleton")
+        except sqlite3.Error:
+            return KnowledgeReadResult(KnowledgeReadStatus.UNAVAILABLE)
 
     def create_retention_hold(self, record: RetentionHoldRecord) -> RetentionHoldRecord:
         if not isinstance(record, RetentionHoldRecord) or record.status is not RetentionHoldStatus.ACTIVE:
@@ -1175,7 +1564,30 @@ class SqliteKnowledgeStore:
                    WHERE subject_kind = ? AND subject_id = ? AND status = 'ACTIVE' LIMIT 1""",
                 (subject_kind.value, subject_identity),
             ).fetchone()
-            return row is None
+            if row is not None:
+                return False
+            if subject_kind is RetentionSubjectKind.BUILD:
+                referenced = connection.execute(
+                    """SELECT 1 FROM frozen_retrieval_operations AS f
+                       JOIN operation_envelopes AS o ON o.operation_id = f.operation_id
+                       WHERE f.frozen_build_identity = ?
+                       LIMIT 1""",
+                    (subject_identity,),
+                ).fetchone()
+                return referenced is None
+            if subject_kind is RetentionSubjectKind.SNAPSHOT:
+                return connection.execute(
+                    "SELECT 1 FROM snapshot_envelopes WHERE snapshot_id = ? LIMIT 1",
+                    (subject_identity,),
+                ).fetchone() is None
+            for snapshot_row in connection.execute("SELECT * FROM snapshot_envelopes"):
+                snapshot = self._decode_snapshot(snapshot_row)
+                if any(
+                    subject_identity in (item.chunk_identity, item.content_commitment)
+                    for item in snapshot.chunks
+                ):
+                    return False
+            return True
 
     def _read_one(self, kind: str, key: str, sql: str, decoder: object) -> KnowledgeReadResult:
         try:
@@ -1235,11 +1647,84 @@ class SqliteKnowledgeStore:
 
     @staticmethod
     def _decode_snapshot(row: sqlite3.Row) -> KnowledgeSnapshotEnvelope:
-        return KnowledgeSnapshotEnvelope(
-            KnowledgeSnapshotKey(row["snapshot_id"]), RetrievalOperationKey(row["operation_id"]),
-            row["frozen_build_identity"], row["snapshot_commitment"], row["lineage_commitment"],
-            row["record_version"],
+        payload = _json_object(row["payload_json"], {
+            "snapshot_key", "operation_key", "frozen_build_identity", "snapshot_commitment",
+            "lineage_commitment", "schema_version", "resolution", "source_status",
+            "knowledge_gap", "payload_truncated", "activation_generation", "activation_operation_key",
+            "manifest_commitment", "validation_commitment", "staged_commitment",
+            "artifact_commitment", "query_commitment", "retrieval_profile_identity",
+            "retrieval_profile_version", "applicability_policy_identity",
+            "applicability_policy_version", "profile_reference", "capability_identity",
+            "external_references", "creation_metadata", "chunks", "evaluations", "failures",
+            "finalization_key", "finalization_reference", "record_version",
+        })
+        chunks = tuple(_decode_snapshot_chunk(item) for item in _list(payload["chunks"]))
+        evaluations = tuple(_decode_evaluation(item) for item in _list(payload["evaluations"]))
+        failures = tuple(_decode_retrieval_failure(item) for item in _list(payload["failures"]))
+        finalization_key = (
+            None if payload["finalization_key"] is None
+            else SnapshotFinalizationKey(_single_value(payload["finalization_key"], "finalization key"))
         )
+        finalization_reference = (
+            None if payload["finalization_reference"] is None
+            else _decode_opaque_reference(_object(payload["finalization_reference"]))
+        )
+        record = KnowledgeSnapshotEnvelope(
+            KnowledgeSnapshotKey(_single_value(payload["snapshot_key"], "Snapshot key")),
+            RetrievalOperationKey(_single_value(payload["operation_key"], "operation key")),
+            payload["frozen_build_identity"], payload["snapshot_commitment"],
+            payload["lineage_commitment"], payload["schema_version"],
+            RetrievalResolution(payload["resolution"]), SnapshotSourceStatus(payload["source_status"]),
+            payload["knowledge_gap"], payload["payload_truncated"], payload["activation_generation"],
+            ActivationOperationKey(_single_value(payload["activation_operation_key"], "activation key")),
+            payload["manifest_commitment"], payload["validation_commitment"],
+            payload["staged_commitment"], payload["artifact_commitment"],
+            payload["query_commitment"], payload["retrieval_profile_identity"],
+            payload["retrieval_profile_version"], payload["applicability_policy_identity"],
+            payload["applicability_policy_version"],
+            _decode_opaque_reference(_object(payload["profile_reference"])),
+            payload["capability_identity"],
+            tuple(_decode_opaque_reference(_object(item)) for item in _list(payload["external_references"])),
+            tuple(
+                MetadataItem(_object(item)["key"], _object(item)["value"])
+                for item in _list(payload["creation_metadata"])
+            ),
+            chunks, evaluations, failures, finalization_key, finalization_reference,
+            payload["record_version"],
+        )
+        if (
+            record.snapshot_key.value != row["snapshot_id"]
+            or record.operation_key.value != row["operation_id"]
+            or record.frozen_build_identity != row["frozen_build_identity"]
+            or record.snapshot_commitment != row["snapshot_commitment"]
+            or record.lineage_commitment != row["lineage_commitment"]
+            or record.resolution.value != row["resolution"]
+            or record.source_status.value != row["source_status"]
+            or (record.finalization_key.value if record.finalization_key else None) != row["finalization_id"]
+            or record.record_version != row["record_version"]
+        ):
+            raise ValueError("Snapshot columns contradict semantic payload")
+        return record
+
+    @staticmethod
+    def _decode_recovery(row: sqlite3.Row) -> RetrievalRecoveryFact:
+        payload = _json_object(row["payload_json"], {
+            "operation_key", "semantic_commitment", "failures", "revision", "record_version",
+        })
+        record = RetrievalRecoveryFact(
+            RetrievalOperationKey(_single_value(payload["operation_key"], "operation key")),
+            payload["semantic_commitment"],
+            tuple(_decode_retrieval_failure(item) for item in _list(payload["failures"])),
+            payload["revision"], payload["record_version"],
+        )
+        if (
+            record.operation_key.value != row["operation_id"]
+            or record.semantic_commitment != row["semantic_commitment"]
+            or record.revision != row["revision"]
+            or record.record_version != row["record_version"]
+        ):
+            raise ValueError("recovery columns contradict semantic payload")
+        return record
 
     @staticmethod
     def _decode_hold(row: sqlite3.Row) -> RetentionHoldRecord:
@@ -1454,6 +1939,55 @@ class SqliteKnowledgeStore:
             raise ValueError("frozen retrieval columns contradict semantic payload")
         return record
 
+    @staticmethod
+    def _decode_retrieval_completion(row: sqlite3.Row) -> DurableRetrievalCompletion:
+        payload = _json_object(row["payload_json"], {
+            "operation_key", "frozen_build_identity", "frozen_operation_commitment",
+            "validation_commitment", "staged_commitment", "artifact_commitment",
+            "lineage_commitment", "query_commitment", "retrieval_profile_identity",
+            "retrieval_profile_version", "applicability_policy_identity",
+            "applicability_policy_version", "raw_batch", "resolution", "knowledge_gap",
+            "payload_truncated", "evaluations", "semantic_commitment", "record_version",
+        })
+        raw_data = _object(payload["raw_batch"])
+        if set(raw_data) != {"build_identity", "artifact_commitment", "candidates"}:
+            raise ValueError("retrieval completion raw batch has incompatible fields")
+        raw_candidates: list[RawRetrievalCandidate] = []
+        for item in _list(raw_data["candidates"]):
+            candidate = _object(item)
+            if set(candidate) != {"chunk_identity", "score", "metadata_commitment"}:
+                raise ValueError("retrieval completion candidate has incompatible fields")
+            raw_candidates.append(RawRetrievalCandidate(
+                candidate["chunk_identity"], candidate["score"],
+                candidate["metadata_commitment"],
+            ))
+        record = DurableRetrievalCompletion(
+            RetrievalOperationKey(_single_value(payload["operation_key"], "operation key")),
+            payload["frozen_build_identity"], payload["frozen_operation_commitment"],
+            payload["validation_commitment"], payload["staged_commitment"],
+            payload["artifact_commitment"], payload["lineage_commitment"],
+            payload["query_commitment"], payload["retrieval_profile_identity"],
+            payload["retrieval_profile_version"], payload["applicability_policy_identity"],
+            payload["applicability_policy_version"],
+            RawRetrievalBatch(
+                raw_data["build_identity"], raw_data["artifact_commitment"],
+                tuple(raw_candidates),
+            ),
+            RetrievalResolution(payload["resolution"]), payload["knowledge_gap"],
+            payload["payload_truncated"],
+            tuple(_decode_evaluation(item) for item in _list(payload["evaluations"])),
+            payload["semantic_commitment"], payload["record_version"],
+        )
+        if (
+            record.operation_key.value != row["operation_id"]
+            or record.record_version != row["record_version"]
+            or record.semantic_commitment != row["semantic_commitment"]
+            or record.resolution.value != row["resolution"]
+            or len(record.raw_batch.candidates) != row["candidate_count"]
+        ):
+            raise ValueError("retrieval completion columns contradict semantic payload")
+        return record
+
 
 def _object(value: object) -> dict[str, object]:
     if not isinstance(value, dict) or any(not isinstance(key, str) for key in value):
@@ -1480,6 +2014,69 @@ def _decode_opaque_reference(value: dict[str, object]) -> OpaqueExternalReferenc
     if set(value) != {"reference_type", "value"}:
         raise ValueError("opaque reference payload has incompatible fields")
     return OpaqueExternalReference(OpaqueReferenceType(value["reference_type"]), value["value"])
+
+
+def _decode_retrieval_failure(value: object) -> RetrievalFailureFact:
+    data = _object(value)
+    if set(data) != {"code", "field", "detail", "retry_safety"}:
+        raise ValueError("retrieval failure payload has incompatible fields")
+    return RetrievalFailureFact(
+        RetrievalFailureCode(data["code"]), data["field"], data["detail"],
+        RetrySafetyDisposition(data["retry_safety"]),
+    )
+
+
+def _decode_evaluation(value: object) -> RetrievalEvaluationFact:
+    data = _object(value)
+    if set(data) != {
+        "chunk_identity", "score", "applicability", "included", "content_truncated",
+        "canonical_rank", "policy_identity", "policy_version", "query_predicates",
+        "metadata_predicates", "rule_facts", "disposition", "rejection_reason",
+    }:
+        raise ValueError("evaluation payload has incompatible fields")
+    query_predicates = tuple(
+        QueryFilter(_object(item)["key"], _object(item)["value"])
+        for item in _list(data["query_predicates"])
+    )
+    metadata_predicates = tuple(
+        MetadataItem(_object(item)["key"], _object(item)["value"])
+        for item in _list(data["metadata_predicates"])
+    )
+    rule_facts = tuple(
+        ApplicabilityRuleFact(
+            ApplicabilityRuleIdentity(_object(item)["rule_identity"]),
+            _object(item)["matched"],
+        )
+        for item in _list(data["rule_facts"])
+    )
+    return RetrievalEvaluationFact(
+        data["chunk_identity"], data["score"], RetrievalApplicability(data["applicability"]),
+        data["included"], data["content_truncated"], data["canonical_rank"],
+        data["policy_identity"], data["policy_version"], query_predicates,
+        metadata_predicates, rule_facts,
+        RetrievalEvaluationDisposition(data["disposition"]),
+        RetrievalRejectionReason(data["rejection_reason"]),
+    )
+
+
+def _decode_snapshot_chunk(value: object) -> KnowledgeSnapshotChunk:
+    data = _object(value)
+    if set(data) != {
+        "chunk_identity", "document_identity", "document_version_identity", "section_identity",
+        "content_commitment", "metadata_commitment", "score", "applicability", "content",
+        "metadata", "content_truncated",
+    }:
+        raise ValueError("Snapshot chunk payload has incompatible fields")
+    metadata = tuple(
+        MetadataItem(_object(item)["key"], _object(item)["value"])
+        for item in _list(data["metadata"])
+    )
+    return KnowledgeSnapshotChunk(
+        data["chunk_identity"], data["document_identity"], data["document_version_identity"],
+        data["section_identity"], data["content_commitment"], data["metadata_commitment"],
+        data["score"], RetrievalApplicability(data["applicability"]), data["content"],
+        metadata, data["content_truncated"],
+    )
 
 
 def _single_value(value: object, name: str) -> object:

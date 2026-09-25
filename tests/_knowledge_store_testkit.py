@@ -2,8 +2,6 @@ from knowledge_index import (
     ActivationAuthorityRecord,
     ActivationOperationKey,
     BuildLineageRecord,
-    KnowledgeSnapshotEnvelope,
-    KnowledgeSnapshotKey,
     OperationEnvelope,
     RetrievalOperationKey,
 )
@@ -32,13 +30,3 @@ def activation(record: BuildLineageRecord, generation: int = 1, operation: str =
 
 def operation(record: BuildLineageRecord, name: str = "retrieve-1") -> OperationEnvelope:
     return OperationEnvelope(RetrievalOperationKey(name), digest("c"), record.build_identity)
-
-
-def snapshot(record: BuildLineageRecord, name: str = "retrieve-1", snap: str = "snapshot-1") -> KnowledgeSnapshotEnvelope:
-    return KnowledgeSnapshotEnvelope(
-        KnowledgeSnapshotKey(snap),
-        RetrievalOperationKey(name),
-        record.build_identity,
-        digest("d"),
-        record.lineage_commitment,
-    )

@@ -398,6 +398,14 @@ class KnowledgeSnapshotKey:
 
 
 @dataclass(frozen=True, slots=True)
+class SnapshotFinalizationKey:
+    value: str
+
+    def __post_init__(self) -> None:
+        _durable_key(self.value, "Snapshot finalization key")
+
+
+@dataclass(frozen=True, slots=True)
 class RetentionHoldKey:
     value: str
 
@@ -476,6 +484,31 @@ class KnowledgeSnapshotEnvelope:
     frozen_build_identity: str
     snapshot_commitment: str
     lineage_commitment: str
+    schema_version: str
+    resolution: RetrievalResolution
+    source_status: SnapshotSourceStatus
+    knowledge_gap: bool
+    payload_truncated: bool
+    activation_generation: int
+    activation_operation_key: ActivationOperationKey
+    manifest_commitment: str
+    validation_commitment: str
+    staged_commitment: str
+    artifact_commitment: str
+    query_commitment: str
+    retrieval_profile_identity: str
+    retrieval_profile_version: str
+    applicability_policy_identity: str
+    applicability_policy_version: str
+    profile_reference: OpaqueExternalReference
+    capability_identity: str
+    external_references: tuple[OpaqueExternalReference, ...]
+    creation_metadata: tuple[MetadataItem, ...]
+    chunks: tuple[KnowledgeSnapshotChunk, ...]
+    evaluations: tuple[RetrievalEvaluationFact, ...]
+    failures: tuple[RetrievalFailureFact, ...] = ()
+    finalization_key: SnapshotFinalizationKey | None = None
+    finalization_reference: OpaqueExternalReference | None = None
     record_version: int = 1
 
     def __post_init__(self) -> None:
@@ -486,6 +519,84 @@ class KnowledgeSnapshotEnvelope:
         _typed_identity(self.frozen_build_identity, "kbld", "frozen_build_identity")
         _hash(self.snapshot_commitment, "snapshot_commitment")
         _hash(self.lineage_commitment, "lineage_commitment")
+        if self.schema_version != "1.0":
+            raise KnowledgeValidationError("unsupported Knowledge Snapshot schema")
+        if self.resolution not in (
+            RetrievalResolution.MATCH,
+            RetrievalResolution.NO_MATCH,
+            RetrievalResolution.RETRIEVAL_UNAVAILABLE,
+        ) or not isinstance(self.source_status, SnapshotSourceStatus):
+            raise KnowledgeValidationError("Snapshot terminal vocabulary is invalid")
+        if not isinstance(self.knowledge_gap, bool):
+            raise KnowledgeValidationError("knowledge_gap must be boolean")
+        if not isinstance(self.payload_truncated, bool):
+            raise KnowledgeValidationError("payload_truncated must be boolean")
+        if isinstance(self.activation_generation, bool) or not isinstance(self.activation_generation, int) or self.activation_generation < 1:
+            raise KnowledgeValidationError("activation_generation must be positive")
+        if not isinstance(self.activation_operation_key, ActivationOperationKey):
+            raise KnowledgeValidationError("activation_operation_key is invalid")
+        _typed_identity(self.manifest_commitment, "kmf", "manifest_commitment")
+        for field in ("validation_commitment", "staged_commitment", "artifact_commitment", "query_commitment"):
+            _hash(getattr(self, field), field)
+        for field in (
+            "retrieval_profile_identity", "retrieval_profile_version",
+            "applicability_policy_identity", "applicability_policy_version",
+            "capability_identity",
+        ):
+            _durable_key(getattr(self, field), field)
+        if (
+            not isinstance(self.profile_reference, OpaqueExternalReference)
+            or self.profile_reference.reference_type is not OpaqueReferenceType.CREDENTIAL_PROFILE
+        ):
+            raise KnowledgeValidationError("Snapshot requires an opaque Credential Profile")
+        if (
+            not isinstance(self.external_references, tuple)
+            or any(not isinstance(item, OpaqueExternalReference) for item in self.external_references)
+            or len(self.external_references) > 16
+        ):
+            raise KnowledgeValidationError("Snapshot external references are invalid")
+        if (
+            not isinstance(self.creation_metadata, tuple)
+            or not self.creation_metadata
+            or any(not isinstance(item, MetadataItem) for item in self.creation_metadata)
+            or tuple(sorted(self.creation_metadata)) != self.creation_metadata
+            or len({item.key for item in self.creation_metadata}) != len(self.creation_metadata)
+        ):
+            raise KnowledgeValidationError("Snapshot creation metadata must be canonical and non-secret")
+        if any(not isinstance(item, KnowledgeSnapshotChunk) for item in self.chunks):
+            raise KnowledgeValidationError("Snapshot chunks are invalid")
+        if any(not isinstance(item, RetrievalEvaluationFact) for item in self.evaluations):
+            raise KnowledgeValidationError("Snapshot evaluations are invalid")
+        if any(not isinstance(item, RetrievalFailureFact) for item in self.failures):
+            raise KnowledgeValidationError("Snapshot failures are invalid")
+        if self.resolution is RetrievalResolution.MATCH:
+            if (
+                self.source_status is not SnapshotSourceStatus.AVAILABLE or self.knowledge_gap
+                or not self.chunks or self.failures or self.finalization_key is not None
+                or self.finalization_reference is not None
+                or not self.evaluations
+                or tuple(item.chunk_identity for item in self.evaluations if item.included)
+                != tuple(item.chunk_identity for item in self.chunks)
+            ):
+                raise KnowledgeValidationError("MATCH Snapshot shape is invalid")
+        elif self.resolution is RetrievalResolution.NO_MATCH:
+            if (
+                self.source_status is not SnapshotSourceStatus.AVAILABLE or not self.knowledge_gap
+                or self.chunks or self.failures or self.finalization_key is not None
+                or self.finalization_reference is not None
+                or self.payload_truncated
+                or any(item.included for item in self.evaluations)
+            ):
+                raise KnowledgeValidationError("NO_MATCH Snapshot shape is invalid")
+        else:
+            if (
+                self.source_status is not SnapshotSourceStatus.UNAVAILABLE
+                or self.knowledge_gap or self.payload_truncated or self.chunks or not self.failures
+                or self.evaluations
+                or not isinstance(self.finalization_key, SnapshotFinalizationKey)
+                or not isinstance(self.finalization_reference, OpaqueExternalReference)
+            ):
+                raise KnowledgeValidationError("unavailable Snapshot shape is invalid")
         if self.record_version != 1:
             raise KnowledgeValidationError("unsupported Snapshot envelope record version")
 
@@ -590,7 +701,12 @@ class KnowledgePersistence(Protocol):
 
     def read_activation(self) -> KnowledgeReadResult: ...
 
-    def local_readiness(self) -> KnowledgeReadinessFact: ...
+    def local_readiness(
+        self,
+        *,
+        required_profile_reference: OpaqueExternalReference | None = None,
+        required_capability_identity: str | None = None,
+    ) -> KnowledgeReadinessFact: ...
 
     def claim_build_operation(self, claim: BuildOperationClaim) -> BuildOperationClaim: ...
 
@@ -613,6 +729,28 @@ class KnowledgePersistence(Protocol):
     ) -> FrozenRetrievalOperation: ...
 
     def get_frozen_retrieval_operation(
+        self, key: RetrievalOperationKey
+    ) -> KnowledgeReadResult: ...
+
+    def record_retrieval_completion(
+        self, fact: DurableRetrievalCompletion
+    ) -> DurableRetrievalCompletion: ...
+
+    def get_retrieval_completion(
+        self, key: RetrievalOperationKey
+    ) -> KnowledgeReadResult: ...
+
+    def complete_operation_with_snapshot(
+        self, snapshot: KnowledgeSnapshotEnvelope, *, expected_revision: int
+    ) -> OperationEnvelope: ...
+
+    def get_snapshot(self, key: KnowledgeSnapshotKey) -> KnowledgeReadResult: ...
+
+    def record_retrieval_recovery(
+        self, fact: RetrievalRecoveryFact
+    ) -> RetrievalRecoveryFact: ...
+
+    def get_retrieval_operation_read(
         self, key: RetrievalOperationKey
     ) -> KnowledgeReadResult: ...
 
@@ -1138,6 +1276,40 @@ class RetrievalResolution(str, Enum):
     REPAIR_REQUIRED = "REPAIR_REQUIRED"
 
 
+class SnapshotSourceStatus(str, Enum):
+    AVAILABLE = "AVAILABLE"
+    UNAVAILABLE = "UNAVAILABLE"
+
+
+class RetrievalOperationState(str, Enum):
+    FROZEN = "FROZEN"
+    TRANSIENT_UNAVAILABLE = "TRANSIENT_UNAVAILABLE"
+    RETRIEVAL_COMPLETED = "RETRIEVAL_COMPLETED"
+    COMPLETED = "COMPLETED"
+
+
+class RetrievalEvaluationDisposition(str, Enum):
+    INCLUDED = "INCLUDED"
+    REJECTED = "REJECTED"
+    TOP_K_EXCLUDED = "TOP_K_EXCLUDED"
+    PAYLOAD_EXCLUDED = "PAYLOAD"
+
+
+class RetrievalRejectionReason(str, Enum):
+    NONE = "NONE"
+    REQUIRED_FILTER_MISMATCH = "REQUIRED_FILTER_MISMATCH"
+    SCORE_OUTSIDE_POLICY = "SCORE_OUTSIDE_POLICY"
+    TOP_K_LIMIT = "TOP_K_LIMIT"
+    PAYLOAD_LIMIT = "LIMIT"
+
+
+class ApplicabilityRuleIdentity(str, Enum):
+    REQUIRED_FILTERS = "REQUIRED_FILTERS"
+    DIRECT_THRESHOLD = "DIRECT_THRESHOLD"
+    PARTIAL_THRESHOLD = "PARTIAL_THRESHOLD"
+    CONTEXTUAL_THRESHOLD = "CONTEXTUAL_THRESHOLD"
+
+
 class RetrievalFailureCode(str, Enum):
     QUERY_INVALID = "QUERY_INVALID"
     REPLAY_CONTRADICTION = "REPLAY_CONTRADICTION"
@@ -1445,6 +1617,110 @@ class OrderedRetrievalCandidate:
             raise KnowledgeValidationError("ordered candidate content/metadata is invalid")
 
 
+@dataclass(frozen=True, slots=True)
+class RetrievalEvaluationFact:
+    chunk_identity: str
+    score: float
+    applicability: RetrievalApplicability
+    included: bool
+    content_truncated: bool
+    canonical_rank: int
+    policy_identity: str
+    policy_version: str
+    query_predicates: tuple[QueryFilter, ...]
+    metadata_predicates: tuple[MetadataItem, ...]
+    rule_facts: tuple[ApplicabilityRuleFact, ...]
+    disposition: RetrievalEvaluationDisposition
+    rejection_reason: RetrievalRejectionReason
+
+    def __post_init__(self) -> None:
+        _typed_identity(self.chunk_identity, "kchk", "chunk_identity")
+        if isinstance(self.score, bool) or not isinstance(self.score, (int, float)) or not math.isfinite(float(self.score)):
+            raise KnowledgeValidationError("evaluation score must be finite")
+        if not isinstance(self.applicability, RetrievalApplicability):
+            raise KnowledgeValidationError("evaluation applicability is invalid")
+        if not isinstance(self.included, bool) or not isinstance(self.content_truncated, bool):
+            raise KnowledgeValidationError("evaluation flags must be boolean")
+        if isinstance(self.canonical_rank, bool) or not isinstance(self.canonical_rank, int) or self.canonical_rank < 1:
+            raise KnowledgeValidationError("evaluation canonical rank must be positive")
+        _durable_key(self.policy_identity, "evaluation policy identity")
+        _durable_key(self.policy_version, "evaluation policy version")
+        if (
+            not isinstance(self.query_predicates, tuple)
+            or any(not isinstance(item, QueryFilter) for item in self.query_predicates)
+            or tuple(sorted(self.query_predicates)) != self.query_predicates
+            or len({item.key for item in self.query_predicates}) != len(self.query_predicates)
+        ):
+            raise KnowledgeValidationError("evaluation query predicates must be canonical")
+        if (
+            not isinstance(self.metadata_predicates, tuple)
+            or any(not isinstance(item, MetadataItem) for item in self.metadata_predicates)
+            or tuple(sorted(self.metadata_predicates)) != self.metadata_predicates
+            or len({item.key for item in self.metadata_predicates}) != len(self.metadata_predicates)
+        ):
+            raise KnowledgeValidationError("evaluation metadata predicates must be canonical")
+        expected_rules = tuple(ApplicabilityRuleIdentity)
+        if (
+            not isinstance(self.rule_facts, tuple)
+            or tuple(item.rule_identity for item in self.rule_facts) != expected_rules
+        ):
+            raise KnowledgeValidationError("evaluation rule provenance must be complete and canonical")
+        if not isinstance(self.disposition, RetrievalEvaluationDisposition) or not isinstance(
+            self.rejection_reason, RetrievalRejectionReason
+        ):
+            raise KnowledgeValidationError("evaluation disposition is invalid")
+        if self.included != (self.disposition is RetrievalEvaluationDisposition.INCLUDED):
+            raise KnowledgeValidationError("evaluation inclusion and disposition disagree")
+        if self.included:
+            if self.applicability is RetrievalApplicability.NONE or self.rejection_reason is not RetrievalRejectionReason.NONE:
+                raise KnowledgeValidationError("included evaluation must be applicable and unrejected")
+        elif self.rejection_reason is RetrievalRejectionReason.NONE:
+            raise KnowledgeValidationError("excluded evaluation requires an explicit rejection reason")
+
+
+@dataclass(frozen=True, slots=True)
+class ApplicabilityRuleFact:
+    rule_identity: ApplicabilityRuleIdentity
+    matched: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.rule_identity, ApplicabilityRuleIdentity) or not isinstance(self.matched, bool):
+            raise KnowledgeValidationError("applicability rule fact is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeSnapshotChunk:
+    chunk_identity: str
+    document_identity: str
+    document_version_identity: str
+    section_identity: str
+    content_commitment: str
+    metadata_commitment: str
+    score: float
+    applicability: RetrievalApplicability
+    content: str
+    metadata: tuple[MetadataItem, ...]
+    content_truncated: bool = False
+
+    def __post_init__(self) -> None:
+        _typed_identity(self.chunk_identity, "kchk", "chunk_identity")
+        _typed_identity(self.document_identity, "kdoc", "document_identity")
+        _typed_identity(self.document_version_identity, "kver", "document_version_identity")
+        _durable_key(self.section_identity, "section_identity")
+        _hash(self.content_commitment, "content_commitment")
+        _hash(self.metadata_commitment, "metadata_commitment")
+        if isinstance(self.score, bool) or not isinstance(self.score, (int, float)) or not math.isfinite(float(self.score)):
+            raise KnowledgeValidationError("Snapshot chunk score must be finite")
+        if self.applicability is RetrievalApplicability.NONE:
+            raise KnowledgeValidationError("Snapshot chunk must be applicable")
+        if not isinstance(self.content, str) or _contains_secret_shape(self.content):
+            raise KnowledgeValidationError("Snapshot content must be non-secret")
+        if any(not isinstance(item, MetadataItem) for item in self.metadata):
+            raise KnowledgeValidationError("Snapshot metadata is invalid")
+        if not isinstance(self.content_truncated, bool):
+            raise KnowledgeValidationError("content_truncated must be boolean")
+
+
 @dataclass(frozen=True, slots=True, order=True)
 class RetrievalFailureFact:
     code: RetrievalFailureCode
@@ -1469,6 +1745,7 @@ class RetrievalResult:
     knowledge_gap: bool = False
     failures: tuple[RetrievalFailureFact, ...] = ()
     payload_truncated: bool = False
+    evaluations: tuple[RetrievalEvaluationFact, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.operation_key, RetrievalOperationKey) or not isinstance(self.resolution, RetrievalResolution):
@@ -1477,6 +1754,8 @@ class RetrievalResult:
             _typed_identity(self.frozen_build_identity, "kbld", "frozen_build_identity")
         if any(not isinstance(item, OrderedRetrievalCandidate) for item in self.candidates) or any(not isinstance(item, RetrievalFailureFact) for item in self.failures):
             raise KnowledgeValidationError("retrieval result facts are invalid")
+        if any(not isinstance(item, RetrievalEvaluationFact) for item in self.evaluations):
+            raise KnowledgeValidationError("retrieval evaluations are invalid")
         if self.resolution is RetrievalResolution.MATCH:
             if not self.candidates or self.knowledge_gap or self.failures:
                 raise KnowledgeValidationError("MATCH requires candidates only")
@@ -1485,3 +1764,178 @@ class RetrievalResult:
                 raise KnowledgeValidationError("NO_MATCH requires a knowledge gap only")
         elif self.candidates or self.knowledge_gap or not self.failures:
             raise KnowledgeValidationError("failure resolution requires failures only")
+        if self.resolution in (RetrievalResolution.INVALID, RetrievalResolution.REPAIR_REQUIRED, RetrievalResolution.RETRIEVAL_UNAVAILABLE) and self.evaluations:
+            raise KnowledgeValidationError("failure result cannot publish evaluation facts")
+
+
+@dataclass(frozen=True, slots=True)
+class DurableRetrievalCompletion:
+    """Immutable Candidate-C authority for one bounded completed retrieval."""
+
+    operation_key: RetrievalOperationKey
+    frozen_build_identity: str
+    frozen_operation_commitment: str
+    validation_commitment: str
+    staged_commitment: str
+    artifact_commitment: str
+    lineage_commitment: str
+    query_commitment: str
+    retrieval_profile_identity: str
+    retrieval_profile_version: str
+    applicability_policy_identity: str
+    applicability_policy_version: str
+    raw_batch: RawRetrievalBatch
+    resolution: RetrievalResolution
+    knowledge_gap: bool
+    payload_truncated: bool
+    evaluations: tuple[RetrievalEvaluationFact, ...]
+    semantic_commitment: str
+    record_version: int = 1
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.operation_key, RetrievalOperationKey):
+            raise KnowledgeValidationError("completion operation key is invalid")
+        _typed_identity(self.frozen_build_identity, "kbld", "frozen_build_identity")
+        for field in (
+            "frozen_operation_commitment", "validation_commitment", "staged_commitment",
+            "artifact_commitment", "lineage_commitment", "query_commitment",
+            "semantic_commitment",
+        ):
+            _hash(getattr(self, field), field)
+        for field in (
+            "retrieval_profile_identity", "retrieval_profile_version",
+            "applicability_policy_identity", "applicability_policy_version",
+        ):
+            _durable_key(getattr(self, field), field)
+        if not isinstance(self.raw_batch, RawRetrievalBatch):
+            raise KnowledgeValidationError("completion raw batch is invalid")
+        if (
+            self.raw_batch.build_identity != self.frozen_build_identity
+            or self.raw_batch.artifact_commitment != self.artifact_commitment
+        ):
+            raise KnowledgeValidationError("completion raw batch contradicts frozen authority")
+        if self.resolution not in (RetrievalResolution.MATCH, RetrievalResolution.NO_MATCH):
+            raise KnowledgeValidationError("completion must have an available terminal resolution")
+        if not isinstance(self.knowledge_gap, bool) or not isinstance(self.payload_truncated, bool):
+            raise KnowledgeValidationError("completion flags must be boolean")
+        if any(not isinstance(item, RetrievalEvaluationFact) for item in self.evaluations):
+            raise KnowledgeValidationError("completion evaluations are invalid")
+        raw_ids = tuple(item.chunk_identity for item in self.raw_batch.candidates)
+        evaluation_ids = tuple(item.chunk_identity for item in self.evaluations)
+        if (
+            len(set(raw_ids)) != len(raw_ids)
+            or len(set(evaluation_ids)) != len(evaluation_ids)
+            or set(raw_ids) != set(evaluation_ids)
+            or tuple(item.canonical_rank for item in self.evaluations)
+            != tuple(range(1, len(self.evaluations) + 1))
+        ):
+            raise KnowledgeValidationError(
+                "completion candidate completeness and ordering do not re-derive"
+            )
+        raw_by_id = {item.chunk_identity: item for item in self.raw_batch.candidates}
+        if any(raw_by_id[item.chunk_identity].score != item.score for item in self.evaluations):
+            raise KnowledgeValidationError("completion evaluation scores contradict raw authority")
+        if self.resolution is RetrievalResolution.MATCH:
+            if self.knowledge_gap or not any(item.included for item in self.evaluations):
+                raise KnowledgeValidationError("MATCH completion requires included knowledge")
+        elif (
+            not self.knowledge_gap
+            or self.payload_truncated
+            or any(item.included for item in self.evaluations)
+        ):
+            raise KnowledgeValidationError("NO_MATCH completion requires complete rejection")
+        if self.record_version != 1:
+            raise KnowledgeValidationError("unsupported retrieval completion record version")
+
+
+@dataclass(frozen=True, slots=True)
+class RetrievalRecoveryFact:
+    operation_key: RetrievalOperationKey
+    semantic_commitment: str
+    failures: tuple[RetrievalFailureFact, ...]
+    revision: int = 1
+    record_version: int = 1
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.operation_key, RetrievalOperationKey):
+            raise KnowledgeValidationError("recovery operation key is invalid")
+        _hash(self.semantic_commitment, "semantic_commitment")
+        if not self.failures or any(not isinstance(item, RetrievalFailureFact) for item in self.failures):
+            raise KnowledgeValidationError("recovery fact requires bounded failures")
+        if any(item.retry_safety is not RetrySafetyDisposition.SAME_OPERATION_ONLY for item in self.failures):
+            raise KnowledgeValidationError("recovery facts are only for transient same-operation retry")
+        if isinstance(self.revision, bool) or not isinstance(self.revision, int) or self.revision < 1:
+            raise KnowledgeValidationError("recovery revision must be positive")
+        if self.record_version != 1:
+            raise KnowledgeValidationError("unsupported recovery record version")
+
+
+@dataclass(frozen=True, slots=True)
+class RetrievalOperationRead:
+    frozen: FrozenRetrievalOperation
+    state: RetrievalOperationState
+    recovery: RetrievalRecoveryFact | None = None
+    completion: DurableRetrievalCompletion | None = None
+    snapshot_key: KnowledgeSnapshotKey | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.frozen, FrozenRetrievalOperation) or not isinstance(self.state, RetrievalOperationState):
+            raise KnowledgeValidationError("operation read is invalid")
+        if self.recovery is not None and self.recovery.operation_key != self.frozen.request.operation_key:
+            raise KnowledgeValidationError("operation recovery key mismatch")
+        if self.completion is not None and self.completion.operation_key != self.frozen.request.operation_key:
+            raise KnowledgeValidationError("operation completion key mismatch")
+        if self.state is RetrievalOperationState.COMPLETED:
+            if self.snapshot_key is None:
+                raise KnowledgeValidationError("completed operation requires Snapshot")
+        elif self.snapshot_key is not None:
+            raise KnowledgeValidationError("incomplete operation cannot reference Snapshot")
+        if self.state is RetrievalOperationState.RETRIEVAL_COMPLETED and self.completion is None:
+            raise KnowledgeValidationError("retrieval-completed operation requires durable authority")
+        if self.completion is not None and self.state not in (
+            RetrievalOperationState.RETRIEVAL_COMPLETED, RetrievalOperationState.COMPLETED
+        ):
+            raise KnowledgeValidationError("completion authority contradicts operation state")
+
+
+@dataclass(frozen=True, slots=True)
+class TerminalUnavailableRequest:
+    finalization_key: SnapshotFinalizationKey
+    operation_key: RetrievalOperationKey
+    authority_reference: OpaqueExternalReference
+    failures: tuple[RetrievalFailureFact, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.finalization_key, SnapshotFinalizationKey) or not isinstance(self.operation_key, RetrievalOperationKey):
+            raise KnowledgeValidationError("terminal finalization identity is invalid")
+        if not isinstance(self.authority_reference, OpaqueExternalReference):
+            raise KnowledgeValidationError("terminal finalization requires opaque authority reference")
+        if not self.failures or any(not isinstance(item, RetrievalFailureFact) for item in self.failures):
+            raise KnowledgeValidationError("terminal finalization requires bounded failure facts")
+        if any(
+            item.code not in (
+                RetrievalFailureCode.PROVIDER_UNAVAILABLE,
+                RetrievalFailureCode.INDEX_UNAVAILABLE,
+            )
+            for item in self.failures
+        ):
+            raise KnowledgeValidationError(
+                "invalid or repair-required facts cannot be finalized as unavailable"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeResolutionOutcome:
+    resolution: RetrievalResolution
+    snapshot: KnowledgeSnapshotEnvelope | None = None
+    failures: tuple[RetrievalFailureFact, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.resolution, RetrievalResolution):
+            raise KnowledgeValidationError("outcome resolution is invalid")
+        if self.snapshot is not None and self.snapshot.resolution is not self.resolution:
+            raise KnowledgeValidationError("outcome Snapshot resolution mismatch")
+        if self.resolution in (RetrievalResolution.MATCH, RetrievalResolution.NO_MATCH) and self.snapshot is None:
+            raise KnowledgeValidationError("completed outcome requires Snapshot")
+        if self.failures and any(not isinstance(item, RetrievalFailureFact) for item in self.failures):
+            raise KnowledgeValidationError("outcome failures are invalid")

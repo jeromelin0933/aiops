@@ -8,7 +8,10 @@ from knowledge_index import (
     KnowledgeStoreConflictError,
     SqliteKnowledgeStore,
 )
-from _knowledge_store_testkit import activation, build, digest, operation, snapshot
+from _knowledge_store_testkit import activation, build, digest
+from _knowledge_build_testkit import limits
+from _knowledge_retrieval_testkit import request
+from _knowledge_snapshot_testkit import environment
 
 
 def test_build_equivalent_replay_and_contradiction(tmp_path) -> None:
@@ -53,17 +56,18 @@ def test_restart_uses_exact_active_target_not_newest_record(tmp_path) -> None:
 
 
 def test_snapshot_equivalent_replay_and_contradiction(tmp_path) -> None:
-    with SqliteKnowledgeStore(tmp_path / "knowledge.sqlite3") as store:
-        record = build()
-        store.create_build_lineage(record)
-        store.create_operation(operation(record))
-        first = snapshot(record)
-        completed = store.complete_operation_with_snapshot(first, expected_revision=1)
+    store, _, _, _, service = environment(tmp_path)
+    first = service.resolve(request(), limits()).snapshot
+    assert first is not None
+    try:
+        completed = store.get_operation(request().operation_key).value
         assert store.complete_operation_with_snapshot(first, expected_revision=1) == completed
         with pytest.raises(KnowledgeStoreConflictError):
             store.complete_operation_with_snapshot(
                 replace(first, snapshot_commitment=digest("e")), expected_revision=1
             )
+    finally:
+        store.close()
 
 
 def test_missing_activation_target_is_repair_required_not_fallback(tmp_path) -> None:

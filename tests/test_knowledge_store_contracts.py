@@ -12,6 +12,7 @@ from knowledge_index import (
     KnowledgeSnapshotKey,
     KnowledgeValidationError,
     RetentionHoldKey,
+    SnapshotFinalizationKey,
     RetrievalOperationKey,
     SqliteKnowledgeStore,
 )
@@ -29,13 +30,13 @@ def test_durable_statuses_are_closed(enum_type, values) -> None:
 
 
 @pytest.mark.parametrize(
-    "key_type", [ActivationOperationKey, RetrievalOperationKey, KnowledgeSnapshotKey, RetentionHoldKey]
+    "key_type", [ActivationOperationKey, RetrievalOperationKey, KnowledgeSnapshotKey, RetentionHoldKey, SnapshotFinalizationKey]
 )
 def test_durable_keys_are_frozen_bounded_and_type_separated(key_type) -> None:
     key = key_type("opaque-1")
     with pytest.raises(FrozenInstanceError):
         key.value = "changed"
-    assert key != next(t for t in (ActivationOperationKey, RetrievalOperationKey, KnowledgeSnapshotKey, RetentionHoldKey) if t is not key_type)("opaque-1")
+    assert key != next(t for t in (ActivationOperationKey, RetrievalOperationKey, KnowledgeSnapshotKey, RetentionHoldKey, SnapshotFinalizationKey) if t is not key_type)("opaque-1")
     with pytest.raises(KnowledgeValidationError):
         key_type("")
 
@@ -62,5 +63,7 @@ def test_sqlite_store_implements_candidate_c_protocol(tmp_path) -> None:
         assert callable(store.create_build_validation)
         assert callable(store.get_staged_build)
         assert callable(store.get_build_validation)
+        assert callable(store.get_retrieval_operation_read)
+        assert callable(store.record_retrieval_recovery)
     finally:
         store.close()
