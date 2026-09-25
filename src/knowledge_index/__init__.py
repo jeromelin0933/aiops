@@ -1,0 +1,67 @@
+"""Public SPEC-014 Slice 1 governed Knowledge foundation."""
+
+from .contracts import (
+    AdmittedDocument,
+    AdmissionFailureCode,
+    AdmissionFailureFact,
+    BuildIdentityInput,
+    ChunkIdentityInput,
+    ContentType,
+    DocumentStatus,
+    GovernedManifest,
+    IdentityNamespace,
+    KnowledgeValidationError,
+    ManifestAdmissionResult,
+    ManifestDocument,
+    MetadataItem,
+    OpaqueExternalReference,
+    OpaqueReferenceType,
+    SourceClassification,
+)
+from .identity import (
+    build_identity,
+    canonical_serialize,
+    chunk_identity,
+    document_identity,
+    document_version_identity,
+    manifest_commitment,
+)
+from .manifest import admit_manifest
+from .security import (
+    preflight_outbound_content,
+    sanitize_failure_detail,
+    validate_metadata_security,
+    validate_source_classification,
+    validate_source_locator,
+)
+
+__all__ = [
+    "AdmittedDocument",
+    "AdmissionFailureCode",
+    "AdmissionFailureFact",
+    "BuildIdentityInput",
+    "ChunkIdentityInput",
+    "ContentType",
+    "DocumentStatus",
+    "GovernedManifest",
+    "IdentityNamespace",
+    "KnowledgeValidationError",
+    "ManifestAdmissionResult",
+    "ManifestDocument",
+    "MetadataItem",
+    "OpaqueExternalReference",
+    "OpaqueReferenceType",
+    "SourceClassification",
+    "admit_manifest",
+    "build_identity",
+    "canonical_serialize",
+    "chunk_identity",
+    "document_identity",
+    "document_version_identity",
+    "manifest_commitment",
+    "preflight_outbound_content",
+    "sanitize_failure_detail",
+    "validate_metadata_security",
+    "validate_source_classification",
+    "validate_source_locator",
+]
