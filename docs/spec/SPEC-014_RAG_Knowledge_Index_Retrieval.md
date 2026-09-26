@@ -1,6 +1,6 @@
 # SPEC-014 — RAG Knowledge Index & Retrieval
 
-## Software Design Specification v1.0
+## Software Design Specification v1.1
 
 ---
 
@@ -10,9 +10,9 @@
 |---|---|
 | Document ID | SPEC-014 |
 | Document Name | RAG Knowledge Index & Retrieval |
-| Version | 1.0 |
-| Status | Approved — Implementation Pending |
-| Approval Date | 2026-09-25 |
+| Version | 1.1 |
+| Status | Approved — Implementation In Progress |
+| Approval Date | 2026-09-26 |
 | Requirement Authority | PRD-004 v1.0 Approved |
 | Runtime Authority | SPEC-011 v1.1 |
 | Related Incident Contract | SPEC-008 v1.2；RCA integration implementation pending |
@@ -24,12 +24,14 @@
 |---|---|---|---|
 | 0.1 | 2026-09-25 | Draft | 將Phase 0 Repository Reality Audit及Frozen D1～D4 formalize為Candidate C Engineering Contract；未進行implementation。 |
 | 1.0 | 2026-09-25 | Approved — Implementation Pending | Phase 3 Re-review PASS；D1～D4 Engineering Contract frozen；F-014-01～F-014-06全部closed；正式核准進入implementation planning，implementation尚未開始。 |
+| 1.1 | 2026-09-26 | Draft — Governance Amendment Review Pending | Additive formalize Production Knowledge Governance G1～G4；保留v1.0 Approved engineering baseline及Frozen D1～D4。Slices 1～5已完成並通過各slice audit；Slice 6因production corpus governance gap暫停。本amendment尚待read-only semantic review。 |
+| 1.1 | 2026-09-26 | Approved — Implementation In Progress | Production Knowledge Governance Amendment核准；G1-A～G4-A正式納入SPEC-014 contract，Semantic Review／Re-review PASS。v1.0 historical approval及Slices 1～5 implementation evidence維持有效；Slice 6仍pending Scope Freeze re-entry／implementation。PRD semantics及Frozen D1～D4均未改變。 |
 
 ### Status Honesty
 
-> **Draft ≠ Approved；Approved ≠ Implemented。**
+> **Draft ≠ Approved；Approved ≠ Implemented；Slice implementation ≠ RCA E2E complete。**
 
-**SPEC-014 Engineering Contract已核准，可進入implementation planning；Candidate C production implementation尚未完成。** Repository仍無Candidate C production implementation；本文件不表示Corpus、Embedding、Chroma Index、Retrieval、Knowledge Snapshot、team rebuild或RCA integration已實作、驗證或可供production使用，亦不表示RCA E2E complete或Production Ready。
+**SPEC-014 v1.0 Engineering Contract維持Approved historical baseline；v1.1 Production Knowledge Governance narrow amendment已核准，整體狀態為Implementation In Progress。** Slices 1～5 implementation已完成並通過各slice audit，涵蓋governed Knowledge foundation、durable authority、immutable build lifecycle、frozen retrieval resolution及Knowledge Snapshot authority。Slice 6因缺少approved non-empty production corpus及governed manifest而暫停，仍pending Scope Freeze re-entry／implementation。本v1.1 approval不表示Slice 6已Implemented、production Corpus／manifest或六份SOP／runbook revisions已建立、real Google embedding／Chroma integration或team-local rebuild已完成、RCA E2E complete、SPEC-014 Fully Implemented或Production Ready。
 
 ---
 
@@ -118,6 +120,28 @@ DDS、README及runtime docs只提供supporting context，不得覆蓋上述autho
 12. Candidate C不得實作scheduler、retry timing／budget、Runtime Clock或Startup Recovery authority。
 13. Scenario、Ground Truth及validator expected answers不得成為production Corpus、query selector、applicability或retrieval answer authority。
 
+## 0.6 Production Knowledge Governance Amendment — G1～G4
+
+本v1.1 amendment只對v1.0 Approved engineering baseline作additive precision，不reopen或改寫D1-1～D4-3。G1-A～G4-A已完成Semantic Review／Re-review並隨v1.1 approval正式納入本SPEC contract；此approval本身不表示Slice 6 governance／implementation gate已通過。
+
+| Decision | Additive normative precision |
+|---|---|
+| G1 — v1 Corpus Membership and Coverage | v1 Production Corpus須涵蓋current repository scenario scope所代表的六類operational problem；每類至少一份non-empty、meaningful、human-reviewed、approved、versioned且production-eligible的SOP／runbook revision。六類是operational coverage categories，不是Scenario ID或answer mapping。Coverage完整不保證每個query皆`MATCH`，runtime仍可合法產生`NO_MATCH`。 |
+| G2 — Human Approval／Version／Lifecycle | Production Knowledge採human-governed immutable revision。Human governance核准actual content revision及production eligibility，並提供可稽核governance reference；Candidate C重新計算actual content commitment並Fail Closed驗證。只有approved且active的revision可admit，content change必須產生new Document Version，不得in-place overwrite historical revision。 |
+| G3 — Classification／Outbound Eligibility | 每份送往Approved Google embedding provider的production source，須有explicit human governance decision確認為approved operational knowledge、non-secret、synthetic／mock operational content且outbound eligible。Manifest保存治理結果但不是該結果的semantic source；filename、author、manifest boolean或runtime guess均不得自行授權outbound。 |
+| G4 — Knowledge Type／Applicability Governance | v1使用governed Knowledge Type及minimum applicability taxonomy。只有governance-authorized type與guidance-authority facts通過versioned applicability policy後，才可提供downstream `SOP_BACKED` support；RAG retrieval或similarity `MATCH`本身不授予`SOP_BACKED` authority。 |
+
+G1六類operational coverage categories為：
+
+1. credential abuse／brute-force response；
+2. database slow-query／API-timeout diagnosis；
+3. high-memory／OOM／service-crash handling；
+4. external／third-party API timeout or outage handling；
+5. shared database／network dependency interruption handling；
+6. HTTP 429／rate-limit／QPS-spike handling。
+
+上述categories不得編碼為`scenario_id`、S1～S6 mapping、expected root cause、validator answer或Ground Truth。Exact approver DTO、workflow UI、field names、serialization、numeric thresholds及physical paths均不由本amendment凍結。
+
 ---
 
 # 1. Responsibility Boundary
@@ -174,6 +198,9 @@ Candidate C可回報operation state、local capability truth及typed retry／rep
 | Retrieval Operation | Candidate C獨立logical retrieval identity；一次freeze build及query boundary |
 | Retrieval Profile | versioned bounded query、filter、top-k、score interpretation及ordering contract |
 | Applicability Policy | versioned deterministic規則，將retrieved candidates及approved metadata解析為applicability |
+| Governed Knowledge Type | Human governance核准的`SOP`、`RUNBOOK`或`OTHER_APPROVED_OPERATIONAL_REFERENCE` semantic classification；不等同media／MIME content type |
+| Guidance Authority Fact | 可稽核表達該approved revision能否及以何種governed type支撐downstream guidance authority的manifest／Snapshot fact |
+| Governed Source Root | Production Knowledge唯一logical source-root boundary；只界定受治理source集合，不凍結exact repository directory name |
 | Knowledge Resolution | Retrieval Operation的typed semantic result |
 | Knowledge Gap | `NO_MATCH`所表達的合法狀態：目前frozen boundary內沒有適用approved knowledge |
 | Knowledge Snapshot | 一個Retrieval Operation的唯一immutable durable結果及完整lineage |
@@ -204,6 +231,10 @@ Manifest至少須canonical表達：
 
 Manifest本身必須可canonical serialize及hash。相同semantic manifest在四名成員環境必須產生相同manifest commitment。
 
+v1 corpus release本身須取得explicit human governance approval，不能因所有entries各自可讀或通過mechanical validation而自動成為approved release。Human governance是actual content revision、Knowledge Type、classification、active／retired／revoked state、outbound eligibility及release membership的semantic authority；Manifest是Candidate C保存並執行這些治理結果的canonical admission authority，兩者不得混為一談。
+
+v1 approved release須完整涵蓋第0.6節G1六類operational coverage categories，每類至少一份符合本SPEC admission的SOP／runbook revision。同一revision可否覆蓋多個category須由其approved governance facts及metadata明確表達，不得由filename、similarity或Scenario mapping猜測。Coverage gate只證明v1 corpus membership完整；對個別canonical query仍須執行retrieval及applicability，並允許合法`NO_MATCH`。
+
 ## 3.2 Admission Rules
 
 Pre-build admission必須完整enumerate manifest entries並逐項驗證：
@@ -219,7 +250,21 @@ Pre-build admission必須完整enumerate manifest entries並逐項驗證：
 9. metadata不含credential或禁止outbound內容；
 10. canonical identity及version不與另一內容重複。
 
+Production admission另須驗證：
+
+11. source不是empty、whitespace-only或structurally contentless，且至少包含一個可canonical識別的有效Knowledge section；
+12. required governance metadata完整，包含governed Knowledge Type、minimum applicability taxonomy、Guidance Authority Fact及metadata vocabulary／schema identity與version；
+13. governance reference可識別該human-reviewed actual content revision及其approved／active／production-eligible decision；
+14. external embedding適用時，human governance已明確核准該revision為non-secret、synthetic／mock operational content及outbound eligible；
+15. 整個proposed v1 release通過第0.6節G1 six-category coverage gate並具有explicit release approval。
+
 任何required entry失敗，整個build admission Fail Closed。禁止silent skip、best effort corpus、partial success後activate或以舊vector掩蓋missing source。
+
+Empty、whitespace-only、沒有任何有效canonical Knowledge section或metadata incomplete的production source，必須在任何embedding invocation前Fail Closed。Exact byte threshold、section parser、loader method及physical file format留Implementation Phase；implementation仍須提供deterministic且可測的contentfulness／section validation，不得以檔案存在或hash一致取代。
+
+Incident-specific ground truth無論是unreviewed、human-reviewed、confirmed或historically correct，都不得因review或事實正確而直接取得production Knowledge authority。它不得被production manifest admit、成為retrieval／applicability metadata或canonical filter truth、被embed、送往external embedding provider或支撐`SOP_BACKED`。Human review本身不會把Incident-specific ground truth轉換成approved operational knowledge。
+
+若Incident經驗需要形成Knowledge，必須先經獨立knowledge authoring及governance：將Incident-specific material generalize為operational knowledge、移除incident-specific truth／Ground Truth encoding、建立新的SOP／RUNBOOK Document Revision，再完成human governance review、classification／outbound approval及manifest admission。只有該independently authored and approved SOP／RUNBOOK revision可成為production Knowledge；此boundary不授權automatic ingestion、Knowledge Improvement workflow、conversion service或具體transformation algorithm。
 
 ## 3.3 Corpus Mutation Boundary
 
@@ -233,6 +278,21 @@ Runtime對Active Corpus及Active Index read-only。Candidate C build流程不得
 - arbitrary filesystem／prompt／log content。
 
 Future human governance可產生新的approved manifest／document version；該行為形成new build input，不得in-place改寫historical build或Snapshot。
+
+## 3.4 Human Approval、Revision與Lifecycle
+
+Production Knowledge採human-governed immutable revision：
+
+- stable logical Document Identity在approved revisions間維持continuity；
+- 每個Document Version只對應一份human-reviewed且approved的actual content revision；
+- Human governance負責核准content／version、Knowledge Type、Guidance Authority Fact、classification、outbound eligibility、state及release membership；
+- Candidate C必須重新讀取source、計算actual content commitment並與manifest hash Fail Closed比對，不得信任人工提供的hash結果或以approval取代mechanical integrity validation；
+- content改變必須建立new Document Version及new manifest commitment；
+- approved historical revision不得in-place overwrite；
+- retirement／revocation只影響future admission／activation eligibility，不得retroactively rewrite historical Build、Retrieval Operation或Snapshot；
+- Git tracked、filename含`sop`、Chroma已有vector或舊Build曾引用，都不能取代human governance approval及active state。
+
+Governance reference必須stable、non-secret且可稽核地指向該revision的human decision；exact approver DTO、reference encoding、file format及workflow UI留Engineering／Implementation Phase。
 
 ---
 
@@ -309,6 +369,8 @@ Activation前至少驗證：
 - every admitted chunk有且只有一個compatible index entry；
 - index沒有unknown／orphan／duplicate chunk；
 - metadata可完整resolve回manifest及source provenance；
+- 每份source通過non-empty、meaningful、canonical Knowledge section及minimum governance／applicability metadata completeness validation；
+- proposed v1 release具有explicit governance approval，且G1六類operational coverage gate完整；
 - bounded probe retrieval可執行且返回contract-valid結果；
 - index／metadata／build record integrity成功；
 - security classification及outbound policy未被繞過；
@@ -476,6 +538,25 @@ Retrieval Profile至少凍結：
 
 Profile change是behavior change，必須有new identity／version，不得silent修改historical operation。
 
+### 9.2.1 Production Retrieval／Applicability Metadata
+
+Production Retrieval Profile及Applicability Policy都必須有explicit identity及version，並只使用approved metadata與canonical query facts。v1 metadata semantics至少能表達：
+
+- Governed Knowledge Type：`SOP`、`RUNBOOK`或`OTHER_APPROVED_OPERATIONAL_REFERENCE`；
+- operational domain；
+- applicable component／service scope；
+- dependency role／scope；
+- problem／failure class；
+- observable signal／symptom class；
+- applicability constraints／required scope predicates；
+- Guidance Authority Fact；
+- canonical section identity；
+- metadata vocabulary／schema identity及version。
+
+Required dimension缺失、unsupported或與query facts矛盾時，candidate不得取得applicable result或`SOP_BACKED` support；exact handling須由versioned policy deterministic定義。Exact key names、enum spelling、DTO、serialization、top-k、score threshold及numeric bounds留Engineering／Implementation Phase。
+
+`scenario_id`、S1～S6、expected answer、Ground Truth、credential及unreviewed LLM guidance不得成為retrieval／applicability metadata。允許的query facts必須來自approved bounded upstream context，不得用Scenario metadata補齊缺失scope。
+
 ## 9.3 Deterministic Ordering
 
 對固定Build、canonical query及profile，Candidate C必須產生canonical ordered candidates。Vector-store native return order不是final authority。Final ordering至少使用明確primary ranking及stable Chunk Identity tie-break；缺失、NaN、invalid或不可比較score不得被任意排序，必須按profile明確reject或classify。
@@ -500,6 +581,20 @@ NONE
 Applicability須由versioned deterministic policy依approved metadata、scope constraints、query facts及retrieval signals計算。Similarity score可作candidate signal或policy input，但不得單獨自動取得applicability authority。LLM self-assessment不得成為v1 production applicability authority。
 
 Applicability result必須保存policy identity、evaluated inputs、matched／rejected rules及必要score provenance。Applicability只表示approved knowledge對query context的適用程度，不證明此次Incident factual root cause。
+
+### 10.1.1 Governed Knowledge Type與`SOP_BACKED`
+
+Governed Knowledge Type closed semantic set為：
+
+```text
+SOP
+RUNBOOK
+OTHER_APPROVED_OPERATIONAL_REFERENCE
+```
+
+Exact enum spelling可由Engineering／Implementation選擇，但不得合併其semantic distinction。`SOP`及`RUNBOOK`只有在human governance明確授予相應Guidance Authority Fact、revision維持approved／active／production-eligible，且candidate通過versioned applicability policy時，才能支撐downstream `SOP_BACKED` semantic。`OTHER_APPROVED_OPERATIONAL_REFERENCE`只提供approved context，不得被重新標示為`SOP_BACKED`；若future governance需要新的guidance authority semantic，須以new governed type／versioned contract明確處理，不得silent reinterpret本類型。
+
+Similarity、vector rank、`MATCH`、文件名稱、作者或曾被歷史RCA引用，均不得單獨授予`SOP_BACKED` authority。Candidate C須在Snapshot／public provenance中保存governed type、Guidance Authority Fact及applicability result，使downstream可依authoritative facts判斷；Candidate C不擁有下游guidance presentation或RCA conclusion。
 
 ## 10.2 Typed Resolution
 
@@ -675,7 +770,7 @@ Exact enum naming可於Implementation Phase調整，但語意不可合併。`REA
 
 # 15. Team-local Rebuild與Generated Artifacts
 
-四名成員在相同repository revision、approved sources、manifest、compatibility profiles及合法credentials下，必須能：
+四名成員在相同repository revision、approved source revisions、approved governed manifest、required non-secret semantic configuration、rebuild tooling、compatibility profiles及合法credentials下，必須能：
 
 1. 驗證manifest admission；
 2. 建立相同semantic Build Identity及ordered chunk identities；
@@ -685,7 +780,7 @@ Exact enum naming可於Implementation Phase調整，但語意不可合併。`REA
 6. explicit activate指定validated build；
 7. 執行bounded retrieval並取得可比較的provenance。
 
-Local vector files及generated index不是Git authority，不得要求複製某成員Chroma DB。Repository implementation必須提供dependency／config expectations、non-secret examples、rebuild／validate／activate能力及`.gitignore` hygiene；exact command spelling、directory及collection name不由本SPEC v1.0凍結。
+Git authority至少包含approved source revisions、approved governed manifest、required non-secret semantic configuration及rebuild tooling。Local vector files及generated index不是Git authority，不得要求或允許以複製另一成員Chroma DB作為team baseline或規避rebuild／validation。Repository implementation必須提供dependency／config expectations、non-secret examples、rebuild／validate／activate能力及`.gitignore` hygiene；exact command spelling、source directory、generated directory及collection name不由本SPEC v1.1凍結。
 
 Provider浮點或ANN engine若無法保證bitwise identical vectors／scores，implementation仍須保證identity inputs、candidate bounds、ordering rules、profile及Snapshot replay deterministic；允許的numeric tolerance必須versioned、明示且測試，不得以native nondeterminism取消semantic guarantee。
 
@@ -735,6 +830,7 @@ Future active upstream contract若命名或representation不同，須做explicit
 - Secret不得進manifest、build identity、index metadata、chunk text、Snapshot、log、telemetry或failure summary。
 - Credential Profile ID可保存，但必須non-secret。
 - External embedding payload只可來自admitted approved content，並通過allowlist／redaction及size bounds。
+- Incident-specific ground truth即使已human-reviewed、confirmed或historically correct，仍不得送往external embedding provider；只有依第3.2節獨立author並核准的新SOP／RUNBOOK revision可依其classification及outbound approval送出。
 - 無法確認content或metadata安全時Fail Closed，不得送provider後再補稽核。
 - Raw provider request／response不得成為primary Knowledge authority；debug保存須另有least-privilege、redaction及retention boundary。
 
@@ -742,7 +838,21 @@ Future active upstream contract若命名或representation不同，須做explicit
 
 Production admission必須明確拒絕test／evaluation-only roots、Scenario config、validator expected answer、expected causal class、fixture label及hardcoded S1～S6 mapping。僅移除`scenario_id`欄位但保留其答案內容仍屬違規。
 
+Production admission、retrieval／applicability metadata及canonical filters亦必須拒絕Incident-specific ground truth，不因其經過human review、已confirmed或historically correct而例外。Review Incident material不會賦予Knowledge authority；只有依第3.2節完成generalization、移除incident-specific／Ground Truth encoding並形成獨立approved SOP／RUNBOOK revision後，該new revision才可依正常governance進入Corpus。
+
 Tests可使用isolated synthetic corpus／manifest，但其namespace、store、build及activation不得與production capability authority共用。Demo ground truth只能在結果產生後由evaluation layer比較，不得進query、filter、applicability或retrieved answer。
+
+## 17.3 Governed Source-root Boundary
+
+Production sources必須全部位於單一governed logical source-root boundary。Admission必須以canonical path resolution證明每個source位於該boundary內，並拒絕path traversal、symlink escape或其他跨boundary alias。該logical root必須與下列內容隔離：
+
+- Scenario、Ground Truth及validator／evaluation data；
+- test fixtures；
+- generated indexes／Chroma state；
+- local authority stores、runtime state及caches；
+- credentials、secret files及environment material。
+
+Source-root authority來自governance-approved boundary及manifest reference，不來自caller任意傳入的filesystem path。Exact repository directory name、loader、mount及path configuration留Slice 6 Scope Freeze／Implementation；不得因此允許多個未治理roots或runtime filesystem discovery成為admission authority。
 
 ---
 
@@ -773,19 +883,21 @@ Candidate C tests證明其不建立Evidence、RCA Artifact／Version、Incident 
 
 ## AC-014-B — Canonical Manifest Admission
 
-只有canonical manifest中active、approved、hash一致且security-eligible的documents可進build；unlisted、missing、changed、duplicate或retired source使admission Fail Closed。
+只有canonical manifest中human-reviewed、active、approved、hash一致、metadata complete且security-eligible的documents可進build；unlisted、missing、changed、duplicate、retired、empty、whitespace-only、structurally contentless或沒有canonical Knowledge section的source使admission Fail Closed。v1 release須有explicit governance approval，且六類operational coverage category各至少有一份non-empty、meaningful、versioned、production-eligible SOP／runbook revision；coverage完整仍不保證個別query `MATCH`。
 
 ## AC-014-C — Ground Truth Isolation
 
-Scenario、fixture、validator expected answer及evaluation label即使可讀或與SOP文字相似，也不能被production manifest admit、embed、retrieve或用於applicability。
+Scenario、fixture、validator expected answer、expected root cause、S1～S6 mapping及evaluation label即使可讀或與SOP文字相似，也不能被production manifest admit、embed、retrieve、用作metadata／query filter或用於applicability。
 
 ## AC-014-D — Identity Determinism
 
 相同canonical inputs在獨立process／member environment產生相同document／version、ordered chunk及Build Identity；content、chunking、embedding或schema compatibility改變產生不同identity。
 
+同一Document Identity的approved content發生任何改變時，必須使用new Document Version及new manifest commitment；歷史approved revision、Build及Snapshot保持不變，禁止in-place overwrite。
+
 ## AC-014-E — Fail-Closed Pre-Build Security
 
-含secret、禁止classification、unsupported content或hash mismatch的required entry在任何embedding invocation前被拒絕，且failure output不洩漏secret。
+含secret、禁止classification、unsupported content、hash mismatch或缺少human governance outbound approval的required entry在任何embedding invocation前被拒絕，且failure output不洩漏secret。Manifest boolean、filename、author或runtime guess不能取代approved operational knowledge、non-secret、synthetic／mock及explicit outbound eligibility的governance decision。Incident-specific ground truth在unreviewed、human-reviewed、confirmed及historically correct各情況下都不能被admit、作為retrieval／applicability metadata或canonical filter、embed、outbound或支撐`SOP_BACKED`；測試須證明human review不會直接轉換其authority，只有獨立author且完成正常governance的新SOP／RUNBOOK revision才可能admit。
 
 ## AC-014-F — Immutable Staged Build
 
@@ -825,11 +937,11 @@ Vector-store以不同native tie order回傳相同candidates時，Candidate C仍�
 
 ## AC-014-O — Deterministic Applicability
 
-相同Snapshot inputs與policy version產生相同`DIRECT / PARTIAL / CONTEXTUAL / NONE`；改變單一similarity score不能繞過required metadata／scope rules。
+相同Snapshot inputs與policy version產生相同`DIRECT / PARTIAL / CONTEXTUAL / NONE`；改變單一similarity score不能繞過required metadata／scope rules。Production profile／policy具有explicit identity／version，且required metadata完整涵蓋governed Knowledge Type、operational domain、component／service scope、dependency role／scope、problem／failure class、observable signal／symptom、constraints／scope predicates、Guidance Authority Fact、canonical section及metadata schema identity／version。
 
 ## AC-014-P — MATCH Semantics
 
-只有至少一個approved candidate通過applicability policy才可`MATCH`；Snapshot包含ordered applicable refs及完整corpus／build／policy provenance。
+只有至少一個approved candidate通過applicability policy才可`MATCH`；Snapshot包含ordered applicable refs及完整corpus／build／policy provenance。`MATCH`或similarity本身不授予`SOP_BACKED`。只有governance-authorized `SOP`或`RUNBOOK` revision同時維持approved、active、production-eligible、具有required Guidance Authority Fact，並通過versioned applicability policy時，才可支撐`SOP_BACKED`。v1的`OTHER_APPROVED_OPERATIONAL_REFERENCE`只能提供approved contextual knowledge；即使retrieval為`MATCH`、similarity高或具有其他authority metadata，也不得支撐`SOP_BACKED`，除非future governance contract將內容正式重新分類並建立為SOP／RUNBOOK revision。
 
 ## AC-014-Q — NO_MATCH / Knowledge Gap
 
@@ -861,7 +973,7 @@ Candidate C能區分READY、NOT_INITIALIZED、UNAVAILABLE、MISMATCH及REPAIR_RE
 
 ## AC-014-X — Team Rebuild
 
-全部四名team members在符合approved setup／config contract的各自環境中，皆可由同一repository authority重建compatible Knowledge index、detect drift／mismatch、validate staged build並執行explicit governed activation path，不複製個人vector DB。此AC只驗證Candidate C Knowledge capability reproducibility；完整real-provider／real-RAG RCA E2E由Candidate F／final integration驗證，不降低本four-member rebuild gate。
+全部四名team members在符合approved setup／config contract的各自環境中，皆可由同一repository authority所含的approved source revisions、approved governed manifest、required non-secret semantic configuration及rebuild tooling，重建compatible Knowledge index、detect drift／mismatch、validate staged build並執行explicit governed activation path，不複製任何成員的generated Chroma DB。此AC只驗證Candidate C Knowledge capability reproducibility；完整real-provider／real-RAG RCA E2E由Candidate F／final integration驗證，不降低本four-member rebuild gate。
 
 ## AC-014-Y — Public Semantic Reads
 
@@ -874,6 +986,8 @@ Integration tests使用opaque fake upstream references證明Candidate C不解析
 ## AC-014-AA — Security and Secret Non-disclosure
 
 Credential、authorization header及secret-shaped corpus metadata不會進Git、identity、Snapshot、telemetry或failure summary；unsafe outbound content在provider invocation前Fail Closed。
+
+Production admission亦驗證source位於single governed logical source-root，且該root與Scenario／Ground Truth、fixtures、generated indexes、local stores、caches及credentials隔離；path traversal、symlink escape或caller-selected ungoverned root在provider invocation前Fail Closed。
 
 ## AC-014-AB — Historical Immutability
 
@@ -929,7 +1043,7 @@ Default regression不得依賴live provider。Fake adapter evidence不得冒充r
 
 # 21. Implementation-deferred Choices
 
-以下不由本SPEC v1.0凍結：
+以下不由本SPEC v1.1凍結：
 
 - exact module、class、method、DTO或API route名稱；
 - exact durable database及table／column名稱；
@@ -940,6 +1054,9 @@ Default regression不得依賴live provider。Fake adapter evidence不得冒充r
 - exact top-k、score threshold及numeric tolerance values；
 - exact timeout、request／batch、rate／quota及cost／resource numeric values；
 - exact deterministic applicability rules及approved metadata vocabulary；
+- exact metadata key names、enum spelling、serialization及Governed Knowledge Type／Guidance Authority Fact的physical representation；
+- exact approver DTO、governance-reference encoding、workflow UI及manifest file format；
+- exact governed source-root repository directory name、loader及mount；
 - exact shared-capability DTO／class／API及configuration key names；
 - exact local CLI command及flags；
 - exact telemetry／metric名稱；
@@ -954,17 +1071,16 @@ Default regression不得依賴live provider。Fake adapter evidence不得冒充r
 
 # 22. Repository Reality與Implementation Gate
 
-Approval／design baseline目前：
+Repository reality目前：
 
-- 沒有approved non-empty SOP corpus或manifest；
-- 沒有ingestion／chunking／embedding／Chroma dependency；
-- 沒有build、activation或LKG store；
-- 沒有retrieval API、applicability或Knowledge Snapshot；
-- 沒有Candidate C tests、config、rebuild command或Docker wiring；
+- Slices 1～5 implementation已完成並通過各slice audit：governed Knowledge foundation、durable authority、immutable build lifecycle、frozen retrieval resolution及Knowledge Snapshot authority；
+- 仍沒有approved non-empty production SOP／runbook corpus或approved governed production manifest；
+- 仍沒有production Knowledge config、rebuild command、real Google embedding／Chroma dependency及adapter wiring；
+- Slice 6因production corpus governance gap暫停；
 - current tree沒有active SPEC-012／013；
-- README仍正確標示RCA／RAG未實作。
+- README及v1.0 historical status文字尚未reconcile Slice 1～5 reality，但不構成Knowledge authority。
 
-因此本文件核准只代表Engineering Contract已Approved，不得宣告Implemented。Implementation尚未開始；後續須另依implementation plan新增code、tests、dependencies、config及documentation，且完成相應verification後才可聲稱implemented capability。
+因此v1.0及v1.1 Approved均不表示完整Candidate C production capability已完成，SPEC-014目前為Implementation In Progress。只有actual source revisions及release取得human governance approval、governed manifest存在，且Slice 6 code／tests／dependencies／config／documentation完成相應verification後，才能聲稱production Knowledge path具備其核准能力。
 
 ---
 
@@ -985,4 +1101,7 @@ Approval／design baseline目前：
 - [x] Security、Ground Truth isolation、concurrency、crash、repair及team rebuild已formalize。
 - [x] AC-014-A～AG已建立。
 - [x] Phase 3 Re-review PASS；Engineering Contract approval完成。
-- [ ] Implementation尚未開始。
+- [x] Slices 1～5 implementation完成並通過各slice audit。
+- [x] v1.1 Production Knowledge Governance amendment之Semantic Review／Re-review PASS，G1-A～G4-A已Frozen並完成approval。
+- [ ] Actual v1 source revisions、six-category coverage及governed manifest尚未核准／建立。
+- [ ] Slice 6因production corpus governance gap暫停，尚未Implemented。
