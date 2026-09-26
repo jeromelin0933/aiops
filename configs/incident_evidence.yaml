@@ -1,0 +1,33 @@
+config_version: "1.0"
+config_identity: "spec013-poc-v1"
+capture_contract_version: "spec013-v1"
+canonicalization_version: "evidence-canonical-v1"
+source_policy_version: "evidence-sources-v1"
+bounds_policy_version: "evidence-bounds-v1"
+selector_policy_version: "evidence-selectors-v1"
+redaction_policy_version: "evidence-redaction-v1"
+materiality_rule_versions:
+  - "evidence-materiality-v1"
+windows:
+  logs_pre_seconds: 120
+  metrics_pre_seconds: 300
+  post_seconds: 120
+selector_allowlist:
+  LOKI:
+    - service_name
+    - trace_id
+    - source_ip
+    - downstream_service
+    - external_service
+    - target_service
+  PROMETHEUS:
+    - service_name
+    - downstream_service
+    - external_service
+    - target_service
+bounds:
+  max_records_per_source: 1000
+  max_content_bytes: 4096
+  max_total_bytes: 1048576
+  max_labels_per_record: 32
+  max_label_value_characters: 256

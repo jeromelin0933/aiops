@@ -1,0 +1,7 @@
+{
+  "status": "success",
+  "data": {
+    "resultType": "streams",
+    "result": [{"stream": {"service_name": "payments"}, "values": [["1789956060000000001", "late"]]}]
+  }
+}
