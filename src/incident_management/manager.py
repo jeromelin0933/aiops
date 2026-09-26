@@ -24,6 +24,9 @@ from .contracts import (
     IncidentOperationReceipt,
     IncidentOperationResult,
     IncidentRecord,
+    IncidentRcaPublicationDisposition,
+    IncidentRcaPublicationRequest,
+    IncidentRcaPublicationResult,
     OperationReceiptSemanticIdentity,
     IncidentStatus,
     WorkflowAction,
@@ -117,6 +120,79 @@ class IncidentManager:
                 "decision does not belong to SPEC-008",
                 request,
             )
+
+    def publish_rca_current(
+        self, request: IncidentRcaPublicationRequest
+    ) -> IncidentRcaPublicationResult:
+        """Apply one authorized RCA Current relationship operation atomically."""
+
+        if not isinstance(request, IncidentRcaPublicationRequest):
+            raise IncidentDomainError(
+                IncidentErrorCode.INVALID_INCIDENT_MUTATION,
+                "request must be an IncidentRcaPublicationRequest",
+            )
+        with self._store._transaction() as transaction:
+            transaction._validate_rca_publication_authority()
+            existing = transaction._get_rca_publication_result(
+                request.publication_operation_id
+            )
+            if existing is not None:
+                if existing.replay_identity != request.replay_identity:
+                    raise IncidentDomainError(
+                        IncidentErrorCode.MUTATION_RECEIPT_CONFLICT,
+                        "publication_operation_id has contradictory target semantics",
+                        operation_id=request.publication_operation_id,
+                        incident_id=request.incident_id,
+                    )
+                return existing
+
+            incident = transaction._get_incident(request.incident_id)
+            if incident is None:
+                raise IncidentDomainError(
+                    IncidentErrorCode.INCIDENT_NOT_FOUND,
+                    "RCA publication references an unknown Incident",
+                    operation_id=request.publication_operation_id,
+                    incident_id=request.incident_id,
+                )
+            current = incident.rca_ref
+            if current == request.target_version_id:
+                disposition = (
+                    IncidentRcaPublicationDisposition.TARGET_ALREADY_CURRENT_CONFLICT
+                )
+            elif current != request.expected_current_version_id:
+                disposition = (
+                    IncidentRcaPublicationDisposition.PRECONDITION_SUPERSEDED
+                )
+            else:
+                if request.authoritative_now < incident.updated_at:
+                    raise IncidentDomainError(
+                        IncidentErrorCode.MUTATION_RECEIPT_CONFLICT,
+                        "RCA publication time precedes authoritative Incident state",
+                        operation_id=request.publication_operation_id,
+                        incident_id=request.incident_id,
+                    )
+                disposition = IncidentRcaPublicationDisposition.APPLIED
+                current = request.target_version_id
+                transaction._replace_incident_state(
+                    replace(
+                        incident,
+                        rca_status="COMPLETED",
+                        rca_ref=current,
+                        updated_at=request.authoritative_now,
+                    )
+                )
+
+            result = IncidentRcaPublicationResult(
+                publication_operation_id=request.publication_operation_id,
+                incident_id=request.incident_id,
+                target_version_id=request.target_version_id,
+                expected_current_version_id=request.expected_current_version_id,
+                disposition=disposition,
+                resulting_current_version_id=current,
+                completed_at=request.authoritative_now,
+            )
+            transaction._insert_rca_publication_result(result)
+            return result
 
     def auto_assign_incident(self, request: WorkflowMutationRequest, policy: AssignmentPolicyConfig) -> WorkflowOperationResult:
         return self._assign(request, policy, automatic=True)

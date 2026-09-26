@@ -59,6 +59,7 @@ EXPECTED_TABLES = {
     "incident_resolution_submissions",
     "incident_review_attempts",
     "incident_workflow_audit",
+    "incident_rca_publication_receipts",
 }
 SPEC_007_TABLES = {
     "correlation_state_processed",
@@ -592,6 +593,8 @@ def test_no_public_authoritative_write_or_destructive_cleanup_surface():
         "get_correlation_view",
         "get_incident",
         "get_operation_result",
+        "get_rca_publication_result",
+        "get_rca_relationship",
         "get_workflow_operation_result",
         "get_assignment_state",
         "get_latest_resolution_submission",
