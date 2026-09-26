@@ -1,0 +1,58 @@
+version: "1.0"
+manifest: configs/knowledge_manifest.json
+authority_store:
+  adapter: sqlite3
+  path: var/knowledge_index/knowledge.sqlite3
+embedding:
+  provider: google
+  model: text-embedding-004
+  profile_reference: spec014-google-embedding-profile-v1
+  capability_identity: spec014-google-text-embedding-004-v1
+  embedding_profile_identity: spec014-google-document-query-v1
+  dimension: 768
+  normalization_semantics: provider-normalized-v1
+  hidden_retries_disabled: true
+  limits:
+    timeout_seconds: 30.0
+    maximum_request_bytes: 1000000
+    maximum_batch_items: 128
+    maximum_invocations: 1
+    maximum_cost_units: 128
+    maximum_rate_units: 128
+    maximum_quota_units: 128
+    maximum_resource_units: 128
+chunking:
+  profile_identity: markdown-h2-bounded-v1
+  maximum_chunk_bytes: 4096
+index:
+  engine: chromadb
+  schema_identity: spec014-chroma-cosine-v1
+  path: var/knowledge_index/chroma
+retrieval:
+  profile_identity: spec014-retrieval-v1
+  version: "1.0"
+  canonicalization_version: "1.0"
+  allowed_filter_keys:
+    - component_service_scope
+    - dependency_role_scope
+    - operational_domain
+    - problem_failure_class
+  top_k: 5
+  candidate_limit: 12
+  score_direction: LOWER_IS_BETTER
+  score_precision: 8
+  max_query_bytes: 16384
+  max_content_bytes_per_result: 4096
+  max_metadata_bytes_per_result: 4096
+  max_total_payload_bytes: 32768
+applicability:
+  policy_identity: spec014-applicability-v1
+  version: "1.0"
+  required_filter_keys:
+    - component_service_scope
+    - dependency_role_scope
+    - operational_domain
+    - problem_failure_class
+  direct_threshold: 0.2
+  partial_threshold: 0.5
+  contextual_threshold: 0.8
