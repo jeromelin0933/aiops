@@ -10,12 +10,13 @@ from .contracts import (
     AdmissionFailureFact,
     MetadataItem,
     SourceClassification,
+    _MULTILINE_SECRET_SHAPE,
     _contains_secret_shape,
 )
 
 
 _SENSITIVE_VALUE = re.compile(
-    r"(?i)(?:access[_-]?token|api[_-]?key|authorization|credential|password|passwd|secret|token)\s*(?:=|:)\s*\S+"
+    r"(?i)(?:access[_-]?token|api[_-]?key|authorization|credential|password|passwd|secret|token)[ \t]*(?:=|:)[ \t]*\S+"
     r"|\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]+"
     r"|-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----"
 )
@@ -25,12 +26,18 @@ _FORBIDDEN_LOCATOR_PART = re.compile(
     r"(?i)^(?:scenarios?|ground[_-]?truth|fixtures?|validator(?:[_-]?output)?|evaluation(?:[_-]?truth)?|"
     r"generated[_-]?rca|rca[_-]?output|shadows?|unreviewed[_-]?incidents?)$"
 )
+_FORBIDDEN_KNOWLEDGE_METADATA = re.compile(
+    r"(?i)(?:^|[._:/|-])(?:scenario(?:_id)?|ground[_-]?truth|validator(?:[_-]?answer)?|"
+    r"expected[_-]?(?:root[_-]?cause|answer|causal[_-]?class)|fixture[_-]?label|"
+    r"incident[_-]?specific)(?:$|[._:/|-])"
+)
 
 
 def sanitize_failure_detail(message: object, *, maximum_length: int = 256) -> str:
     """Return bounded diagnostic text with common secret shapes removed."""
     text = message if isinstance(message, str) else type(message).__name__
     text = _SENSITIVE_VALUE.sub(_REDACTED, text)
+    text = _MULTILINE_SECRET_SHAPE.sub(_REDACTED, text)
     text = _CONTROL_CHARACTER.sub("?", text).strip()
     if not text:
         text = "validation failure"
@@ -72,6 +79,12 @@ def validate_metadata_security(
                 AdmissionFailureCode.SECRET_METADATA,
                 "metadata",
                 "metadata contains a forbidden secret-shaped field",
+            )
+        if _FORBIDDEN_KNOWLEDGE_METADATA.search(item.key) or _FORBIDDEN_KNOWLEDGE_METADATA.search(item.value):
+            return AdmissionFailureFact(
+                AdmissionFailureCode.SOURCE_CLASS_FORBIDDEN,
+                "metadata",
+                "metadata belongs to a forbidden Ground Truth or evaluation authority",
             )
     return None
 

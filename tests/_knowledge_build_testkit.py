@@ -71,6 +71,7 @@ def manifest_and_plan(
     index_schema: str = "index-schema-v1",
 ) -> tuple[dict[str, object], tuple[BuildChunk, ...], BuildIdentityInput]:
     selected = profile or capability()
+    root.mkdir(parents=True, exist_ok=True)
     (root / name).write_text(content, encoding="utf-8")
     content_digest = digest(content)
     raw: dict[str, object] = {

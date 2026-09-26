@@ -14,6 +14,15 @@ def _production_source() -> str:
     )
 
 
+def _core_source() -> str:
+    approved_adapters = {"google_embedding_adapter.py", "chroma_index_adapter.py"}
+    return "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted(PACKAGE.glob("*.py"))
+        if path.name not in approved_adapters and path.name != "__init__.py"
+    )
+
+
 def test_public_api_contains_only_approved_candidate_c_capabilities() -> None:
     exported = set(knowledge_index.__all__)
     forbidden_fragments = {
@@ -29,7 +38,7 @@ def test_public_api_contains_only_approved_candidate_c_capabilities() -> None:
 
 
 def test_candidate_c_store_does_not_import_forbidden_domain_or_private_helpers() -> None:
-    source = _production_source()
+    source = _core_source()
     forbidden_imports = (
         "runtime_orchestration",
         "incident_management",
@@ -39,8 +48,8 @@ def test_candidate_c_store_does_not_import_forbidden_domain_or_private_helpers()
         "event_detection.runner",
         "_stable_identity",
         "_sanitize_error_message",
-        "chromadb",
-        "google.",
+        "import chromadb",
+        "from google",
     )
     for forbidden in forbidden_imports:
         assert forbidden not in source
@@ -74,7 +83,7 @@ def test_slice_two_store_is_candidate_c_owned_and_stdlib_only() -> None:
 
 
 def test_slice_four_does_not_define_forbidden_next_slice_workflow() -> None:
-    source = _production_source().lower()
+    source = _core_source().lower()
     forbidden = (
         "class googleembedding",
         "class chroma",
@@ -84,6 +93,16 @@ def test_slice_four_does_not_define_forbidden_next_slice_workflow() -> None:
     )
     for definition in forbidden:
         assert definition not in source
+
+
+def test_only_approved_slice_six_adapters_import_provider_and_index_dependencies() -> None:
+    importers = {
+        path.name
+        for path in PACKAGE.glob("*.py")
+        if "from google" in path.read_text(encoding="utf-8")
+        or "import chromadb" in path.read_text(encoding="utf-8")
+    }
+    assert importers == {"google_embedding_adapter.py", "chroma_index_adapter.py"}
 
 
 def test_opaque_references_retain_only_discriminator_and_value() -> None:

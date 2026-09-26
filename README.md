@@ -1,6 +1,6 @@
 # AIOps Incident-driven Platform
 
-Last reviewed against current governance baseline: 2026-09-16
+Last reviewed against current governance baseline: 2026-09-26
 
 本repository目前已實作Mock Data generation、Observability foundation、Event Detection、Event Detection Runner、Scenario runtime／validation，以及SPEC-006～011核准範圍內的Policy Engine、Correlation State、Incident Core、Lifecycle／Human Workflow、Shadow／Unclassified Store與Runtime Orchestration／E2E。PRD-003 v1.0是Alert Correlation／Incident Management Final Requirements authority；SPEC-011 v1.0狀態為`Implemented`，正式implementation commit為`cd481e8a1ed6b390d51bd81a519da43914b0b786`。PRD-001 v3.4整體狀態仍維持「執行中」。
 
@@ -22,7 +22,9 @@ Last reviewed against current governance baseline: 2026-09-16
 
 Current PoC implementation uses Python stdlib `sqlite3` for the Correlation State Store及independent D2 Runtime Work Store。D2只保存orchestration continuity，不是Event、Pending、Processed、Intent、Incident、Shadow或Workflow authority；SQLite是current implementation reality，不是platform或production database requirement。
 
-Not yet implemented / downstream platform scope：RCA／RAG workflow、Jira／Discord／ChatOps／Dashboard／Email等external operational adapters／integrations、Knowledge workflow、automatic remediation、HA／distributed runtime、production hardening，以及complete closed loop。SPEC-011完成不等於完整平台或production-ready；RAG framework仍為future architecture／TBD。
+SPEC-014 Candidate-C目前包含Slices 1～5 authority foundation與Slice 6 implementation workspace：approved production manifest admission、deterministic chunking、Google `text-embedding-004`及local Chroma adapters、team-local CLI。此描述不是Slice 6 audit PASS、完整RCA/RAG E2E或production-ready聲明。尚未實作的downstream scope包括LLM generation、RCA publication、final RCA E2E、Jira／ChatOps及automatic remediation。
+
+SPEC-014 local setup、credential boundary、commands及generated artifact規則見 [`docs/knowledge_index.md`](docs/knowledge_index.md)。Default `python -m pytest -q`不需要live Google credential；real provider validation必須explicit opt-in。
 
 Current implemented capabilities：
 

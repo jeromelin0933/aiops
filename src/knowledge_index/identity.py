@@ -115,7 +115,7 @@ def _manifest_payload(manifest: GovernedManifest) -> dict[str, object]:
         manifest.documents,
         key=lambda item: (item.document_id, item.document_version, item.source_path),
     )
-    return {
+    payload: dict[str, object] = {
         "schema_version": manifest.schema_version,
         "canonicalization_version": manifest.canonicalization_version,
         "manifest_id": manifest.manifest_id,
@@ -123,6 +123,23 @@ def _manifest_payload(manifest: GovernedManifest) -> dict[str, object]:
         "corpus_version": manifest.corpus_version,
         "documents": documents,
     }
+    if manifest.schema_version == "1.1":
+        payload.update({
+            "schema_identity": manifest.schema_identity,
+            "release_id": manifest.release_id,
+            "release_version": manifest.release_version,
+            "canonical_release_reference": manifest.canonical_release_reference,
+            "release_status": manifest.release_status,
+            "release_approver_role": manifest.release_approver_role,
+            "release_approval_reference": manifest.release_approval_reference,
+            "governed_source_root": manifest.governed_source_root,
+            "source_revision": manifest.source_revision,
+            "content_hash_algorithm": manifest.content_hash_algorithm,
+            "metadata_schema_identity": manifest.metadata_schema_identity,
+            "metadata_schema_version": manifest.metadata_schema_version,
+            "metadata_vocabulary": manifest.metadata_vocabulary,
+        })
+    return payload
 
 
 def manifest_commitment(manifest: GovernedManifest) -> str:

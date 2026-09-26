@@ -1,0 +1,2 @@
+configs/knowledge_manifest.json text eol=lf
+docs/knowledge/*.md text eol=lf

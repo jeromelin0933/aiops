@@ -8,7 +8,7 @@ from knowledge_index import AdmissionFailureCode, admit_manifest, sanitize_failu
 
 def _manifest(root: Path, *, classification: str = "APPROVED_OPERATIONAL_KNOWLEDGE", metadata=None, content: str = "approved procedure"):
     source = root / "source.txt"
-    source.write_text(content, encoding="utf-8")
+    source.write_bytes(content.encode("utf-8"))
     return {
         "schema_version": "1.0",
         "canonicalization_version": "1.0",
@@ -20,7 +20,7 @@ def _manifest(root: Path, *, classification: str = "APPROVED_OPERATIONAL_KNOWLED
                 "document_id": "DOC-1",
                 "document_version": "1.0",
                 "source_path": "source.txt",
-                "expected_content_hash": hashlib.sha256(content.encode()).hexdigest(),
+                "expected_content_hash": hashlib.sha256(source.read_bytes()).hexdigest(),
                 "status": "ACTIVE",
                 "source_classification": classification,
                 "approval_reference": "GOV-1",
@@ -87,6 +87,51 @@ def test_unsafe_outbound_content_is_rejected_without_echoing_content(tmp_path: P
     assert AdmissionFailureCode.OUTBOUND_CONTENT_UNSAFE in {item.code for item in result.findings}
     assert "top-secret-token" not in repr(result.findings)
     assert content not in repr(result.findings)
+
+
+def test_benign_operational_prose_with_unassigned_security_words_is_allowed(tmp_path: Path) -> None:
+    content = (
+        "Operational prerequisites:\n"
+        "authorization:\nBased on verified evidence and existing authorization, continue safely.\n"
+        "credential\ntoken\npassword\n"
+    )
+    result = admit_manifest(_manifest(tmp_path, content=content), source_root=tmp_path)
+    assert result.accepted
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "authorization: Bearer synthetic-secret-value",
+        "api_key: synthetic-secret-value",
+        "token=synthetic-secret-value",
+        "password: synthetic-secret-value",
+    ],
+)
+def test_actual_synthetic_secret_assignments_still_fail_closed(tmp_path: Path, content: str) -> None:
+    result = admit_manifest(_manifest(tmp_path, content=content), source_root=tmp_path)
+    assert not result.accepted
+    assert AdmissionFailureCode.OUTBOUND_CONTENT_UNSAFE in {item.code for item in result.findings}
+    assert "synthetic-secret-value" not in repr(result.findings)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "api_key:\nsynthetic-secret-value",
+        "token:\n synthetic-secret-value",
+        "password:\nsynthetic-secret-value",
+        "access_token:\nsynthetic-secret-value",
+        "api_key:\r\nsynthetic-secret-value",
+        "token:\r\n synthetic-secret-value",
+        "authorization:\nBearer synthetic-secret-value",
+    ],
+)
+def test_multiline_synthetic_secret_assignments_fail_closed(tmp_path: Path, content: str) -> None:
+    result = admit_manifest(_manifest(tmp_path, content=content), source_root=tmp_path)
+    assert not result.accepted
+    assert AdmissionFailureCode.OUTBOUND_CONTENT_UNSAFE in {item.code for item in result.findings}
+    assert "synthetic-secret-value" not in repr(result.findings)
 
 
 def test_sanitized_failure_representation_redacts_and_bounds_secrets() -> None:

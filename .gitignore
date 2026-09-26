@@ -43,3 +43,10 @@ models/*.pkl
 # SPEC-005 Validation Reports
 # ==========================
 reports/spec005/
+
+# SPEC-014 generated local Knowledge capability state
+var/knowledge_index/
+.env.*
+!.env.example
+*service-account*.json
+credentials*.json

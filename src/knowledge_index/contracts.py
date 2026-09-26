@@ -18,9 +18,15 @@ _SECRET_KEY = re.compile(
     r"(?i)(?:access[_-]?token|api[_-]?key|authorization|credential|password|passwd|secret|token)"
 )
 _SECRET_SHAPE = re.compile(
-    rf"{_SECRET_KEY.pattern}\s*(?:=|:)"
+    rf"{_SECRET_KEY.pattern}[ \t]*(?:=|:)[ \t]*\S+"
     r"|\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]+"
     r"|-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----"
+)
+_MULTILINE_SECRET_SHAPE = re.compile(
+    r"(?im)^[ \t]*(?:access[_-]?token|api[_-]?key|authorization|credential|"
+    r"password|passwd|secret|token)[ \t]*:[ \t]*\r?\n[ \t]*"
+    r"(?:(?:bearer|basic)[ \t]+[A-Za-z0-9._~+/=-]+|"
+    r"[A-Za-z0-9][A-Za-z0-9._~+/=-]{7,})[ \t]*\r?$"
 )
 
 
@@ -30,7 +36,7 @@ def _contains_secret_shape(
     """Candidate-C-local secret-shape rule; never a shared security authority."""
     if not isinstance(value, str):
         return False
-    if _SECRET_SHAPE.search(value):
+    if _SECRET_SHAPE.search(value) or _MULTILINE_SECRET_SHAPE.search(value):
         return True
     if metadata_key and _SECRET_KEY.search(value):
         return True
@@ -97,6 +103,11 @@ class AdmissionFailureCode(str, Enum):
     CONTENT_TYPE_UNSUPPORTED = "CONTENT_TYPE_UNSUPPORTED"
     SECRET_METADATA = "SECRET_METADATA"
     OUTBOUND_CONTENT_UNSAFE = "OUTBOUND_CONTENT_UNSAFE"
+    RELEASE_NOT_APPROVED = "RELEASE_NOT_APPROVED"
+    RELEASE_MEMBERSHIP_INVALID = "RELEASE_MEMBERSHIP_INVALID"
+    GOVERNANCE_METADATA_INVALID = "GOVERNANCE_METADATA_INVALID"
+    SOURCE_REVISION_MISMATCH = "SOURCE_REVISION_MISMATCH"
+    CONTENT_NOT_MEANINGFUL = "CONTENT_NOT_MEANINGFUL"
 
 
 def _identifier(value: object, field: str) -> str:
@@ -180,6 +191,13 @@ class ManifestDocument:
     outbound_eligible: bool
     content_type: ContentType
     metadata: tuple[MetadataItem, ...]
+    approval_state: str = "APPROVED"
+    production_eligible: bool = True
+    committed_source_reference: str = ""
+    security_classification: str = ""
+    outbound_scope: str = ""
+    knowledge_type: str = ""
+    guidance_authority: str = ""
 
     def __post_init__(self) -> None:
         _identifier(self.document_id, "document_id")
@@ -204,6 +222,17 @@ class ManifestDocument:
             raise KnowledgeValidationError("metadata must be uniquely key-sorted")
         if len({item.key for item in self.metadata}) != len(self.metadata):
             raise KnowledgeValidationError("metadata keys must be unique")
+        if self.approval_state not in {"APPROVED", "UNAPPROVED"}:
+            raise KnowledgeValidationError("approval_state is invalid")
+        if not isinstance(self.production_eligible, bool):
+            raise KnowledgeValidationError("production_eligible must be boolean")
+        for field in (
+            "committed_source_reference", "security_classification", "outbound_scope",
+            "knowledge_type", "guidance_authority",
+        ):
+            value = getattr(self, field)
+            if value:
+                _identifier(value, field)
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,9 +243,22 @@ class GovernedManifest:
     corpus_id: str
     corpus_version: str
     documents: tuple[ManifestDocument, ...]
+    schema_identity: str = "KNOWLEDGE_MANIFEST"
+    release_id: str = ""
+    release_version: str = ""
+    canonical_release_reference: str = ""
+    release_status: str = ""
+    release_approver_role: str = ""
+    release_approval_reference: str = ""
+    governed_source_root: str = ""
+    source_revision: str = ""
+    content_hash_algorithm: str = ""
+    metadata_schema_identity: str = ""
+    metadata_schema_version: str = ""
+    metadata_vocabulary: tuple[MetadataItem, ...] = ()
 
     def __post_init__(self) -> None:
-        if self.schema_version != "1.0":
+        if self.schema_version not in {"1.0", "1.1"}:
             raise KnowledgeValidationError("unsupported manifest schema version")
         if self.canonicalization_version != "1.0":
             raise KnowledgeValidationError("unsupported canonicalization version")
@@ -227,6 +269,31 @@ class GovernedManifest:
             raise KnowledgeValidationError("manifest documents must be a non-empty tuple")
         if any(not isinstance(document, ManifestDocument) for document in self.documents):
             raise KnowledgeValidationError("manifest documents must contain ManifestDocument values")
+        if self.schema_identity != "KNOWLEDGE_MANIFEST":
+            raise KnowledgeValidationError("unsupported manifest schema identity")
+        if self.schema_version == "1.1":
+            for field in (
+                "release_id", "release_version", "canonical_release_reference",
+                "release_status", "release_approver_role", "release_approval_reference",
+                "content_hash_algorithm", "metadata_schema_identity",
+                "metadata_schema_version",
+            ):
+                value = getattr(self, field)
+                if (
+                    not isinstance(value, str) or not value or value != value.strip()
+                    or len(value) > 512 or _contains_secret_shape(value)
+                ):
+                    raise KnowledgeValidationError(f"{field} must be bounded and non-secret")
+            if (
+                not self.governed_source_root
+                or self.governed_source_root.startswith(("/", "\\"))
+                or ".." in self.governed_source_root.replace("\\", "/").split("/")
+            ):
+                raise KnowledgeValidationError("governed_source_root is invalid")
+            if not re.fullmatch(r"[0-9a-f]{40}", self.source_revision):
+                raise KnowledgeValidationError("source_revision must be a full Git object id")
+            if not isinstance(self.metadata_vocabulary, tuple) or not self.metadata_vocabulary:
+                raise KnowledgeValidationError("metadata_vocabulary is required")
 
 
 @dataclass(frozen=True, slots=True)

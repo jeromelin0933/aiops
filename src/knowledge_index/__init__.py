@@ -110,7 +110,11 @@ from .identity import (
     document_version_identity,
     manifest_commitment,
 )
-from .manifest import admit_manifest
+from .manifest import admit_manifest, admit_production_manifest
+from .chunking import ChunkingProfile, plan_chunks
+from .config import KnowledgeConfigError, KnowledgeIndexConfig, load_knowledge_config
+from .google_embedding_adapter import GoogleEmbeddingAdapter
+from .chroma_index_adapter import ChromaIndexAdapter, collection_name
 from .security import (
     preflight_outbound_content,
     sanitize_failure_detail,
@@ -238,6 +242,15 @@ __all__ = [
     "SnapshotSourceStatus",
     "TerminalUnavailableRequest",
     "admit_manifest",
+    "admit_production_manifest",
+    "ChunkingProfile",
+    "plan_chunks",
+    "KnowledgeConfigError",
+    "KnowledgeIndexConfig",
+    "load_knowledge_config",
+    "GoogleEmbeddingAdapter",
+    "ChromaIndexAdapter",
+    "collection_name",
     "build_identity",
     "canonical_serialize",
     "chunk_identity",
