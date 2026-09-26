@@ -1,6 +1,10 @@
-# SPEC-014 Team-local Knowledge Index
+# SPEC-014 Candidate-C Knowledge Index Setup
 
-本文件記錄Slice 6 repository-supported local workflow；不宣告audit PASS或完整RCA E2E。
+本文件記錄current implemented Candidate-C setup：approved six-document corpus、governed manifest、Google embedding adapter、Chroma index adapter、build／validate／activate／retrieve lifecycle、Knowledge Snapshot及public provenance。這不宣告live-provider PASS、real-RAG PASS、final RCA E2E或Production Ready。
+
+## Closure verification disclosure
+
+**AC-014-X: NOT EXECUTED — PM-DIRECTED SKIP FOR CURRENT CLOSURE。** AC-014-X未執行，這不是PASS，也沒有four-member evidence；Approved AC-014-X持續為normative requirement。PM僅授權current repository在此explicit verification exception下closure。
 
 ## Setup and credential boundary
 
@@ -44,9 +48,11 @@ Credential-free default regression：
 python -m pytest -q
 ```
 
-Real Google/Chroma integration只有明確opt-in才執行：
+Real Google／Chroma integration只有明確opt-in才執行：
 
 ```powershell
 $env:RUN_SPEC014_REAL_INTEGRATION="1"
 python -m pytest -q tests/test_knowledge_real_integration.py
 ```
+
+只有actual live execution evidence才能宣稱live Google／real-provider validation PASS。Google adapter存在、Chroma adapter存在、credential-free default regression PASS或該test被skip，都不能冒充live-provider evidence，也不能證明real-RAG或final RCA E2E。

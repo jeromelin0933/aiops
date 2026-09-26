@@ -2,7 +2,7 @@
 
 Last reviewed against current governance baseline: 2026-09-26
 
-本repository目前已實作Mock Data generation、Observability foundation、Event Detection、Event Detection Runner、Scenario runtime／validation，以及SPEC-006～011核准範圍內的Policy Engine、Correlation State、Incident Core、Lifecycle／Human Workflow、Shadow／Unclassified Store與Runtime Orchestration／E2E。PRD-003 v1.0是Alert Correlation／Incident Management Final Requirements authority；SPEC-011 v1.0狀態為`Implemented`，正式implementation commit為`cd481e8a1ed6b390d51bd81a519da43914b0b786`。PRD-001 v3.4整體狀態仍維持「執行中」。
+本repository目前已實作Mock Data generation、Observability foundation、Event Detection、Event Detection Runner、Scenario runtime／validation、SPEC-006～011既有核准範圍，以及PRD-004 Candidate A／B／C：RCA persistence／publication、Incident Evidence Snapshot／Materiality與Knowledge Corpus／Index／Retrieval／Snapshot。PRD-001 v3.5仍為overall platform authority，PRD-003 v1.1是Alert Correlation／Incident Management authority，PRD-004 v1.0維持`Approved`產品需求權威。
 
 ## Current implementation
 
@@ -19,10 +19,15 @@ Last reviewed against current governance baseline: 2026-09-26
 - SPEC-009 Lifecycle / Human Workflow
 - SPEC-010 Shadow / Unclassified Store
 - SPEC-011 independent Runtime Orchestration Worker、host CLI與Docker Compose runtime service
+- SPEC-012 RCA Artifact persistence、Current／History／Freshness、public reads與SPEC-008 publication coordination
+- SPEC-013 Incident Evidence Store、trusted-core capture、Loki／Prometheus adapters、Snapshot／Revision與Materiality
+- SPEC-014 approved six-document Knowledge Corpus、governed manifest、Google embedding／Chroma adapters、build／validate／activate／retrieve CLI、Knowledge Snapshot與public provenance
 
 Current PoC implementation uses Python stdlib `sqlite3` for the Correlation State Store及independent D2 Runtime Work Store。D2只保存orchestration continuity，不是Event、Pending、Processed、Intent、Incident、Shadow或Workflow authority；SQLite是current implementation reality，不是platform或production database requirement。
 
-SPEC-014 Candidate-C目前包含Slices 1～5 authority foundation與Slice 6 implementation workspace：approved production manifest admission、deterministic chunking、Google `text-embedding-004`及local Chroma adapters、team-local CLI。此描述不是Slice 6 audit PASS、完整RCA/RAG E2E或production-ready聲明。尚未實作的downstream scope包括LLM generation、RCA publication、final RCA E2E、Jira／ChatOps及automatic remediation。
+SPEC-014 Candidate C核准範圍目前為`Implemented`。AC-014-X未執行，closure disposition為`NOT EXECUTED — PM-DIRECTED SKIP FOR CURRENT CLOSURE`；這不是PASS，且沒有four-member evidence。Adapter存在及default regression PASS均不能冒充live Google provider或real-RAG PASS。
+
+仍Pending的PRD-004 scope包括Candidate D／E／F、LLM generation、SPEC-011 RCA Runtime orchestration及final RCA／RAG E2E；repository亦非Production Ready。SPEC-012／SPEC-008 caller-driven publication coordinator不等於Runtime scheduler或recovery authority。
 
 SPEC-014 local setup、credential boundary、commands及generated artifact規則見 [`docs/knowledge_index.md`](docs/knowledge_index.md)。Default `python -m pytest -q`不需要live Google credential；real provider validation必須explicit opt-in。
 
@@ -200,13 +205,14 @@ __pycache__/
 
 ## Authoritative documents / governance
 
-治理依domain分工：PRD-002與SPEC-001～004治理Event Detection；PRD-003 v1.0 Final治理Alert Correlation／Incident Management detailed requirements；SPEC-006～010治理各自domain semantics，SPEC-011 v1.0治理Runtime orchestration／sequencing／scheduling／recovery與retry timing；PRD-001治理overall platform direction；DDS-001治理repository-level design reference；README只提供入口與索引。SPEC-005提供implementation／validation evidence，不是detector authority。
+治理依domain分工：PRD-002與SPEC-001～004治理Event Detection；PRD-003 v1.1治理Alert Correlation／Incident Management；PRD-004 v1.0治理RCA產品需求，SPEC-012／013／014治理Candidate A／B／C semantics；SPEC-011治理既有Runtime orchestration，尚未完成PRD-004 RCA Runtime orchestration。PRD-001 v3.5治理overall platform direction；DDS-001是supporting repository-level reference；README只提供入口與索引。
 
 | Document | Role |
 |---|---|
-| PRD-001 v3.4 | 執行中的overall platform requirement |
+| PRD-001 v3.5 | 執行中的overall platform requirement |
 | PRD-002 v1.5 | Approved；Event Detection authoritative PRD |
-| PRD-003 v1.0 | Final Requirements；Alert Correlation／Incident Management requirement authority；不以PRD狀態表示implementation完成 |
+| PRD-003 v1.1 | Final Requirements；Alert Correlation／Incident Management requirement authority；不以PRD狀態表示implementation完成 |
+| PRD-004 v1.0 | Approved；Evidence-Grounded RCA product requirement authority；產品版本未因implementation closure升版 |
 | SPEC-001 v2.4 | Implemented；Log Event Detection contract；包含authoritative Event enumeration/read-integrity capability |
 | SPEC-002 v1.4 | Implemented；Metrics Threshold Detection contract |
 | SPEC-003 v1.1 | Implemented；Metrics Isolation Forest Detection contract |
@@ -214,13 +220,16 @@ __pycache__/
 | SPEC-005 v1.3 | Implemented；S3 Identity Revalidation PASS；implementation／validation evidence，不是detector authority |
 | SPEC-006 v1.0 | Implemented；Deterministic Alert Correlation Policy Engine contract |
 | SPEC-007 v1.0 | Implemented；Correlation State Store／Pending Recovery contract |
-| SPEC-008 v1.1 | Implemented；Incident Store／Incident Manager Core contract |
+| SPEC-008 v1.3 | Implemented；Incident Core及additive RCA relationship／publication integration |
 | SPEC-009 v1.0 | Implemented；Lifecycle／Human Workflow contract |
 | SPEC-010 v1.0 | Implemented；Shadow／Unclassified Store contract |
 | SPEC-011 v1.0 | Implemented；Runtime Orchestration／E2E contract；Final Full Contract Audit與PM Final Review PASS |
-| DDS-001 v1.5 | Repository-level Mock Data／Observability及current implemented Runtime architecture reference |
+| SPEC-012 v1.1 | Implemented；RCA Artifact／Persistence及publication-side truth |
+| SPEC-013 v1.1 | Implemented；Incident Evidence Collection／Snapshot／Materiality |
+| SPEC-014 v1.2 | Implemented；Knowledge Corpus／Index／Retrieval／Snapshot；AC-014-X PM-directed skip，不是PASS |
+| DDS-001 v1.6 | Supporting repository-level implementation architecture reference |
 
-PRD-002與SPEC-001～SPEC-004提供正式Event Detection contract；PRD-003 v1.0 Final提供Alert Correlation／Incident Management detailed requirements。DDS／README不重新定義其schema、threshold、semantics、ownership、generator behavior、model parameters或correlation policy。
+PRD-002與SPEC-001～SPEC-004提供正式Event Detection contract；PRD-003 v1.1提供Alert Correlation／Incident Management requirements；PRD-004 v1.0與SPEC-012～014提供RCA Candidate A／B／C authority。DDS／README不建立新的normative authority。
 
 SDD、ADR-001 與 PM team instructions 是由 Google Drive 管理的 external governance documents。Repository 不建立其 mirror，本 README 也不推測其版本或內容。
 
@@ -229,5 +238,5 @@ SDD、ADR-001 與 PM team instructions 是由 Google Drive 管理的 external go
 - Grafana datasource provisioning 與 dashboard import 尚未自動化。
 - Model artifacts 是 local runtime prerequisites。
 - SPEC-006～011已依各自核准scope完成；SPEC-011的Host與Docker Runtime E2E已驗證，但目前Runtime仍是single-process／single-node PoC，沒有HA、distributed coordination、Kafka／broker、exactly-once transport infrastructure或cross-store 2PC。
-- SPEC-006～011的implementation evidence不證明PRD-001 v3.4整體平台或PRD-003 v1.0所有downstream integrations已完成；RCA／RAG、Jira、Discord／ChatOps、complete Dashboard workflow、Email fallback／escalation、Knowledge workflow、automatic remediation、production DB migration program、automatic repair tooling與complete closed loop仍未完成。
+- Candidate A／B／C已實作，但Candidate D／E／F、LLM generation、RCA Runtime orchestration、final RCA／RAG E2E、Jira、Discord／ChatOps、complete Dashboard workflow、Email fallback／escalation、automatic remediation、production hardening與complete closed loop仍未完成；因此不得宣稱Production Ready。
 - Demo / E2E validation controller 與其 validation-specific behavior 不構成 production architecture requirement。

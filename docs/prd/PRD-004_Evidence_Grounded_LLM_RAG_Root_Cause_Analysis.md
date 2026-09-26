@@ -30,7 +30,7 @@
 | 0.3 | 2026-09-18 | Draft — PM Final Approval Candidate | Narrow PM Final Review patch：釐清authority hierarchy、加入`INITIAL_PENDING` downstream projection、封閉Incident `rca_status` refresh semantics。 |
 | 1.0 | 2026-09-18 | Approved | PM Final Approval completed；D1～D10、Revision Round 1、Narrow Final Patch及AC-004-A～X通過Final Review；正式凍結為RCA Domain後續Engineering SPEC與cross-document reconciliation的產品需求權威。 |
 
-> **Status Honesty：**`PRD-004 v1.0`已完成PM Final Review，Status為`Approved`，正式成為RCA Domain後續Engineering SPEC與cross-document reconciliation的產品需求權威。Approved不代表RCA／RAG implementation已完成。Repository目前RCA／RAG workflow、PRD-005 interfaces及完整AIOps closed loop均為`NOT IMPLEMENTED`；本文件核准不代表RCA、Knowledge Index或LLM integration已完成。
+> **Status Honesty：**`PRD-004 v1.0`已完成PM Final Review，Product Status維持`Approved`，正式成為RCA Domain後續Engineering SPEC與cross-document reconciliation的產品需求權威。Post-integration repository reality為Candidate A／B／C已依SPEC-012／013／014實作；Candidate D／E／F、LLM generation、RCA Runtime orchestration、final RCA／RAG E2E及Production Ready仍為Pending。產品語意版本不因本次implementation reconciliation升版。
 
 ---
 
@@ -491,6 +491,8 @@ RCA Artifact is durable
 Exact cross-store protocol留SPEC，並在SPEC-011 singular Runtime governance下執行。
 
 現有SPEC-008只提供`rca_status`／`rca_ref` initial persistence及preservation contract，尚未提供完整RCA relationship mutation surface。後續需要narrow additive public semantic refinement及documentation／SPEC reconciliation；本PRD不假裝該API已存在，也不freeze physical type或method signature。
+
+Post-integration qualifier：上段保留PRD-004 approval時的repository baseline事實。Current repository已由SPEC-008 v1.2 approved additive boundary及v1.3 documentation-only closure記錄RCA relationship mutation／read capability與caller-driven publication coordinator為Implemented；這不表示SPEC-011 RCA Runtime orchestration已完成。
 
 ---
 
@@ -959,6 +961,21 @@ Initial、refresh、post-context requirement、attempt／retry continuity、prom
 S1～S6 fixtures、repeated-run、main metrics、Conclusion Calibration、degraded／refresh cases、Full E2E及real-provider／real-RAG team Demo。
 
 建議順序：先完成upstream reconciliation與A；B／C可平行；D依賴A／B／C；E整合A～D與SPEC-008／011；F進行full validation。
+
+## 21.1 Post-Integration Downstream Mapping／Reconciliation Ledger（2026-09-26）
+
+本ledger是additive current mapping，不改寫上述historical planning／decomposition，也不表示PRD-004在當時已指定SPEC number。
+
+| Candidate | Current downstream mapping | Current disposition |
+|---|---|---|
+| Candidate A — RCA Artifact & Persistence | SPEC-012 | Implemented |
+| Candidate B — Incident Evidence Collection & Snapshot | SPEC-013 | Implemented |
+| Candidate C — RAG Knowledge Index & Retrieval | SPEC-014 | Implemented；AC-014-X另依該SPEC記錄為`NOT EXECUTED — PM-DIRECTED SKIP FOR CURRENT CLOSURE`，不是PASS |
+| Candidate D — LLM Generation & Validation | 尚無completed downstream implementation | Pending |
+| Candidate E — RCA Orchestration, Publication & Recovery | 尚無completed downstream implementation；caller-driven publication coordinator不等於RCA Runtime scheduler／recovery authority | Pending |
+| Candidate F — RCA Evaluation & E2E Validation | 尚無completed downstream implementation | Pending |
+
+Integrated develop full regression evidence為`1669 passed, 3 skipped, 0 failed`。此evidence支持completed SPEC的current implementation reconciliation；3個skipped tests不構成AC-014-X、live Google provider或final RCA E2E的PASS evidence。
 
 ---
 

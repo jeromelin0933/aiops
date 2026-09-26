@@ -1,6 +1,6 @@
 # SPEC-008 — Incident Store & Incident Manager Core
 
-## Software Design Specification v1.2
+## Software Design Specification v1.3
 
 ---
 
@@ -10,9 +10,9 @@
 |---|---|
 | Document ID | SPEC-008 |
 | Document Name | Incident Store & Incident Manager Core |
-| Version | 1.2 |
-| Status | Implemented Existing Scope — RCA Integration Boundary Approved / Implementation Pending |
-| Date | 2026-09-18 |
+| Version | 1.3 |
+| Status | Implemented |
+| Date | 2026-09-26 |
 | Requirement Authority | PRD-003 v1.1 Final；PRD-004 v1.0 Approved（RCA integration boundary） |
 | Upstream Event Contract | PRD-002 v1.5 |
 | Upstream Correlation Contract | SPEC-006 v1.0 Implemented |
@@ -26,8 +26,9 @@
 | 1.1 | 2026-09-09 | Narrow additive read-capability refinement：新增public、read-only semantic capability，用於判斷Event是否已有authoritative Incident ownership。不改Incident ownership authority、mutation semantics、persistence topology、PRD requirements或既有D1～D12 behavior。Status維持 Approved — Implementation Pending。 |
 | 1.1 | 2026-09-09 | Implementation completed and PM Final Review PASS；Incident Store／Incident Manager Core、Event ownership、operation replay、Late Strong-Anchor Promotion、audit、public read-only Event→Incident ownership capability、restart／integrity／concurrency behavior及AC-008-A～K均已實作並完成驗證。Status更新為 Implemented；Engineering semantics與approved v1.1 contract一致，無implementation deviation。 |
 | 1.2 | 2026-09-18 | Post-PRD-004 approved additive reconciliation：承諾future authorized RCA relationship mutation、Current publication integrity、same logical publication operation identity、authoritative read與Publication Reconciliation capability。僅補capability boundary；未凍結exact API／DTO／SQL／receipt table／CAS／transaction implementation，未實作RCA integration，且不變更D1～D12或v1.1既有behavior。 |
+| 1.3 | 2026-09-26 | Documentation-only implementation reconciliation：v1.2 additive RCA relationship scope已實作，涵蓋publication request／result、durable receipt、Current replacement、stale／conflict handling、public reads及SPEC-012／SPEC-008 caller-driven publication coordinator；不修改historical rows、D1～D12或Approved AC text。 |
 
-> **Implementation Status Honesty：SPEC-008 v1.1既有Incident Core scope已完成implementation；v1.2新增的RCA integration capability boundary為Approved／Implementation Pending。** 本次文件reconciliation不代表authorized RCA relationship mutation、Current publication或Publication Reconciliation已實作。SPEC-008仍不實作RCA artifact／generation、SPEC-009 lifecycle、SPEC-010 Shadow或SPEC-011 orchestration責任；整體平台亦非Production Ready。
+> **Implementation Status Honesty：SPEC-008 v1.1既有Incident Core scope與v1.2 additive RCA relationship scope均已實作；v1.3只記錄post-integration documentation closure。** Current capability包含RCA publication request／result、durable receipt、authorized Current replacement、stale／conflict handling、public reads及SPEC-012／SPEC-008 caller-driven publication coordinator。該coordinator不是SPEC-011 RCA Runtime scheduler、retry、wake-up或recovery authority；RCA Runtime orchestration、LLM generation、final RCA E2E及Production Ready仍為Pending。
 
 ---
 
@@ -80,6 +81,8 @@ SPEC-008 v1.1在不改寫D1～D12既有behavior的前提下，additive補充一�
 ## 0.4 PRD-004 Additive RCA Integration Capability Boundary
 
 本節是v1.2 approved contract amendment；D1～D12、008-R1／R2及v1.1已實作behavior全部維持不變。RCA integration尚未實作，exact API與persistence design留Candidate A／E。
+
+Historical-phase qualifier：上句記錄v1.2 approval當時的implementation state。Current RCA relationship integration completion由v1.3 documentation-only closure記錄；下列Approved capability requirements保持原文。
 
 SPEC-008必須在future implementation提供下列public semantic capabilities：
 
@@ -1014,6 +1017,8 @@ Assignment發生於Incident建立後；future assignment failure不得rollback�
 - Multiple-current、invalid transition、newer-current與identity conflict均產生deterministic conflict／repair-required outcome，不採last-write-wins或automatic repair。
 - Exact API、DTO、schema、receipt、CAS與transaction implementation均未由v1.2凍結。
 
+Current closure qualifier：本Approved AC normative text保持不變；括號中的`Implementation Pending`描述v1.2 approval phase。上述RCA integration capability現已實作並由v1.3 documentation-only closure記錄。
+
 ---
 
 # 18. Required Test Layers
@@ -1032,6 +1037,8 @@ Implementation acceptance至少需要：
 10. Full repository regression：`python -m pytest -q`或Repository正式equivalent command。
 11. Event ownership read tests：existing owner、clean absence、corrupt／dangling／contradictory state、restart durability、read-only surface及no raw persistence leakage。
 12. v1.2 RCA integration future tests：authorized relationship mutation、same-publication replay、newer/stale protection、authoritative Current read、cross-store reconciliation handoff與deterministic conflict；本次reconciliation不宣稱此layer已實作或通過。
+
+Current closure qualifier：第12項保留v1.2 approval phase的test-planning wording。Current integrated develop full regression evidence為`1669 passed, 3 skipped, 0 failed`；skipped tests不作任何額外PASS推論。
 
 建議使用parameterized及controlled concurrency／crash tests。不得以固定test count取代contract coverage；coverage優先於數量。
 
@@ -1059,15 +1066,17 @@ Implementation acceptance至少需要：
 
 Future work可包含production persistence adapter、governed schema migration、administrative repair tooling、retention／archive、v1.2 RCA relationship capability implementation及SPEC-009～011 integration，但不得削弱本文件的ownership、idempotency、audit、atomicity與Fail-Closed invariants。
 
+Historical-phase qualifier：上述future-work清單保留v1.2 approval時的狀態；其中RCA relationship capability implementation目前已完成。SPEC-011 RCA Runtime orchestration及其他列示future work不因本closure視為完成。
+
 ---
 
 # 20. Existing Implementation Closure／Additive Contract Governance
 
-Implementation Owner為 **富裕**。SPEC-008 v1.1 Incident Core implementation、public read-only Event→Incident ownership capability及AC-008-A～K已完成，並通過PM Final Review。v1.2只新增Approved RCA Integration Boundary；AC-008-L及相應implementation／verification仍Pending。
+Implementation Owner為 **富裕**。SPEC-008 v1.1 Incident Core implementation、public read-only Event→Incident ownership capability及AC-008-A～K已完成，並通過PM Final Review。v1.2新增的Approved RCA Integration Boundary亦已實作；historical v1.2 approval wording仍保留其當時phase meaning。
 
 Contract freeze治理：
 
-> SPEC-008 v1.1既有behavior持續frozen且Implemented；v1.2 additive boundary已由PM核准但尚未實作。任何後續semantic requirement／Engineering Contract change，必須先停止受影響implementation、保存evidence並交由PM審核。Implementation不得靜默反向改寫SPEC。
+> SPEC-008 v1.1既有behavior持續frozen且Implemented；v1.2 additive boundary已由PM核准，current implementation completion由v1.3 documentation-only closure記錄。任何後續semantic requirement／Engineering Contract change，必須先停止受影響implementation、保存evidence並交由PM審核。Implementation不得靜默反向改寫SPEC。
 
 Post-implementation governance持續要求：
 
@@ -1097,6 +1106,12 @@ Post-implementation governance持續要求：
 | Implementation deviations | NONE |
 
 SPEC-010可消費本SPEC提供的public read-only Event→Incident ownership capability；global Incident＋Shadow sequencing、Runtime Orchestration及full integration仍由SPEC-011承接，Cross-SPEC classification維持`REFINE DOWNSTREAM`。本次closure未新增competition instrumentation或competition contract。
+
+## 20.2 RCA Relationship Additive Scope Closure（Non-normative）
+
+Current repository已實作RCA publication request／result、durable publication receipt、authorized Current replacement、older／superseded rejection、identity conflict handling與authoritative public reads。SPEC-012／SPEC-008 publication coordinator只在caller明確呼叫時協調兩個domain的public semantic APIs；它不排程工作、不擁有retry／wake-up／startup recovery，也不取代仍Pending的SPEC-011 RCA Runtime orchestration。
+
+Human提供的integrated develop full regression為`1669 passed, 3 skipped, 0 failed`（63.11s），develop integration baseline為`b034921eab7d0fa17754eea902c9e12bc2932052`。此evidence支持RCA relationship additive scope current status `Implemented`，不證明LLM generation或final RCA E2E。
 
 ---
 

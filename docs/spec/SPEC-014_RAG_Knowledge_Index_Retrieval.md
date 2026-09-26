@@ -1,6 +1,6 @@
 # SPEC-014 — RAG Knowledge Index & Retrieval
 
-## Software Design Specification v1.1
+## Software Design Specification v1.2
 
 ---
 
@@ -10,8 +10,8 @@
 |---|---|
 | Document ID | SPEC-014 |
 | Document Name | RAG Knowledge Index & Retrieval |
-| Version | 1.1 |
-| Status | Approved — Implementation In Progress |
+| Version | 1.2 |
+| Status | Implemented |
 | Approval Date | 2026-09-26 |
 | Requirement Authority | PRD-004 v1.0 Approved |
 | Runtime Authority | SPEC-011 v1.1 |
@@ -26,12 +26,13 @@
 | 1.0 | 2026-09-25 | Approved — Implementation Pending | Phase 3 Re-review PASS；D1～D4 Engineering Contract frozen；F-014-01～F-014-06全部closed；正式核准進入implementation planning，implementation尚未開始。 |
 | 1.1 | 2026-09-26 | Draft — Governance Amendment Review Pending | Additive formalize Production Knowledge Governance G1～G4；保留v1.0 Approved engineering baseline及Frozen D1～D4。Slices 1～5已完成並通過各slice audit；Slice 6因production corpus governance gap暫停。本amendment尚待read-only semantic review。 |
 | 1.1 | 2026-09-26 | Approved — Implementation In Progress | Production Knowledge Governance Amendment核准；G1-A～G4-A正式納入SPEC-014 contract，Semantic Review／Re-review PASS。v1.0 historical approval及Slices 1～5 implementation evidence維持有效；Slice 6仍pending Scope Freeze re-entry／implementation。PRD semantics及Frozen D1～D4均未改變。 |
+| 1.2 | 2026-09-26 | Implemented — Documentation-only Closure | Post-integration reconciliation：記錄approved six-document corpus、governed manifest、Google embedding／Chroma adapters、local lifecycle CLI、Knowledge Snapshot及public provenance已實作。AC-014-X未執行，依PM指示以explicit verification exception完成current repository closure；不修改Approved AC或Frozen D1～D4／G1～G4。 |
 
 ### Status Honesty
 
 > **Draft ≠ Approved；Approved ≠ Implemented；Slice implementation ≠ RCA E2E complete。**
 
-**SPEC-014 v1.0 Engineering Contract維持Approved historical baseline；v1.1 Production Knowledge Governance narrow amendment已核准，整體狀態為Implementation In Progress。** Slices 1～5 implementation已完成並通過各slice audit，涵蓋governed Knowledge foundation、durable authority、immutable build lifecycle、frozen retrieval resolution及Knowledge Snapshot authority。Slice 6因缺少approved non-empty production corpus及governed manifest而暫停，仍pending Scope Freeze re-entry／implementation。本v1.1 approval不表示Slice 6已Implemented、production Corpus／manifest或六份SOP／runbook revisions已建立、real Google embedding／Chroma integration或team-local rebuild已完成、RCA E2E complete、SPEC-014 Fully Implemented或Production Ready。
+**SPEC-014 v1.0 Engineering Contract與v1.1 Production Knowledge Governance amendment維持historical authority；v1.2為documentation-only closure，Current Status為`Implemented`。** Repository現已包含approved six-document corpus、governed manifest、Google `text-embedding-004` adapter、Chroma index adapter、build／validate／activate／retrieve CLI、Knowledge Snapshot與public provenance。AC-014-X未執行，依PM指示作current closure的explicit verification exception；這不是PASS，也沒有four-member evidence。Default regression亦不構成live Google provider或real-RAG PASS。此closure不表示Candidate D／E／F、LLM generation、final RCA E2E或Production Ready。
 
 ---
 
@@ -810,6 +811,8 @@ Public reads必須區分not found、unavailable、invalid及repair-required；�
 
 Current baseline沒有active SPEC-012／013，故本SPEC不猜測其concrete type。Candidate C只接受及保存帶type discriminator的opaque references，不解析或擁有其domain truth。
 
+Historical-phase qualifier：上句保留本section核准時的baseline事實。Current repository已有Implemented的SPEC-012／013；Candidate C仍只保存opaque cross-domain references，ownership boundary不變。
+
 Future expected semantics：
 
 - Candidate A保存exact `knowledge_snapshot_id` reference，但RCA persistence仍由Candidate A擁有；
@@ -975,6 +978,15 @@ Candidate C能區分READY、NOT_INITIALIZED、UNAVAILABLE、MISMATCH及REPAIR_RE
 
 全部四名team members在符合approved setup／config contract的各自環境中，皆可由同一repository authority所含的approved source revisions、approved governed manifest、required non-secret semantic configuration及rebuild tooling，重建compatible Knowledge index、detect drift／mismatch、validate staged build並執行explicit governed activation path，不複製任何成員的generated Chroma DB。此AC只驗證Candidate C Knowledge capability reproducibility；完整real-provider／real-RAG RCA E2E由Candidate F／final integration驗證，不降低本four-member rebuild gate。
 
+### AC-014-X Current Closure Disposition（Non-normative）
+
+- Status: **NOT EXECUTED**
+- Disposition: **PM-DIRECTED SKIP FOR CURRENT CLOSURE**
+- AC-014-X was not executed；this is **NOT PASS**。
+- No four-member evidence exists。
+- Approved AC-014-X remains normative and is neither modified nor deleted by this closure note。
+- PM authorized current repository closure under this explicit verification exception。
+
 ## AC-014-Y — Public Semantic Reads
 
 Activation、operation、Snapshot及provenance reads可deterministic resolve；not-found、unavailable、invalid及repair-required有不同typed result，private vector-store reads不構成public contract。
@@ -1073,14 +1085,14 @@ Default regression不得依賴live provider。Fake adapter evidence不得冒充r
 
 Repository reality目前：
 
-- Slices 1～5 implementation已完成並通過各slice audit：governed Knowledge foundation、durable authority、immutable build lifecycle、frozen retrieval resolution及Knowledge Snapshot authority；
-- 仍沒有approved non-empty production SOP／runbook corpus或approved governed production manifest；
-- 仍沒有production Knowledge config、rebuild command、real Google embedding／Chroma dependency及adapter wiring；
-- Slice 6因production corpus governance gap暫停；
-- current tree沒有active SPEC-012／013；
-- README及v1.0 historical status文字尚未reconcile Slice 1～5 reality，但不構成Knowledge authority。
+- approved six-document production corpus及governed manifest已存在；
+- production Knowledge config與team-local CLI已支援admit、build／rebuild、validate、inspect、activate及retrieve；
+- Google `text-embedding-004` adapter與Chroma index adapter已接線；adapter存在不等於live-provider PASS；
+- governed manifest admission、deterministic chunking、immutable staged build、validation、single activation／LKG、retrieval resolution、Knowledge Snapshot、public provenance／semantic reads、integrity及recovery已實作；
+- SPEC-012／013皆為active implemented downstream contracts；
+- integrated develop full regression為`1669 passed, 3 skipped, 0 failed`（63.11s），develop integration baseline為`b034921eab7d0fa17754eea902c9e12bc2932052`。
 
-因此v1.0及v1.1 Approved均不表示完整Candidate C production capability已完成，SPEC-014目前為Implementation In Progress。只有actual source revisions及release取得human governance approval、governed manifest存在，且Slice 6 code／tests／dependencies／config／documentation完成相應verification後，才能聲稱production Knowledge path具備其核准能力。
+因此SPEC-014 current Status為`Implemented`。此status只涵蓋Candidate C核准範圍；AC-014-X為`NOT EXECUTED — PM-DIRECTED SKIP FOR CURRENT CLOSURE`且不是PASS。3個skipped tests不提供four-member、live Google provider、real-RAG或final RCA E2E evidence。
 
 ---
 
@@ -1103,5 +1115,7 @@ Repository reality目前：
 - [x] Phase 3 Re-review PASS；Engineering Contract approval完成。
 - [x] Slices 1～5 implementation完成並通過各slice audit。
 - [x] v1.1 Production Knowledge Governance amendment之Semantic Review／Re-review PASS，G1-A～G4-A已Frozen並完成approval。
-- [ ] Actual v1 source revisions、six-category coverage及governed manifest尚未核准／建立。
-- [ ] Slice 6因production corpus governance gap暫停，尚未Implemented。
+- [x] Actual v1 source revisions、six-category coverage及governed manifest已建立並納入current implemented setup。
+- [x] Slice 6 production corpus、adapter wiring及local lifecycle workflow已實作。
+- [ ] AC-014-X未執行；`NOT EXECUTED — PM-DIRECTED SKIP FOR CURRENT CLOSURE`，不是PASS，且沒有four-member evidence。
+- [ ] Live Google provider／real-provider validation未由本closure宣稱PASS；只有actual live execution evidence可支持該聲明。

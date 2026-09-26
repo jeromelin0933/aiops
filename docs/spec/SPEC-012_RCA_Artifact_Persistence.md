@@ -1,6 +1,6 @@
 # SPEC-012 — RCA Artifact & Persistence
 
-## Engineering Specification v1.0
+## Engineering Specification v1.1
 
 ---
 
@@ -10,8 +10,8 @@
 |---|---|
 | Document ID | SPEC-012 |
 | Document Name | RCA Artifact & Persistence |
-| Version | 1.0 |
-| Status | Approved — Implementation Pending |
+| Version | 1.1 |
+| Status | Implemented |
 | Approval Date | 2026-09-20 |
 | Requirement Authority | PRD-004 v1.0 Approved |
 | Related Product Authorities | PRD-001 v3.5；PRD-003 v1.1 Final |
@@ -25,12 +25,13 @@
 |---|---|---|---|
 | 0.1 | 2026-09-19 | Draft | Phase 2 initial Engineering Contract draft；formalize Candidate A authority、D1～D11 Frozen Decisions及repository compatibility constraints。 |
 | 1.0 | 2026-09-20 | Approved — Implementation Pending | Phase 3 semantic review、Phase 4 authorized narrow revision及Phase 3 re-review completed；F-001／F-002 closed，D1～D11 preserved。Engineering Contract approved as implementation baseline；implementation has not started。 |
+| 1.1 | 2026-09-26 | Implemented — Documentation-only Closure | Post-integration reconciliation：記錄Candidate A production implementation、SPEC-008 publication integration及integrated develop regression evidence；不修改v1.0 Approved contract、D1～D11或historical approval row。 |
 
 ### Status Honesty
 
 > **Draft ≠ Approved；Approved ≠ Implemented。**
 
-本文件是 Candidate A v1.0 approved Engineering Contract及implementation baseline；production implementation仍為Pending且尚未開始。本approval不代表RCA Store、RCA production pipeline、SPEC-008 RCA relationship mutation、SPEC-011 RCA Runtime integration或RCA E2E已實作，也不代表整體平台Production Ready。
+本文件的normative baseline仍是Candidate A v1.0 Approved Engineering Contract；v1.1只記錄current implementation closure。Repository現已實作RCA Aggregate／Attempt／Try／Version／immutable Artifact persistence、Current／History／Freshness、durable publication receipt、public semantic reads、integrity及recovery capability，並透過SPEC-012／SPEC-008 caller-driven publication coordinator完成authorized relationship publication。此closure不表示Candidate D／E／F、LLM generation、SPEC-011 RCA Runtime orchestration、final RCA E2E或Production Ready已完成。
 
 ---
 
@@ -579,13 +580,13 @@ NONE。
 
 # 16. Implementation Status Honesty and Approval Gate
 
-Repository baseline目前已有：SPEC-008 Incident Core與其既有SQLite store、SPEC-011既有Runtime framework、domain-local receipt／replay／integrity模式。SPEC-008 v1.2 RCA relationship capability與SPEC-011 v1.1 RCA Runtime accommodation均明示Implementation Pending。Repository目前沒有Candidate A RCA Store、Aggregate／Attempt／Try／Version／Artifact persistence或RCA publication pipeline。
+Historical approval baseline當時只有SPEC-008 Incident Core、SPEC-011既有Runtime framework及domain-local receipt／replay／integrity模式；該phase的implementation-pending陳述保留其歷史意義。Current repository reality已包含Candidate A RCA Store與Aggregate／Attempt／Try／Version／Artifact persistence、Current／History／Freshness、publication receipt、authoritative reads及recovery；SPEC-008的RCA relationship mutation／read capability與caller-driven publication coordinator亦已實作。
 
 Phase 3 semantic review與re-review均已完成，F-001／F-002已關閉，D1～D11持續Frozen。本文件governance state為：
 
 ```text
-Version: 1.0
-Status: Approved — Implementation Pending
+Version: 1.1
+Status: Implemented
 ```
 
-SPEC-012 v1.0可作為後續Implementation Handoff／Planning的正式baseline；Candidate A production implementation尚未開始。在後續implementation與verification完成前，不得宣稱RCA capability存在、RCA E2E完成或Production Ready。
+SPEC-012 v1.0持續作為Approved normative baseline；v1.1為documentation-only implementation closure。Human提供的integrated develop full regression結果為`1669 passed, 3 skipped, 0 failed`（63.11s），且develop integration baseline為`b034921eab7d0fa17754eea902c9e12bc2932052`。此evidence支持Candidate A current status `Implemented`；不證明full RCA workflow、Candidate D／E／F、final RCA E2E或Production Ready。
