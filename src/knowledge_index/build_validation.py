@@ -7,6 +7,7 @@ import hashlib
 from .contracts import (
     ArtifactTrust,
     BuildDocumentProvenance,
+    BuildManifestProvenance,
     BuildFailureCode,
     BuildIdentityInput,
     BuildOperationKey,
@@ -48,9 +49,23 @@ def derive_chunk_metadata_commitment(
     ordinal: int,
     content_hash: str,
 ) -> str:
+    document: object = provenance
+    if not provenance.has_governance_authority:
+        # Preserve the exact pre-patch commitment input for legacy builds.
+        document = {
+            "document_identity": provenance.document_identity,
+            "document_version_identity": provenance.document_version_identity,
+            "source_path": provenance.source_path,
+            "content_hash": provenance.content_hash,
+            "approval_reference": provenance.approval_reference,
+            "source_classification": provenance.source_classification,
+            "outbound_eligible": provenance.outbound_eligible,
+            "content_type": provenance.content_type,
+            "metadata": provenance.metadata,
+        }
     return _commitment("KNOWLEDGE_CHUNK_PROVENANCE", {
         "manifest_commitment": manifest_commitment,
-        "document": provenance,
+        "document": document,
         "chunk_identity": chunk_identity,
         "section_identity": section_identity,
         "ordinal": ordinal,
@@ -64,14 +79,18 @@ def derive_build_lineage_commitment(
     chunks: tuple[object, ...],
     profile_reference: OpaqueExternalReference,
     capability_identity: str,
+    manifest_provenance: BuildManifestProvenance | None = None,
 ) -> str:
-    return _commitment("KNOWLEDGE_BUILD_LINEAGE", {
+    value = {
         "build_identity": build_identity,
         "manifest_commitment": manifest_commitment,
         "chunks": chunks,
         "profile_reference": profile_reference,
         "capability_identity": capability_identity,
-    })
+    }
+    if manifest_provenance is not None:
+        value["manifest_provenance"] = manifest_provenance
+    return _commitment("KNOWLEDGE_BUILD_LINEAGE", value)
 
 
 def derive_staged_build_commitment(
@@ -270,6 +289,7 @@ def validate_staged_build(
             staged.chunks,
             staged.profile_reference,
             staged.capability_identity,
+            staged.manifest_provenance,
         ) != staged.lineage_commitment
         or derive_staged_build_commitment(
             staged.lineage_commitment, staged.artifact, staged.build_input

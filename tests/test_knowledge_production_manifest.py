@@ -26,6 +26,18 @@ def copy_sources(destination: Path) -> None:
             (destination / source.name).write_bytes(source.read_bytes())
 
 
+def admit_with_first_content(tmp_path: Path, content: bytes):
+    copy_sources(tmp_path)
+    raw = raw_manifest()
+    target = tmp_path / raw["documents"][0]["source_path"]
+    target.write_bytes(content)
+    raw["documents"][0]["expected_content_hash"] = hashlib.sha256(content).hexdigest()
+    return admit_manifest(
+        raw, source_root=tmp_path,
+        candidate_sources=sorted(path.name for path in tmp_path.iterdir()),
+    )
+
+
 def test_approved_production_release_and_git_blob_bytes_admit() -> None:
     result = admit_production_manifest("configs/knowledge_manifest.json", repository_root=ROOT)
     assert result.accepted
@@ -49,6 +61,25 @@ def test_raw_byte_hash_mismatch_is_not_normalized(tmp_path: Path) -> None:
     target.write_bytes(target.read_bytes().replace(b"\n", b"\r\n", 1))
     result = admit_manifest(raw_manifest(), source_root=tmp_path, candidate_sources=sorted(p.name for p in tmp_path.iterdir()))
     assert AdmissionFailureCode.CONTENT_HASH_MISMATCH in codes(result)
+
+
+def test_production_contentfulness_requires_body_inside_an_h2_boundary(tmp_path: Path) -> None:
+    assert admit_with_first_content(tmp_path / "meaningful", b"## Procedure\nrun step one\n").accepted
+    for name, content in (
+        ("h2-only", b"## Procedure\n"),
+        ("whitespace", b"## Procedure\n \t\n"),
+        ("multiple-empty", b"## One\n\n## Two\n### Subheading\n"),
+    ):
+        result = admit_with_first_content(tmp_path / name, content)
+        assert AdmissionFailureCode.CONTENT_NOT_MEANINGFUL in codes(result)
+
+
+def test_contentfulness_is_deterministic_for_identical_bytes(tmp_path: Path) -> None:
+    content = b"## Procedure\n\n### Detail\nperform the governed action\n"
+    first = admit_with_first_content(tmp_path / "first", content)
+    second = admit_with_first_content(tmp_path / "second", content)
+    assert first.accepted is second.accepted is True
+    assert first.findings == second.findings
 
 
 def test_extra_missing_duplicate_and_unapproved_sources_fail_closed(tmp_path: Path) -> None:

@@ -2,6 +2,8 @@ from dataclasses import replace
 
 from knowledge_index import (
     ApplicabilityRuleIdentity,
+    DocumentStatus,
+    RetrievalApplicability,
     RetrievalEvaluationDisposition,
     RetrievalRejectionReason,
     RawRetrievalBatch,
@@ -10,6 +12,7 @@ from knowledge_index import (
     SqliteKnowledgeStore,
     build_snapshot,
     canonical_serialize,
+    derive_sop_backed_eligibility,
     resolve_retrieval,
 )
 from _knowledge_retrieval_testkit import candidates_for, profile, request, stage_activate
@@ -33,6 +36,39 @@ def test_match_and_no_match_are_deterministic(tmp_path) -> None:
         assert no_match.resolution is RetrievalResolution.NO_MATCH
         assert no_match.knowledge_gap is True
         assert no_match.evaluations and no_match.evaluations[0].included is False
+
+
+def test_frozen_governance_controls_sop_authority_and_other_is_contextual(tmp_path) -> None:
+    with SqliteKnowledgeStore(tmp_path / "knowledge.sqlite3") as store:
+        staged, _ = stage_activate(store, tmp_path / "one", "one")
+        legacy = staged.document_provenance[0]
+        sop = replace(
+            legacy, knowledge_type="SOP", guidance_authority="SOP_BACKED_ELIGIBLE",
+            document_status=DocumentStatus.ACTIVE, approval_state="APPROVED",
+            production_eligible=True,
+        )
+        runbook = replace(sop, knowledge_type="RUNBOOK")
+        other = replace(
+            sop, knowledge_type="OTHER_APPROVED_OPERATIONAL_REFERENCE",
+            guidance_authority="CONTEXTUAL_ONLY",
+        )
+        assert derive_sop_backed_eligibility(sop, RetrievalApplicability.DIRECT)
+        assert derive_sop_backed_eligibility(runbook, RetrievalApplicability.PARTIAL)
+        assert not derive_sop_backed_eligibility(other, RetrievalApplicability.DIRECT)
+        assert not derive_sop_backed_eligibility(legacy, RetrievalApplicability.DIRECT)
+        assert not derive_sop_backed_eligibility(sop, RetrievalApplicability.NONE)
+
+        frozen = store.freeze_retrieval_operation(request())
+        contextual_stage = replace(staged, document_provenance=(other,))
+        result = resolve_retrieval(frozen, contextual_stage, RawRetrievalBatch(
+            staged.build_identity, staged.artifact.artifact_commitment,
+            candidates_for(staged, 1.0),
+        ))
+        assert result.resolution is RetrievalResolution.MATCH
+        assert result.candidates[0].applicability is RetrievalApplicability.CONTEXTUAL
+        assert not derive_sop_backed_eligibility(
+            other, result.candidates[0].applicability
+        )
 
 
 def test_orphan_candidate_is_repair_required_not_no_match(tmp_path) -> None:

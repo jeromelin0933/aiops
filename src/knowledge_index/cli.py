@@ -83,7 +83,7 @@ def _identity_input(config: KnowledgeIndexConfig, admission, chunks) -> BuildIde
         "chromadb",
         config.index_schema_identity,
         "spec014-knowledge-metadata-v1",
-        "spec014-build-contract-v1",
+        "spec014-build-contract-v2",
     )
 
 
@@ -108,7 +108,7 @@ def _run(args: argparse.Namespace, config: KnowledgeIndexConfig) -> object:
         with _store(config) as store:
             service = KnowledgeBuildService(store, _provider(config, live=True), _index(config))
             return service.stage(
-                operation_key=BuildOperationKey("rebuild-" + admission.manifest_commitment[-24:]),
+                operation_key=BuildOperationKey("rebuild-v2-" + admission.manifest_commitment[-24:]),
                 raw_manifest=_raw_manifest(config), source_root=source_root, chunks=chunks,
                 identity_input=identity_input, limits=config.limits,
                 required_capability_identity=config.capability.capability_identity,

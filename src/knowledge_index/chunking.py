@@ -86,6 +86,11 @@ def plan_chunks(
             document.outbound_eligible,
             document.content_type,
             document.metadata,
+            document.knowledge_type,
+            document.guidance_authority,
+            document.status,
+            document.approval_state,
+            document.production_eligible,
         )
         for section_index, match in enumerate(matches):
             end = matches[section_index + 1].start() if section_index + 1 < len(matches) else len(text)

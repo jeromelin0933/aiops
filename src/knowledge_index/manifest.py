@@ -97,6 +97,21 @@ _PRODUCTION_DOCUMENTS = frozenset({
     "http_429_rate_limit_qps_spike_handling.md",
 })
 _H2 = re.compile(r"(?m)^## [^\r\n]+\s*$")
+_MARKDOWN_HEADING_LINE = re.compile(r"^[ \t]{0,3}#{1,6}(?:[ \t]+|$)")
+
+
+def _has_meaningful_h2_body(content: str) -> bool:
+    """Require a non-empty, non-heading line inside one canonical H2 boundary."""
+    matches = tuple(_H2.finditer(content))
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(content)
+        body = content[match.end():end]
+        if any(
+            line.strip() and _MARKDOWN_HEADING_LINE.match(line) is None
+            for line in body.splitlines()
+        ):
+            return True
+    return False
 
 
 def _fact(code: AdmissionFailureCode, field: str, detail: str) -> AdmissionFailureFact:
@@ -202,6 +217,13 @@ def _parse_document_v11(value: object, source_revision: str) -> ManifestDocument
     expected_reference = f"{source_revision}:docs/knowledge/{document.source_path}"
     if document.committed_source_reference != expected_reference:
         raise KnowledgeValidationError("committed source reference is inconsistent")
+    authorized_guidance = (
+        document.knowledge_type in {"SOP", "RUNBOOK"}
+        and document.guidance_authority == "SOP_BACKED_ELIGIBLE"
+    ) or (
+        document.knowledge_type == "OTHER_APPROVED_OPERATIONAL_REFERENCE"
+        and document.guidance_authority == "CONTEXTUAL_ONLY"
+    )
     if (
         document.approval_state != "APPROVED" or document.status is not DocumentStatus.ACTIVE
         or not document.production_eligible
@@ -209,8 +231,7 @@ def _parse_document_v11(value: object, source_revision: str) -> ManifestDocument
         or document.security_classification != "NON_SECRET_SYNTHETIC_MOCK_OPERATIONAL_KNOWLEDGE"
         or not document.outbound_eligible
         or document.outbound_scope != "SPEC014_APPROVED_EMBEDDING_PROVIDER_ONLY"
-        or document.knowledge_type not in {"SOP", "RUNBOOK"}
-        or document.guidance_authority != "SOP_BACKED_ELIGIBLE"
+        or not authorized_guidance
     ):
         raise KnowledgeValidationError("document governance decision is not production eligible")
     return document
@@ -419,7 +440,7 @@ def admit_manifest(
         actual_hash = hashlib.sha256(content_bytes).hexdigest()
         if actual_hash != document.expected_content_hash:
             findings.append(_fact(AdmissionFailureCode.CONTENT_HASH_MISMATCH, "document.expected_content_hash", "governed source content does not match its commitment"))
-        if schema_version == "1.1" and (not content.strip() or _H2.search(content) is None):
+        if schema_version == "1.1" and not _has_meaningful_h2_body(content):
             findings.append(_fact(AdmissionFailureCode.CONTENT_NOT_MEANINGFUL, "document.content", "governed source has no canonical Knowledge section"))
         outbound_finding = preflight_outbound_content(content)
         if outbound_finding is not None:

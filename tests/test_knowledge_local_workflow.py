@@ -9,9 +9,10 @@ pytest.importorskip("chromadb")
 from knowledge_index import (
     ActivationOperationKey, BuildActivationRequest, BuildIdentityInput, BuildOperationKey,
     CanonicalKnowledgeQuery, KnowledgeBuildService, KnowledgeLocalReadiness,
-    KnowledgeRetrievalService, KnowledgeSnapshotService, OpaqueExternalReference,
+    KnowledgeReadStatus, KnowledgeRetrievalService, KnowledgeSnapshotService, OpaqueExternalReference,
     OpaqueReferenceType, QueryFilter, RetrievalOperationKey, RetrievalOperationRequest,
-    SqliteKnowledgeStore, admit_production_manifest, load_knowledge_config, plan_chunks,
+    RetrievalApplicability, SqliteKnowledgeStore, admit_production_manifest,
+    load_knowledge_config, plan_chunks,
 )
 from knowledge_index.chroma_index_adapter import ChromaIndexAdapter
 from knowledge_index.cli import build_parser
@@ -35,7 +36,7 @@ def test_fake_provider_team_local_workflow_closes_all_candidate_c_steps(tmp_path
         config.chunking.profile_identity, "1.0", "google", "text-embedding-004",
         config.capability.embedding_profile_identity, 768, config.normalization_semantics,
         "chromadb", config.index_schema_identity, "spec014-knowledge-metadata-v1",
-        "spec014-build-contract-v1",
+        "spec014-build-contract-v2",
     )
     raw = json.loads((ROOT / config.manifest_path).read_text(encoding="utf-8"))
     provider = GoogleEmbeddingAdapter(SimpleNamespace(models=FakeModels()), config.capability)
@@ -73,6 +74,37 @@ def test_fake_provider_team_local_workflow_closes_all_candidate_c_steps(tmp_path
         ).resolve(request, config.limits)
         assert outcome.snapshot is not None
         assert outcome.snapshot.frozen_build_identity == staged.record.build_identity
+        provenance = KnowledgeSnapshotService(
+            store, KnowledgeRetrievalService(store, provider, index)
+        ).read_provenance(outcome.snapshot.snapshot_key)
+        assert provenance.status.name == "FOUND"
+        assert provenance.value.corpus_identity == admission.manifest.corpus_id
+        assert provenance.value.manifest_identity == admission.manifest.manifest_id
+        assert provenance.value.embedding_provider == "google"
+        assert provenance.value.embedding_dimension == 768
+        assert provenance.value.index_engine == "chromadb"
+        assert provenance.value.query_filters == filters
+        assert provenance.value.chunks[0].knowledge_type in {"SOP", "RUNBOOK"}
+        assert all(
+            item.sop_backed_eligible
+            is (item.applicability is not RetrievalApplicability.NONE)
+            for item in provenance.value.chunks
+        )
+        expected_provenance = provenance.value
+        snapshot_key = outcome.snapshot.snapshot_key
+        builds.activate(BuildActivationRequest(
+            staged.record.build_identity, ActivationOperationKey("fake-later-activate"), 1
+        ))
+        assert KnowledgeSnapshotService(
+            store, KnowledgeRetrievalService(store, provider, index)
+        ).read_provenance(snapshot_key).value == expected_provenance
+
+    with SqliteKnowledgeStore(tmp_path / "knowledge.sqlite3") as reopened:
+        replay = KnowledgeSnapshotService(
+            reopened, KnowledgeRetrievalService(reopened, provider, index)
+        ).read_provenance(snapshot_key)
+        assert replay.status is KnowledgeReadStatus.FOUND
+        assert replay.value == expected_provenance
 
 
 def test_thin_cli_exposes_only_the_frozen_team_local_workflow_commands() -> None:

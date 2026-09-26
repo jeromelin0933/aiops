@@ -9,7 +9,10 @@ from typing import TYPE_CHECKING
 from .contracts import (
     DurableRetrievalCompletion,
     FrozenRetrievalOperation,
+    KnowledgeCorruptionFinding,
     KnowledgePersistence,
+    KnowledgeProvenanceChunk,
+    KnowledgeProvenanceProjection,
     KnowledgeReadResult,
     KnowledgeReadStatus,
     KnowledgeResolutionOutcome,
@@ -35,6 +38,7 @@ from .contracts import (
 )
 from .identity import canonical_serialize
 from .retrieval_resolution import resolve_retrieval
+from .retrieval_resolution import derive_sop_backed_eligibility
 
 if TYPE_CHECKING:
     from .retrieval import KnowledgeRetrievalService
@@ -79,7 +83,23 @@ def snapshot_semantic_payload(snapshot: KnowledgeSnapshotEnvelope) -> dict[str, 
         "capability_identity": snapshot.capability_identity,
         "external_references": snapshot.external_references,
         "creation_metadata": snapshot.creation_metadata,
-        "chunks": snapshot.chunks,
+        "chunks": (
+            snapshot.chunks
+            if snapshot.schema_version == "1.1"
+            else tuple({
+                "chunk_identity": item.chunk_identity,
+                "document_identity": item.document_identity,
+                "document_version_identity": item.document_version_identity,
+                "section_identity": item.section_identity,
+                "content_commitment": item.content_commitment,
+                "metadata_commitment": item.metadata_commitment,
+                "score": item.score,
+                "applicability": item.applicability,
+                "content": item.content,
+                "metadata": item.metadata,
+                "content_truncated": item.content_truncated,
+            } for item in snapshot.chunks)
+        ),
         "evaluations": snapshot.evaluations,
         "failures": snapshot.failures,
         "finalization_key": snapshot.finalization_key,
@@ -246,6 +266,9 @@ def _snapshot_chunks(
     result: RetrievalResult, staged: StagedBuildRecord
 ) -> tuple[KnowledgeSnapshotChunk, ...]:
     chunks = {item.chunk_identity: item for item in staged.chunks}
+    documents = {
+        item.document_version_identity: item for item in staged.document_provenance
+    }
     output: list[KnowledgeSnapshotChunk] = []
     for candidate in result.candidates:
         source = chunks.get(candidate.chunk_identity)
@@ -254,6 +277,9 @@ def _snapshot_chunks(
             or source.document_version_identity != candidate.document_version_identity
         ):
             raise ValueError("retrieval candidate does not resolve to frozen build content")
+        document = documents.get(candidate.document_version_identity)
+        if document is None:
+            raise ValueError("retrieval candidate lacks frozen document provenance")
         output.append(KnowledgeSnapshotChunk(
             candidate.chunk_identity,
             candidate.document_identity,
@@ -266,6 +292,12 @@ def _snapshot_chunks(
             candidate.content,
             candidate.metadata,
             candidate.content_truncated,
+            document.knowledge_type,
+            document.guidance_authority,
+            (
+                derive_sop_backed_eligibility(document, candidate.applicability)
+                if document.has_governance_authority else None
+            ),
         ))
     return tuple(output)
 
@@ -313,7 +345,7 @@ def build_snapshot(
         frozen.frozen_build_identity,
         "0" * 64,
         frozen.lineage_commitment,
-        "1.0",
+        "1.1" if staged.manifest_provenance is not None else "1.0",
         result.resolution,
         SnapshotSourceStatus.UNAVAILABLE if unavailable else SnapshotSourceStatus.AVAILABLE,
         result.knowledge_gap,
@@ -407,6 +439,15 @@ def validate_snapshot_against_authority(
             or item.metadata_commitment != source.metadata_commitment
             or document is None
             or item.metadata != document.metadata
+            or (
+                snapshot.schema_version == "1.1"
+                and (
+                    item.knowledge_type != document.knowledge_type
+                    or item.guidance_authority != document.guidance_authority
+                    or item.sop_backed_eligible
+                    is not derive_sop_backed_eligibility(document, item.applicability)
+                )
+            )
             or item.content != expected_content
             or item.content_truncated is not expected_truncated
         ):
@@ -555,7 +596,159 @@ class KnowledgeSnapshotService:
         return self._store.get_snapshot(key)  # type: ignore[arg-type]
 
     def read_provenance(self, key: object) -> KnowledgeReadResult:
-        return self.read_snapshot(key)
+        try:
+            snapshot_read = self.read_snapshot(key)
+        except Exception:
+            return self._provenance_unavailable(key)
+        if snapshot_read.status is not KnowledgeReadStatus.FOUND:
+            return snapshot_read
+        snapshot = snapshot_read.value
+        assert isinstance(snapshot, KnowledgeSnapshotEnvelope)
+        if snapshot.schema_version != "1.1":
+            return self._provenance_repair(
+                snapshot.snapshot_key.value,
+                "legacy Snapshot did not durably preserve complete provenance facts",
+            )
+        try:
+            staged_read = self._store.get_staged_build(snapshot.frozen_build_identity)
+            frozen_read = self._store.get_frozen_retrieval_operation(snapshot.operation_key)
+        except Exception:
+            return self._provenance_unavailable(snapshot.snapshot_key)
+        if (
+            staged_read.status is KnowledgeReadStatus.UNAVAILABLE
+            or frozen_read.status is KnowledgeReadStatus.UNAVAILABLE
+        ):
+            return self._provenance_unavailable(snapshot.snapshot_key)
+        if (
+            staged_read.status is not KnowledgeReadStatus.FOUND
+            or frozen_read.status is not KnowledgeReadStatus.FOUND
+        ):
+            return self._provenance_repair(
+                snapshot.snapshot_key.value,
+                "frozen operation or staged provenance cannot be resolved",
+            )
+        staged = staged_read.value
+        frozen = frozen_read.value
+        assert isinstance(staged, StagedBuildRecord)
+        assert isinstance(frozen, FrozenRetrievalOperation)
+        try:
+            if (
+                staged.manifest_provenance is None
+                or staged.build_identity != snapshot.frozen_build_identity
+                or staged.lineage_commitment != snapshot.lineage_commitment
+                or staged.staged_commitment != snapshot.staged_commitment
+                or staged.artifact.artifact_commitment != snapshot.artifact_commitment
+                or staged.manifest_commitment != snapshot.manifest_commitment
+                or frozen.request.operation_key != snapshot.operation_key
+                or frozen.frozen_build_identity != snapshot.frozen_build_identity
+                or frozen.lineage_commitment != snapshot.lineage_commitment
+                or derive_query_commitment(frozen) != snapshot.query_commitment
+                or frozen.request.retrieval_profile.profile_identity
+                != snapshot.retrieval_profile_identity
+                or frozen.request.retrieval_profile.version
+                != snapshot.retrieval_profile_version
+                or frozen.request.applicability_policy.policy_identity
+                != snapshot.applicability_policy_identity
+                or frozen.request.applicability_policy.version
+                != snapshot.applicability_policy_version
+            ):
+                raise ValueError("Snapshot and staged provenance lineage disagree")
+            chunks = {item.chunk_identity: item for item in staged.chunks}
+            documents = {
+                item.document_version_identity: item
+                for item in staged.document_provenance
+            }
+            public_chunks: list[KnowledgeProvenanceChunk] = []
+            for evaluation in snapshot.evaluations:
+                chunk = chunks.get(evaluation.chunk_identity)
+                if chunk is None:
+                    raise ValueError("evaluation chunk is absent from frozen build")
+                document = documents.get(chunk.document_version_identity)
+                if document is None or not document.has_governance_authority:
+                    raise ValueError("document governance provenance is incomplete")
+                public_chunks.append(KnowledgeProvenanceChunk(
+                    chunk.chunk_identity,
+                    chunk.document_identity,
+                    chunk.document_version_identity,
+                    chunk.section_identity,
+                    chunk.content_hash,
+                    chunk.metadata_commitment,
+                    document.knowledge_type,
+                    document.guidance_authority,
+                    derive_sop_backed_eligibility(document, evaluation.applicability),
+                    evaluation.canonical_rank,
+                    evaluation.score,
+                    evaluation.applicability,
+                    evaluation.included,
+                    evaluation.disposition,
+                    evaluation.rejection_reason,
+                    evaluation.query_predicates,
+                    evaluation.metadata_predicates,
+                    evaluation.rule_facts,
+                ))
+            manifest = staged.manifest_provenance
+            build_input = staged.build_input
+            projection = KnowledgeProvenanceProjection(
+                snapshot.snapshot_key,
+                snapshot.snapshot_commitment,
+                snapshot.schema_version,
+                snapshot.resolution,
+                snapshot.source_status,
+                snapshot.operation_key,
+                snapshot.activation_generation,
+                snapshot.activation_operation_key,
+                snapshot.frozen_build_identity,
+                snapshot.lineage_commitment,
+                snapshot.staged_commitment,
+                snapshot.validation_commitment,
+                snapshot.artifact_commitment,
+                manifest.manifest_identity,
+                manifest.manifest_schema_identity,
+                manifest.manifest_schema_version,
+                manifest.canonicalization_version,
+                manifest.manifest_commitment,
+                manifest.corpus_identity,
+                manifest.corpus_version,
+                snapshot.retrieval_profile_identity,
+                snapshot.retrieval_profile_version,
+                snapshot.applicability_policy_identity,
+                snapshot.applicability_policy_version,
+                build_input.embedding_provider,
+                build_input.embedding_model,
+                build_input.embedding_profile_identity,
+                build_input.embedding_dimension,
+                build_input.index_engine,
+                build_input.index_schema_identity,
+                snapshot.query_commitment,
+                frozen.request.query.filters,
+                tuple(public_chunks),
+                snapshot.failures,
+            )
+            return KnowledgeReadResult(KnowledgeReadStatus.FOUND, projection)
+        except (TypeError, ValueError) as exc:
+            return self._provenance_repair(snapshot.snapshot_key.value, str(exc))
+
+    @staticmethod
+    def _provenance_repair(key: str, detail: str) -> KnowledgeReadResult:
+        return KnowledgeReadResult(
+            KnowledgeReadStatus.REPAIR_REQUIRED,
+            findings=(KnowledgeCorruptionFinding(
+                "PROVENANCE_INCOMPLETE", "snapshot_provenance", key, detail
+            ),),
+        )
+
+    @staticmethod
+    def _provenance_unavailable(key: object) -> KnowledgeReadResult:
+        record_key = getattr(key, "value", "unavailable")
+        if not isinstance(record_key, str) or not record_key:
+            record_key = "unavailable"
+        return KnowledgeReadResult(
+            KnowledgeReadStatus.UNAVAILABLE,
+            findings=(KnowledgeCorruptionFinding(
+                "PROVENANCE_UNAVAILABLE", "snapshot_provenance", record_key,
+                "durable provenance authority is unavailable",
+            ),),
+        )
 
     def _snapshot_for_result(
         self,

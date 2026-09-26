@@ -7,12 +7,14 @@ from knowledge_index import (
     BuildFailureCode,
     BuildOperationKey,
     BuildValidationState,
+    DocumentStatus,
     IndexEntryFact,
     IndexProbeFacts,
     KnowledgeBuildService,
     KnowledgeReadStatus,
     SqliteKnowledgeStore,
     validate_staged_build,
+    derive_chunk_metadata_commitment,
 )
 from _knowledge_build_testkit import DeterministicIndex, DeterministicProvider, digest, limits, manifest_and_plan
 
@@ -37,6 +39,31 @@ def test_valid_staged_build_has_no_deterministic_findings(tmp_path) -> None:
     try:
         probe = index.probe(staged.build_identity, maximum_results=3)
         assert validate_staged_build(staged, index.inspect(staged.build_identity), probe) == ()
+    finally:
+        store.close()
+
+
+def test_chunk_commitment_binds_frozen_knowledge_type_and_guidance_authority(tmp_path) -> None:
+    store, _, _, staged = _stage(tmp_path)
+    try:
+        legacy = staged.document_provenance[0]
+        sop = replace(
+            legacy, knowledge_type="SOP", guidance_authority="SOP_BACKED_ELIGIBLE",
+            document_status=DocumentStatus.ACTIVE, approval_state="APPROVED",
+            production_eligible=True,
+        )
+        runbook = replace(sop, knowledge_type="RUNBOOK")
+        chunk = staged.chunks[0]
+        values = {
+            derive_chunk_metadata_commitment(
+                staged.manifest_commitment, document,
+                chunk_identity=chunk.chunk_identity,
+                section_identity=chunk.section_identity, ordinal=chunk.ordinal,
+                content_hash=chunk.content_hash,
+            )
+            for document in (legacy, sop, runbook)
+        }
+        assert len(values) == 3
     finally:
         store.close()
 

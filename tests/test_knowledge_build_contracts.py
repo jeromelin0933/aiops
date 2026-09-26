@@ -1,4 +1,4 @@
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 
 import pytest
 
@@ -13,8 +13,11 @@ from knowledge_index import (
     ProviderInvocationLimits,
     RetrySafetyDisposition,
     StagedIndexPort,
+    build_identity,
 )
-from _knowledge_build_testkit import DeterministicIndex, DeterministicProvider, capability
+from _knowledge_build_testkit import (
+    DeterministicIndex, DeterministicProvider, capability, manifest_and_plan,
+)
 
 
 def test_slice_three_vocabularies_are_closed() -> None:
@@ -52,3 +55,11 @@ def test_provider_capability_requires_non_secret_opaque_profile() -> None:
 def test_test_adapters_implement_candidate_c_owned_ports() -> None:
     assert isinstance(DeterministicProvider(), EmbeddingProviderPort)
     assert isinstance(DeterministicIndex(), StagedIndexPort)
+
+
+def test_build_contract_v2_changes_new_identity_without_changing_v1(tmp_path) -> None:
+    _, _, legacy = manifest_and_plan(tmp_path)
+    legacy_identity = build_identity(legacy)
+    governed = replace(legacy, build_contract_version="spec014-build-contract-v2")
+    assert legacy_identity == "kbld_9c8a8c6a1a0f3dec9a90f48bcadabd8f53dcd7301547000bdbc83d2fb684e79c"
+    assert build_identity(governed) != legacy_identity

@@ -25,6 +25,7 @@ from .contracts import (
     BuildFailureCode,
     BuildFailureFact,
     BuildIdentityInput,
+    BuildManifestProvenance,
     BuildOperationKey,
     BuildOperationClaim,
     BuildStageResult,
@@ -109,6 +110,17 @@ class KnowledgeBuildService:
             ),))
 
         assert admission.manifest is not None
+        governed_format = admission.manifest.schema_version == "1.1"
+        expected_contract = (
+            "spec014-build-contract-v2" if governed_format
+            else "build-contract-v1"
+        )
+        if identity_input.build_contract_version != expected_contract:
+            return BuildStageResult(None, (_failure(
+                BuildFailureCode.INVALID_CHUNK_PLAN,
+                "build_contract_version",
+                "build contract version is incompatible with admitted provenance format",
+            ),))
         manifest_documents = {
             document.source_path: document for document in admission.manifest.documents
         }
@@ -123,6 +135,11 @@ class KnowledgeBuildService:
                 manifest_documents[admitted.source_path].outbound_eligible,
                 manifest_documents[admitted.source_path].content_type,
                 manifest_documents[admitted.source_path].metadata,
+                manifest_documents[admitted.source_path].knowledge_type if governed_format else "",
+                manifest_documents[admitted.source_path].guidance_authority if governed_format else "",
+                manifest_documents[admitted.source_path].status if governed_format else None,
+                manifest_documents[admitted.source_path].approval_state if governed_format else "",
+                manifest_documents[admitted.source_path].production_eligible if governed_format else None,
             )
             for admitted in admission.admitted_documents
         ), key=lambda item: (item.document_identity, item.document_version_identity)))
@@ -268,9 +285,19 @@ class KnowledgeBuildService:
                 "staged artifact compatibility contradicts the declared build",
             ),))
 
+        manifest_provenance = BuildManifestProvenance(
+            admission.manifest.manifest_id,
+            admission.manifest.schema_identity,
+            admission.manifest.schema_version,
+            admission.manifest.canonicalization_version,
+            admission.manifest_commitment,
+            admission.manifest.corpus_id,
+            admission.manifest.corpus_version,
+        ) if governed_format else None
         lineage_commitment = derive_build_lineage_commitment(
             build_id, admission.manifest_commitment, chunks,
             capability.profile_reference, capability.capability_identity,
+            manifest_provenance,
         )
         staged_commitment = derive_staged_build_commitment(
             lineage_commitment, artifact, identity_input
@@ -280,6 +307,7 @@ class KnowledgeBuildService:
             staged_commitment, identity_input, capability.profile_reference,
             capability.capability_identity, len(admission.admitted_documents),
             document_provenance, chunks, artifact,
+            manifest_provenance=manifest_provenance,
         )
         try:
             durable = self._store.create_staged_build(record)  # type: ignore[attr-defined]

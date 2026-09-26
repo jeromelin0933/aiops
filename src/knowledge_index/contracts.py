@@ -586,7 +586,7 @@ class KnowledgeSnapshotEnvelope:
         _typed_identity(self.frozen_build_identity, "kbld", "frozen_build_identity")
         _hash(self.snapshot_commitment, "snapshot_commitment")
         _hash(self.lineage_commitment, "lineage_commitment")
-        if self.schema_version != "1.0":
+        if self.schema_version not in {"1.0", "1.1"}:
             raise KnowledgeValidationError("unsupported Knowledge Snapshot schema")
         if self.resolution not in (
             RetrievalResolution.MATCH,
@@ -666,6 +666,13 @@ class KnowledgeSnapshotEnvelope:
                 raise KnowledgeValidationError("unavailable Snapshot shape is invalid")
         if self.record_version != 1:
             raise KnowledgeValidationError("unsupported Snapshot envelope record version")
+        if self.schema_version == "1.1" and any(
+            not item.knowledge_type
+            or not item.guidance_authority
+            or item.sop_backed_eligible is None
+            for item in self.chunks
+        ):
+            raise KnowledgeValidationError("v2 Snapshot chunks require governance facts")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1002,6 +1009,11 @@ class BuildDocumentProvenance:
     outbound_eligible: bool
     content_type: ContentType
     metadata: tuple[MetadataItem, ...]
+    knowledge_type: str = ""
+    guidance_authority: str = ""
+    document_status: DocumentStatus | None = None
+    approval_state: str = ""
+    production_eligible: bool | None = None
 
     def __post_init__(self) -> None:
         _typed_identity(self.document_identity, "kdoc", "document_identity")
@@ -1030,6 +1042,57 @@ class BuildDocumentProvenance:
             raise KnowledgeValidationError(
                 "build provenance metadata must be canonical, unique, and non-secret"
             )
+        governance = (
+            self.knowledge_type,
+            self.guidance_authority,
+            self.document_status,
+            self.approval_state,
+            self.production_eligible,
+        )
+        if any(value not in ("", None) for value in governance):
+            if (
+                self.knowledge_type not in {
+                    "SOP", "RUNBOOK", "OTHER_APPROVED_OPERATIONAL_REFERENCE"
+                }
+                or self.guidance_authority not in {
+                    "SOP_BACKED_ELIGIBLE", "CONTEXTUAL_ONLY"
+                }
+                or self.document_status is not DocumentStatus.ACTIVE
+                or self.approval_state != "APPROVED"
+                or self.production_eligible is not True
+            ):
+                raise KnowledgeValidationError(
+                    "build provenance governance facts are incomplete or ineligible"
+                )
+
+    @property
+    def has_governance_authority(self) -> bool:
+        return bool(
+            self.knowledge_type
+            and self.guidance_authority
+            and self.document_status is not None
+            and self.approval_state
+            and self.production_eligible is not None
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class BuildManifestProvenance:
+    manifest_identity: str
+    manifest_schema_identity: str
+    manifest_schema_version: str
+    canonicalization_version: str
+    manifest_commitment: str
+    corpus_identity: str
+    corpus_version: str
+
+    def __post_init__(self) -> None:
+        for field in (
+            "manifest_identity", "manifest_schema_identity", "manifest_schema_version",
+            "canonicalization_version", "corpus_identity", "corpus_version",
+        ):
+            _durable_key(getattr(self, field), field)
+        _typed_identity(self.manifest_commitment, "kmf", "manifest_commitment")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1197,6 +1260,7 @@ class StagedBuildRecord:
     artifact: IndexArtifactFacts
     state: BuildStageState = BuildStageState.STAGED
     record_version: int = 1
+    manifest_provenance: BuildManifestProvenance | None = None
 
     def __post_init__(self) -> None:
         _typed_identity(self.build_identity, "kbld", "build_identity")
@@ -1232,6 +1296,13 @@ class StagedBuildRecord:
             raise KnowledgeValidationError("artifact build identity mismatch")
         if self.state is not BuildStageState.STAGED or self.record_version != 1:
             raise KnowledgeValidationError("unsupported staged build state or record version")
+        if self.manifest_provenance is not None:
+            if (
+                not isinstance(self.manifest_provenance, BuildManifestProvenance)
+                or self.manifest_provenance.manifest_commitment != self.manifest_commitment
+                or any(not item.has_governance_authority for item in self.document_provenance)
+            ):
+                raise KnowledgeValidationError("v2 staged build requires complete governance provenance")
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -1768,6 +1839,9 @@ class KnowledgeSnapshotChunk:
     content: str
     metadata: tuple[MetadataItem, ...]
     content_truncated: bool = False
+    knowledge_type: str = ""
+    guidance_authority: str = ""
+    sop_backed_eligible: bool | None = None
 
     def __post_init__(self) -> None:
         _typed_identity(self.chunk_identity, "kchk", "chunk_identity")
@@ -1786,6 +1860,113 @@ class KnowledgeSnapshotChunk:
             raise KnowledgeValidationError("Snapshot metadata is invalid")
         if not isinstance(self.content_truncated, bool):
             raise KnowledgeValidationError("content_truncated must be boolean")
+        governance = (
+            self.knowledge_type, self.guidance_authority, self.sop_backed_eligible
+        )
+        if any(value not in ("", None) for value in governance):
+            if (
+                self.knowledge_type not in {
+                    "SOP", "RUNBOOK", "OTHER_APPROVED_OPERATIONAL_REFERENCE"
+                }
+                or self.guidance_authority not in {
+                    "SOP_BACKED_ELIGIBLE", "CONTEXTUAL_ONLY"
+                }
+                or not isinstance(self.sop_backed_eligible, bool)
+            ):
+                raise KnowledgeValidationError("Snapshot governance facts are incomplete")
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeProvenanceChunk:
+    chunk_identity: str
+    document_identity: str
+    document_version_identity: str
+    section_identity: str
+    content_commitment: str
+    metadata_commitment: str
+    knowledge_type: str
+    guidance_authority: str
+    sop_backed_eligible: bool
+    canonical_rank: int
+    score: float
+    applicability: RetrievalApplicability
+    included: bool
+    disposition: RetrievalEvaluationDisposition
+    rejection_reason: RetrievalRejectionReason
+    query_predicates: tuple[QueryFilter, ...]
+    metadata_predicates: tuple[MetadataItem, ...]
+    rule_facts: tuple[ApplicabilityRuleFact, ...]
+
+    def __post_init__(self) -> None:
+        _typed_identity(self.chunk_identity, "kchk", "chunk_identity")
+        _typed_identity(self.document_identity, "kdoc", "document_identity")
+        _typed_identity(self.document_version_identity, "kver", "document_version_identity")
+        _durable_key(self.section_identity, "section_identity")
+        _hash(self.content_commitment, "content_commitment")
+        _hash(self.metadata_commitment, "metadata_commitment")
+        if self.knowledge_type not in {
+            "SOP", "RUNBOOK", "OTHER_APPROVED_OPERATIONAL_REFERENCE"
+        } or self.guidance_authority not in {
+            "SOP_BACKED_ELIGIBLE", "CONTEXTUAL_ONLY"
+        }:
+            raise KnowledgeValidationError("public provenance governance is invalid")
+        if not isinstance(self.sop_backed_eligible, bool):
+            raise KnowledgeValidationError("sop_backed_eligible must be boolean")
+        if isinstance(self.canonical_rank, bool) or self.canonical_rank < 1:
+            raise KnowledgeValidationError("canonical_rank must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeProvenanceProjection:
+    snapshot_identity: KnowledgeSnapshotKey
+    snapshot_commitment: str
+    snapshot_schema_version: str
+    resolution: RetrievalResolution
+    source_status: SnapshotSourceStatus
+    retrieval_operation_identity: RetrievalOperationKey
+    activation_generation: int
+    activation_operation_identity: ActivationOperationKey
+    frozen_build_identity: str
+    lineage_commitment: str
+    staged_commitment: str
+    validation_commitment: str
+    artifact_commitment: str
+    manifest_identity: str
+    manifest_schema_identity: str
+    manifest_schema_version: str
+    canonicalization_version: str
+    manifest_commitment: str
+    corpus_identity: str
+    corpus_version: str
+    retrieval_profile_identity: str
+    retrieval_profile_version: str
+    applicability_policy_identity: str
+    applicability_policy_version: str
+    embedding_provider: str
+    embedding_model: str
+    embedding_profile_identity: str
+    embedding_dimension: int
+    index_engine: str
+    index_schema_identity: str
+    query_commitment: str
+    query_filters: tuple[QueryFilter, ...]
+    chunks: tuple[KnowledgeProvenanceChunk, ...]
+    failures: tuple[RetrievalFailureFact, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.snapshot_identity, KnowledgeSnapshotKey):
+            raise KnowledgeValidationError("snapshot_identity is invalid")
+        for field in (
+            "snapshot_commitment", "lineage_commitment", "staged_commitment",
+            "validation_commitment", "artifact_commitment", "query_commitment",
+        ):
+            _hash(getattr(self, field), field)
+        _typed_identity(self.frozen_build_identity, "kbld", "frozen_build_identity")
+        _typed_identity(self.manifest_commitment, "kmf", "manifest_commitment")
+        if tuple(item.canonical_rank for item in self.chunks) != tuple(
+            sorted(item.canonical_rank for item in self.chunks)
+        ):
+            raise KnowledgeValidationError("public provenance chunks must be canonically ordered")
 
 
 @dataclass(frozen=True, slots=True, order=True)

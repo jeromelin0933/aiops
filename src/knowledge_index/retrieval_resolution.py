@@ -8,6 +8,8 @@ from .contracts import (
     ApplicabilityRuleFact,
     ApplicabilityRuleIdentity,
     ApplicabilityPolicy,
+    BuildDocumentProvenance,
+    DocumentStatus,
     FrozenRetrievalOperation,
     MetadataItem,
     OrderedRetrievalCandidate,
@@ -141,6 +143,23 @@ def derive_applicability_provenance(
     return applicability, required_query, required_metadata, rules
 
 
+def derive_sop_backed_eligibility(
+    document: BuildDocumentProvenance,
+    applicability: RetrievalApplicability,
+) -> bool:
+    """Derive authority only from frozen governance plus non-NONE applicability."""
+    return bool(
+        applicability is not RetrievalApplicability.NONE
+        and document.knowledge_type in {"SOP", "RUNBOOK"}
+        and document.guidance_authority == "SOP_BACKED_ELIGIBLE"
+        and document.document_status is DocumentStatus.ACTIVE
+        and document.approval_state == "APPROVED"
+        and document.production_eligible is True
+        and document.source_classification.value == "APPROVED_OPERATIONAL_KNOWLEDGE"
+        and document.outbound_eligible is True
+    )
+
+
 def _truncate_utf8(value: str, maximum: int) -> tuple[str, bool]:
     encoded = value.encode("utf-8")
     if len(encoded) <= maximum:
@@ -222,6 +241,11 @@ def resolve_retrieval(
             policy,
             profile.score_direction,
         )
+        if (
+            applicability is not RetrievalApplicability.NONE
+            and document.knowledge_type == "OTHER_APPROVED_OPERATIONAL_REFERENCE"
+        ):
+            applicability = RetrievalApplicability.CONTEXTUAL
         content, content_truncated = _truncate_utf8(
             chunk.content, profile.max_content_bytes_per_result
         )

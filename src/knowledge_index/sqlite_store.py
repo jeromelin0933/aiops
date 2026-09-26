@@ -24,6 +24,7 @@ from .contracts import (
     BuildFailureCode,
     BuildIdentityInput,
     BuildLineageRecord,
+    BuildManifestProvenance,
     BuildOperationKey,
     BuildOperationClaim,
     BuildStageState,
@@ -31,6 +32,7 @@ from .contracts import (
     BuildValidationRecord,
     BuildValidationState,
     ContentType,
+    DocumentStatus,
     DurableRetrievalCompletion,
     KnowledgeCorruptionFinding,
     KnowledgeLocalReadiness,
@@ -1750,12 +1752,16 @@ class SqliteKnowledgeStore:
 
     @staticmethod
     def _decode_staged_build(row: sqlite3.Row) -> StagedBuildRecord:
-        payload = _json_object(row["payload_json"], {
+        raw_payload = _object(json.loads(row["payload_json"]))
+        legacy_keys = {
             "build_identity", "operation_key", "manifest_commitment", "lineage_commitment",
             "staged_commitment", "build_input", "profile_reference", "capability_identity",
             "document_count", "document_provenance", "chunks", "artifact", "state",
             "record_version",
-        })
+        }
+        if frozenset(raw_payload) not in {frozenset(legacy_keys), frozenset(legacy_keys | {"manifest_provenance"})}:
+            raise ValueError("staged build payload has an incompatible field set")
+        payload = raw_payload
         build_input_data = _object(payload["build_input"])
         chunks = tuple(_decode_build_chunk(item) for item in _list(payload["chunks"]))
         document_provenance = tuple(
@@ -1765,6 +1771,10 @@ class SqliteKnowledgeStore:
         artifact = _decode_index_artifact(_object(payload["artifact"]))
         profile = _decode_opaque_reference(_object(payload["profile_reference"]))
         operation = BuildOperationKey(_object(payload["operation_key"])["value"])
+        manifest_provenance = (
+            None if payload.get("manifest_provenance") is None
+            else _decode_build_manifest_provenance(_object(payload["manifest_provenance"]))
+        )
         build_input = BuildIdentityInput(
             manifest_commitment=build_input_data["manifest_commitment"],
             ordered_chunk_identities=tuple(_list(build_input_data["ordered_chunk_identities"])),
@@ -1785,7 +1795,7 @@ class SqliteKnowledgeStore:
             payload["lineage_commitment"], payload["staged_commitment"], build_input,
             profile, payload["capability_identity"], payload["document_count"],
             document_provenance, chunks, artifact, BuildStageState(payload["state"]),
-            payload["record_version"],
+            payload["record_version"], manifest_provenance,
         )
         if (
             record.build_identity != row["build_identity"]
@@ -2061,11 +2071,15 @@ def _decode_evaluation(value: object) -> RetrievalEvaluationFact:
 
 def _decode_snapshot_chunk(value: object) -> KnowledgeSnapshotChunk:
     data = _object(value)
-    if set(data) != {
+    legacy_keys = {
         "chunk_identity", "document_identity", "document_version_identity", "section_identity",
         "content_commitment", "metadata_commitment", "score", "applicability", "content",
         "metadata", "content_truncated",
-    }:
+    }
+    governed_keys = legacy_keys | {
+        "knowledge_type", "guidance_authority", "sop_backed_eligible"
+    }
+    if frozenset(data) not in {frozenset(legacy_keys), frozenset(governed_keys)}:
         raise ValueError("Snapshot chunk payload has incompatible fields")
     metadata = tuple(
         MetadataItem(_object(item)["key"], _object(item)["value"])
@@ -2075,7 +2089,8 @@ def _decode_snapshot_chunk(value: object) -> KnowledgeSnapshotChunk:
         data["chunk_identity"], data["document_identity"], data["document_version_identity"],
         data["section_identity"], data["content_commitment"], data["metadata_commitment"],
         data["score"], RetrievalApplicability(data["applicability"]), data["content"],
-        metadata, data["content_truncated"],
+        metadata, data["content_truncated"], data.get("knowledge_type", ""),
+        data.get("guidance_authority", ""), data.get("sop_backed_eligible"),
     )
 
 
@@ -2088,11 +2103,16 @@ def _single_value(value: object, name: str) -> object:
 
 def _decode_build_document_provenance(value: object) -> BuildDocumentProvenance:
     data = _object(value)
-    if set(data) != {
+    legacy_keys = {
         "document_identity", "document_version_identity", "source_path", "content_hash",
         "approval_reference", "source_classification", "outbound_eligible", "content_type",
         "metadata",
-    }:
+    }
+    governed_keys = legacy_keys | {
+        "knowledge_type", "guidance_authority", "document_status", "approval_state",
+        "production_eligible",
+    }
+    if frozenset(data) not in {frozenset(legacy_keys), frozenset(governed_keys)}:
         raise ValueError("build document provenance payload has incompatible fields")
     metadata = tuple(
         MetadataItem(_object(item)["key"], _object(item)["value"])
@@ -2108,6 +2128,28 @@ def _decode_build_document_provenance(value: object) -> BuildDocumentProvenance:
         data["outbound_eligible"],
         ContentType(data["content_type"]),
         metadata,
+        data.get("knowledge_type", ""),
+        data.get("guidance_authority", ""),
+        (
+            None if data.get("document_status") is None
+            else DocumentStatus(data["document_status"])
+        ),
+        data.get("approval_state", ""),
+        data.get("production_eligible"),
+    )
+
+
+def _decode_build_manifest_provenance(value: dict[str, object]) -> BuildManifestProvenance:
+    if set(value) != {
+        "manifest_identity", "manifest_schema_identity", "manifest_schema_version",
+        "canonicalization_version", "manifest_commitment", "corpus_identity",
+        "corpus_version",
+    }:
+        raise ValueError("build manifest provenance payload has incompatible fields")
+    return BuildManifestProvenance(
+        value["manifest_identity"], value["manifest_schema_identity"],
+        value["manifest_schema_version"], value["canonicalization_version"],
+        value["manifest_commitment"], value["corpus_identity"], value["corpus_version"],
     )
 
 
@@ -2174,6 +2216,7 @@ def _validate_staged_record_semantics(record: StagedBuildRecord) -> None:
             record.chunks,
             record.profile_reference,
             record.capability_identity,
+            record.manifest_provenance,
         ) != record.lineage_commitment
         or derive_staged_build_commitment(
             record.lineage_commitment, record.artifact, record.build_input

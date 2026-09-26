@@ -14,6 +14,7 @@ from .contracts import (
     BuildFailureCode,
     BuildFailureFact,
     BuildLineageRecord,
+    BuildManifestProvenance,
     BuildIdentityInput,
     BuildOperationKey,
     BuildOperationClaim,
@@ -32,6 +33,8 @@ from .contracts import (
     KnowledgeCorruptionFinding,
     KnowledgeLocalReadiness,
     KnowledgePersistence,
+    KnowledgeProvenanceChunk,
+    KnowledgeProvenanceProjection,
     KnowledgeReadinessFact,
     KnowledgeReadResult,
     KnowledgeReadStatus,
@@ -137,6 +140,7 @@ from .retrieval import KnowledgeRetrievalService
 from .retrieval_ports import QueryEmbeddingProviderPort, RetrievalIndexPort
 from .retrieval_resolution import (
     derive_retrieval_operation_commitment,
+    derive_sop_backed_eligibility,
     resolve_retrieval,
 )
 from .snapshot import (
@@ -164,6 +168,7 @@ __all__ = [
     "BuildFailureCode",
     "BuildFailureFact",
     "BuildLineageRecord",
+    "BuildManifestProvenance",
     "BuildIdentityInput",
     "BuildOperationKey",
     "BuildOperationClaim",
@@ -182,6 +187,8 @@ __all__ = [
     "KnowledgeCorruptionFinding",
     "KnowledgeLocalReadiness",
     "KnowledgePersistence",
+    "KnowledgeProvenanceChunk",
+    "KnowledgeProvenanceProjection",
     "KnowledgeReadinessFact",
     "KnowledgeReadResult",
     "KnowledgeReadStatus",
@@ -285,6 +292,7 @@ __all__ = [
     "QueryEmbeddingProviderPort",
     "RetrievalIndexPort",
     "derive_retrieval_operation_commitment",
+    "derive_sop_backed_eligibility",
     "resolve_retrieval",
     "KnowledgeSnapshotService",
     "build_retrieval_completion",
