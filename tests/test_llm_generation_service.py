@@ -1,5 +1,6 @@
 """Provider-neutral domain flow with a deterministic fake provider."""
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
 import json
 from datetime import datetime, timezone
@@ -14,7 +15,7 @@ from llm_generation.service import (
     AvailableResources, ExecutionAuthorization, GenerationService,
     ProviderCapability, ProviderFailureKind, ProviderInvocationError, ProviderResponse,
     canonical_evidence_projection, canonical_knowledge_projection,
-    same_try_reinvocation_eligible,
+    same_try_reinvocation_eligible, subject_input_commitment,
 )
 from llm_generation.sqlite_store import CandidateDStore
 from rca_persistence.contracts import AdmittedRetryDisposition
@@ -123,6 +124,62 @@ def test_fake_success_commit_and_response_loss_replay(case, tmp_path):
     replay = reopened.execute(case.content.input, case.config, grant, resources)
     assert replay.result == first.result
     assert replay.physical_invocations == 0 and len(fake.calls) == 1
+
+
+def test_result_authority_replays_across_operation_and_restart(case, tmp_path):
+    service, fake, grant, resources = environment(case, tmp_path)
+    first = service.execute(case.content.input, case.config, grant, resources)
+    assert first.result is not None and len(fake.calls) == 1
+
+    second_source = replace(case.content.input, operation_id="operation-2")
+    second_grant = replace(grant, operation_id="operation-2")
+    reopened = GenerationService(
+        CandidateDStore(service.store.path,
+                        resource_config_path=service.store.resource_config_path),
+        fake, case.attempts, case.evidence, case.knowledge,
+    )
+    replay = reopened.execute(second_source, case.config, second_grant, resources)
+    assert replay.result == first.result
+    assert replay.result.content.input.operation_id == case.content.input.operation_id
+    assert replay.physical_invocations == 0
+    assert len(fake.calls) == 1
+
+
+def test_cross_operation_result_semantic_contradiction_fails_closed(case, tmp_path):
+    service, fake, grant, resources = environment(case, tmp_path)
+    first = service.execute(case.content.input, case.config, grant, resources)
+    assert first.result is not None and len(fake.calls) == 1
+
+    contradictory = replace(
+        case.content.input,
+        operation_id="operation-2",
+        evidence_projection="different approved projection",
+    )
+    second_grant = replace(grant, operation_id="operation-2")
+    rejected = service.execute(contradictory, case.config, second_grant, resources)
+    assert rejected.status is LocalReadStatus.REPAIR_REQUIRED
+    assert rejected.failure.failure_class is FailureClass.IDENTITY_CONTRADICTION
+    assert rejected.failure.retry_safety is AdmittedRetryDisposition.REPAIR_REQUIRED
+    assert len(fake.calls) == 1
+
+
+def test_concurrent_operations_leave_one_authoritative_d_result(case, tmp_path):
+    service, fake, grant, resources = environment(case, tmp_path)
+    first_source = case.content.input
+    second_source = replace(first_source, operation_id="operation-2")
+    second_grant = replace(grant, operation_id="operation-2")
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        receipts = tuple(pool.map(
+            lambda request: service.execute(
+                request[0], case.config, request[1], resources,
+            ),
+            ((first_source, grant), (second_source, second_grant)),
+        ))
+    assert all(receipt.status is LocalReadStatus.FOUND for receipt in receipts)
+    assert all(receipt.result is not None for receipt in receipts)
+    assert receipts[0].result == receipts[1].result
+    assert len(service.store.recovery().value.results) == 1
+    assert 1 <= len(fake.calls) <= 2
 
 
 def test_authoritative_projections_reject_tampering_and_cross_snapshot(case, tmp_path):
@@ -258,7 +315,8 @@ def test_same_try_eligibility_is_safety_only(case, tmp_path):
     assert not same_try_reinvocation_eligible(source, service.store, case.attempts)
     failure = GenerationFailure(source.try_identity, source.operation_id,
                                 FailureClass.PROVIDER_TIMEOUT,
-                                AdmittedRetryDisposition.RETRYABLE, "timeout")
+                                AdmittedRetryDisposition.RETRYABLE, "timeout",
+                                subject_input_commitment(source), True)
     assert service.store.commit_failure(failure).status is LocalReadStatus.FOUND
     assert same_try_reinvocation_eligible(source, service.store, case.attempts)
     assert len(fake.calls) == 0
@@ -275,6 +333,88 @@ def test_same_try_eligibility_is_safety_only(case, tmp_path):
         (outcome,),
     ))
     assert not same_try_reinvocation_eligible(source, service.store, a_with_outcome)
+
+
+def test_prior_failure_new_operation_requires_explicit_same_try_fact(case, tmp_path):
+    service, fake, grant, resources = environment(case, tmp_path)
+    source = case.content.input
+    failure = GenerationFailure(
+        source.try_identity, source.operation_id,
+        FailureClass.PROVIDER_TIMEOUT, AdmittedRetryDisposition.RETRYABLE,
+        "timeout", subject_input_commitment(source), False,
+    )
+    assert service.store.commit_failure(failure).status is LocalReadStatus.FOUND
+    second_source = replace(source, operation_id="operation-2")
+    second_grant = replace(grant, operation_id="operation-2")
+    rejected = service.execute(second_source, case.config, second_grant, resources)
+    assert rejected.failure.failure_class is FailureClass.IDENTITY_CONTRADICTION
+    assert rejected.failure.retry_safety is AdmittedRetryDisposition.REPAIR_REQUIRED
+    assert rejected.physical_invocations == 0
+    assert fake.calls == []
+
+
+def test_prior_failure_with_explicit_same_try_fact_may_be_locally_admitted(case, tmp_path):
+    service, fake, grant, resources = environment(
+        case, tmp_path, ProviderInvocationError(ProviderFailureKind.TIMEOUT),
+    )
+    first = service.execute(case.content.input, case.config, grant, resources)
+    assert first.failure.same_try_eligible is True
+    assert first.failure.retry_safety is AdmittedRetryDisposition.RETRYABLE
+    assert len(fake.calls) == 1
+
+    second_source = replace(case.content.input, operation_id="operation-2")
+    second_grant = replace(grant, operation_id="operation-2")
+    assert same_try_reinvocation_eligible(second_source, service.store, case.attempts)
+    fake.outcome = ProviderResponse(
+        _structured(case.content, case.config),
+        InvocationMetadata(1, 10, 5, 15, 100),
+    )
+    admitted = service.execute(second_source, case.config, second_grant, resources)
+    assert admitted.result is not None
+    assert admitted.result.content.input.operation_id == "operation-2"
+    assert admitted.physical_invocations == 1
+    assert len(fake.calls) == 2
+    assert len(service.store.recovery().value.results) == 1
+
+
+def test_prior_failure_semantic_change_is_not_same_try_eligible(case, tmp_path):
+    service, fake, grant, resources = environment(
+        case, tmp_path, ProviderInvocationError(ProviderFailureKind.TIMEOUT),
+    )
+    first = service.execute(case.content.input, case.config, grant, resources)
+    assert first.failure.same_try_eligible is True
+    changed = replace(
+        case.content.input, operation_id="operation-2",
+        evidence_projection="different approved projection",
+    )
+    changed_grant = replace(grant, operation_id="operation-2")
+    rejected = service.execute(changed, case.config, changed_grant, resources)
+    assert rejected.failure.retry_safety is AdmittedRetryDisposition.REPAIR_REQUIRED
+    assert rejected.physical_invocations == 0
+    assert len(fake.calls) == 1
+
+
+def test_a_side_try_outcome_blocks_new_operation_same_ordinal(case, tmp_path):
+    service, fake, grant, resources = environment(case, tmp_path)
+    source = replace(case.content.input, operation_id="operation-2")
+    view = case.attempts.get_attempt_lineage(source.try_identity.attempt_id)
+    outcome = LogicalTryOutcome(
+        source.try_identity, LogicalTryResultKind.FAILURE,
+        AdmittedRetryDisposition.RETRYABLE, datetime.now(timezone.utc),
+        failure_code="PROVIDER_TIMEOUT",
+    )
+    service.attempts = SimpleNamespace(get_attempt_lineage=lambda _: AttemptLineageRead(
+        GenerationAttempt(view.attempt.lineage, GenerationLifecycle.FAILED, 1),
+        (outcome,),
+    ))
+    second_grant = ExecutionAuthorization(
+        source.operation_id, source.try_identity, 1, True,
+    )
+    rejected = service.execute(source, case.config, second_grant, resources)
+    assert rejected.failure.failure_class is FailureClass.IDENTITY_CONTRADICTION
+    assert rejected.failure.retry_safety is AdmittedRetryDisposition.REPAIR_REQUIRED
+    assert rejected.physical_invocations == 0
+    assert fake.calls == []
 
 
 def test_d_result_blocks_same_try_and_bad_store_blocks_execution(case, tmp_path):

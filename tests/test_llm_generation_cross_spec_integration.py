@@ -8,7 +8,9 @@ import pytest
 
 from llm_generation.contracts import FailureClass, GenerationFailure, LocalReadStatus
 from llm_generation.facade import CandidateDHandoffFacade
-from llm_generation.service import GenerationService, same_try_reinvocation_eligible
+from llm_generation.service import (
+    GenerationService, same_try_reinvocation_eligible, subject_input_commitment,
+)
 from llm_generation.sqlite_store import CandidateDStore
 from rca_persistence.contracts import (
     AdmitAttemptRequest, AdmittedRetryDisposition, AttemptLineageRead,
@@ -110,7 +112,8 @@ def test_same_try_fresh_a_read_and_d_only_readiness(integrated):
     assert not same_try_reinvocation_eligible(source, flow.service.store, flow.a)
     failure = GenerationFailure(source.try_identity, source.operation_id,
                                 FailureClass.PROVIDER_TIMEOUT,
-                                AdmittedRetryDisposition.RETRYABLE, "timeout")
+                                AdmittedRetryDisposition.RETRYABLE, "timeout",
+                                subject_input_commitment(source), True)
     assert flow.service.store.commit_failure(failure).status is LocalReadStatus.FOUND
     assert same_try_reinvocation_eligible(source, flow.service.store, flow.a)
     assert len(flow.fake.calls) == 0

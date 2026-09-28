@@ -333,6 +333,8 @@ class GenerationFailure:
     failure_class: FailureClass
     retry_safety: RetrySafety
     safe_detail: str
+    subject_input_commitment: str | None = None
+    same_try_eligible: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.try_identity, LogicalTryIdentity):
@@ -341,6 +343,17 @@ class GenerationFailure:
         if not isinstance(self.failure_class, FailureClass) or not isinstance(self.retry_safety, RetrySafety):
             raise TypeError("failure class and retry safety are independent closed enums")
         safe_text(self.safe_detail, "failure detail", 256)
+        if (self.subject_input_commitment is not None
+            and (not isinstance(self.subject_input_commitment, str)
+                 or not _HASH.fullmatch(self.subject_input_commitment))):
+            raise ValueError("failure subject input commitment is invalid")
+        if type(self.same_try_eligible) is not bool:
+            raise TypeError("Same-Try eligibility must be an explicit boolean fact")
+        if self.same_try_eligible and (
+            self.retry_safety is not RetrySafety.RETRYABLE
+            or self.subject_input_commitment is None
+        ):
+            raise ValueError("Same-Try eligibility requires retryable committed input")
         if self.failure_class in {FailureClass.IDENTITY_CONTRADICTION, FailureClass.LOCAL_INTEGRITY} and self.retry_safety is not RetrySafety.REPAIR_REQUIRED:
             raise ValueError("identity or integrity contradiction needs repair")
         if self.retry_safety is RetrySafety.RETRYABLE and self.failure_class not in {FailureClass.PROVIDER_TIMEOUT, FailureClass.PROVIDER_UNAVAILABLE, FailureClass.PROVIDER_QUOTA, FailureClass.MALFORMED_PROVIDER_OUTPUT, FailureClass.STRUCTURED_PARSE}:

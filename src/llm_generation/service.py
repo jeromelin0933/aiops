@@ -19,6 +19,7 @@ from .contracts import (
     FailureClass, GenerationFailure, GenerationInput, InvocationMetadata,
     LocalReadStatus, ValidatedGenerationResult, safe_text,
 )
+from .identity import semantic_commitment
 from .ports import AttemptPublicReader, EvidencePublicReader, KnowledgePublicReader
 from .schema import StructuredOutputError, _FORBIDDEN_CONTEXT, parse_structured_output
 from .sqlite_store import CandidateDStore
@@ -224,11 +225,17 @@ def same_try_reinvocation_eligible(
     """Safety fact only; never authorizes or performs a physical invocation."""
     if store.local_readiness() is not LocalReadStatus.FOUND:
         return False
-    result = store.replay(source)
-    failure = store.failure(source.operation_id, source.try_identity)
-    if result.status is not LocalReadStatus.NOT_FOUND or failure.status is not LocalReadStatus.FOUND:
+    result = store.result_for_try(source.try_identity)
+    failures = store.failures_for_try(source.try_identity)
+    if (result.status is not LocalReadStatus.NOT_FOUND
+        or failures.status is not LocalReadStatus.FOUND):
         return False
-    if failure.value.retry_safety is not RetrySafety.RETRYABLE:
+    commitment = subject_input_commitment(source)
+    if any(
+        failure.same_try_eligible is not True
+        or failure.subject_input_commitment != commitment
+        for failure in failures.value
+    ):
         return False
     try:
         view = attempts.get_attempt_lineage(source.try_identity.attempt_id)
@@ -247,6 +254,22 @@ def same_try_reinvocation_eligible(
     )
 
 
+def subject_input_commitment(source: GenerationInput) -> str:
+    """Commit request semantics while deliberately excluding execution operation identity."""
+    return semantic_commitment(replace(source, operation_id="subject-operation"))
+
+
+def _lineage_matches(source: GenerationInput, view: AttemptLineageRead) -> bool:
+    lineage = view.attempt.lineage
+    return (
+        lineage.attempt_id == source.try_identity.attempt_id
+        and lineage.evidence_snapshot_id == source.evidence_snapshot_id
+        and lineage.evidence_revision_id == source.evidence_revision_id
+        and lineage.knowledge_snapshot_id == source.knowledge_snapshot_id
+        and source.pin.matches_attempt(lineage.generation_provenance)
+    )
+
+
 _PROVIDER_FAILURE = {
     ProviderFailureKind.TIMEOUT: FailureClass.PROVIDER_TIMEOUT,
     ProviderFailureKind.UNAVAILABLE: FailureClass.PROVIDER_UNAVAILABLE,
@@ -257,6 +280,19 @@ _PROVIDER_FAILURE = {
     ProviderFailureKind.BOUNDS: FailureClass.INVOCATION_BOUND,
     ProviderFailureKind.MALFORMED: FailureClass.MALFORMED_PROVIDER_OUTPUT,
 }
+
+_SAME_TRY_SAFE_FAILURES = frozenset({
+    FailureClass.PROVIDER_TIMEOUT,
+    FailureClass.PROVIDER_UNAVAILABLE,
+    FailureClass.PROVIDER_QUOTA,
+    FailureClass.MALFORMED_PROVIDER_OUTPUT,
+    FailureClass.STRUCTURED_PARSE,
+})
+
+
+def _same_try_safety_fact(kind: FailureClass, safety: RetrySafety) -> bool:
+    """Approved D-local policy emits eligibility independently of retry disposition."""
+    return safety is RetrySafety.RETRYABLE and kind in _SAME_TRY_SAFE_FAILURES
 
 
 class GenerationService:
@@ -287,7 +323,10 @@ class GenerationService:
     def _failure(self, source: GenerationInput, kind: FailureClass,
                  safety: RetrySafety, detail: str, calls: int = 0,
                  preflight_calls: int = 0) -> ExecutionReceipt:
-        failure = GenerationFailure(source.try_identity, source.operation_id, kind, safety, detail)
+        failure = GenerationFailure(
+            source.try_identity, source.operation_id, kind, safety, detail,
+            subject_input_commitment(source), _same_try_safety_fact(kind, safety),
+        )
         committed = self.store.commit_failure(failure)
         if committed.status is LocalReadStatus.FOUND:
             return ExecutionReceipt(LocalReadStatus.FOUND, failure=committed.value,
@@ -399,9 +438,24 @@ class GenerationService:
         if loaded != config:
             return self._failure(source, FailureClass.CAPABILITY_MISMATCH,
                                  RetrySafety.NON_RETRYABLE, "versioned configuration differs")
-        existing = self.store.replay(source)
+        # Candidate-A is read before any D execution decision.  The same fresh
+        # view supplies both exact lineage validation and the terminal-outcome guard.
+        try:
+            view = self.attempts.get_attempt_lineage(source.try_identity.attempt_id)
+        except Exception:
+            return self._local_fault(source, LocalReadStatus.UNAVAILABLE)
+        if not isinstance(view, AttemptLineageRead):
+            return self._local_fault(source, LocalReadStatus.REPAIR_REQUIRED)
+        if not _lineage_matches(source, view):
+            return self._failure(
+                source, FailureClass.IDENTITY_CONTRADICTION,
+                RetrySafety.REPAIR_REQUIRED, "exact Attempt lineage rejected",
+            )
+
+        existing = self.store.result_for_try(source.try_identity)
         if existing.status is LocalReadStatus.FOUND:
-            if existing.value.content.input != source:
+            authoritative_source = existing.value.content.input
+            if replace(authoritative_source, operation_id=source.operation_id) != source:
                 return ExecutionReceipt(
                     LocalReadStatus.REPAIR_REQUIRED,
                     failure=GenerationFailure(
@@ -413,11 +467,41 @@ class GenerationService:
             return ExecutionReceipt(LocalReadStatus.FOUND, result=existing.value)
         if existing.status is not LocalReadStatus.NOT_FOUND:
             return self._local_fault(source, existing.status)
+
+        if any(item.identity == source.try_identity for item in view.try_outcomes):
+            return self._failure(
+                source, FailureClass.IDENTITY_CONTRADICTION,
+                RetrySafety.REPAIR_REQUIRED,
+                "Candidate-A already has authoritative Try outcome",
+            )
+
         prior_failure = self.store.failure(source.operation_id, source.try_identity)
         if prior_failure.status is LocalReadStatus.FOUND:
+            if prior_failure.value.subject_input_commitment != subject_input_commitment(source):
+                return ExecutionReceipt(
+                    LocalReadStatus.REPAIR_REQUIRED,
+                    failure=GenerationFailure(
+                        source.try_identity, source.operation_id,
+                        FailureClass.IDENTITY_CONTRADICTION, RetrySafety.REPAIR_REQUIRED,
+                        "durable replay input contradicts identity",
+                        subject_input_commitment(source), False,
+                    ),
+                )
             return ExecutionReceipt(LocalReadStatus.FOUND, failure=prior_failure.value)
         if prior_failure.status is not LocalReadStatus.NOT_FOUND:
             return self._local_fault(source, prior_failure.status)
+
+        subject_failures = self.store.failures_for_try(source.try_identity)
+        if subject_failures.status is LocalReadStatus.FOUND:
+            if not same_try_reinvocation_eligible(source, self.store, self.attempts):
+                return self._failure(
+                    source, FailureClass.IDENTITY_CONTRADICTION,
+                    RetrySafety.REPAIR_REQUIRED,
+                    "Candidate-D Same-Try eligibility rejected",
+                )
+        elif subject_failures.status is not LocalReadStatus.NOT_FOUND:
+            return self._local_fault(source, subject_failures.status)
+
         rejection = self._admit(source, config, grant, resources, degraded_authorization)
         if rejection is not None:
             safety = RetrySafety.REPAIR_REQUIRED if rejection in {

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import dataclass, fields, is_dataclass, replace
 from enum import Enum
 import json
 import os
@@ -40,10 +40,11 @@ ENUMS = {cls.__name__: cls for cls in (
     FailureClass, GuidanceSource, RetrievalResolution,
 )}
 DDL = ("CREATE TABLE authority (identity TEXT PRIMARY KEY, "
+       "subject_identity TEXT NOT NULL, result_subject TEXT UNIQUE, "
        "kind TEXT NOT NULL CHECK(kind IN ('result','failure')), "
        "result_id TEXT UNIQUE, commitment TEXT NOT NULL, payload TEXT NOT NULL, "
-       "CHECK((kind='result' AND result_id IS NOT NULL) OR "
-       "(kind='failure' AND result_id IS NULL)))")
+       "CHECK((kind='result' AND result_id IS NOT NULL AND result_subject=subject_identity) OR "
+       "(kind='failure' AND result_id IS NULL AND result_subject IS NULL)))")
 
 
 def encode(value: object) -> object:
@@ -85,6 +86,22 @@ def payload(value: object) -> str:
 def identity(operation_id: str, try_identity: LogicalTryIdentity) -> str:
     return json.dumps([operation_id, try_identity.attempt_id, try_identity.try_ordinal],
                       separators=(",", ":"))
+
+
+def subject_identity(try_identity: LogicalTryIdentity) -> str:
+    return json.dumps([try_identity.attempt_id, try_identity.try_ordinal],
+                      separators=(",", ":"))
+
+
+def _subject_equivalent(existing: ValidatedGenerationResult,
+                        candidate: ValidatedGenerationResult) -> bool:
+    """operation_id is execution identity, not result-content authority scope."""
+    old_source = existing.content.input
+    normalized = replace(
+        candidate.content,
+        input=replace(candidate.content.input, operation_id=old_source.operation_id),
+    )
+    return normalized == existing.content
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,14 +148,14 @@ class CandidateDStore:
             with self._connect() as db:
                 db.execute("BEGIN IMMEDIATE")
                 db.execute(DDL)
-                db.execute("PRAGMA user_version=1")
+                db.execute("PRAGMA user_version=2")
                 db.commit()
             return self.readiness()
         except (OSError, sqlite3.Error):
             return LocalReadStatus.UNAVAILABLE
 
     def _inspect(self, db: sqlite3.Connection) -> RecoverySnapshot:
-        if db.execute("PRAGMA user_version").fetchone()[0] != 1:
+        if db.execute("PRAGMA user_version").fetchone()[0] != 2:
             raise ValueError("unrecognized schema version")
         schema = db.execute(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='authority'"
@@ -153,17 +170,23 @@ class CandidateDStore:
             raise ValueError("SQLite integrity failure")
         results, failures = [], []
         ids: set[str] = set()
-        for key, kind, result_id, commitment, raw in db.execute(
-            "SELECT identity,kind,result_id,commitment,payload FROM authority ORDER BY identity"
+        result_subjects: set[str] = set()
+        for key, subject, result_subject, kind, result_id, commitment, raw in db.execute(
+            "SELECT identity,subject_identity,result_subject,kind,result_id,commitment,payload "
+            "FROM authority ORDER BY identity"
         ):
             value = decode(json.loads(raw))
             if kind == "result":
                 if not isinstance(value, ResultContent):
                     raise ValueError("invalid result payload")
                 checked = ValidatedGenerationResult(result_id, commitment, value)
-                if key != identity(value.input.operation_id, value.input.try_identity) or result_id in ids:
+                expected_subject = subject_identity(value.input.try_identity)
+                if (key != identity(value.input.operation_id, value.input.try_identity)
+                    or subject != expected_subject or result_subject != expected_subject
+                    or result_id in ids or result_subject in result_subjects):
                     raise ValueError("result identity contradiction")
                 ids.add(result_id)
+                result_subjects.add(result_subject)
                 results.append(RecoveryFact(
                     checked.validated_result_id, value.input.try_identity,
                     value.input.operation_id, commitment,
@@ -172,7 +195,9 @@ class CandidateDStore:
                 ))
             elif kind == "failure":
                 if (not isinstance(value, GenerationFailure) or result_id is not None
+                    or result_subject is not None
                     or key != identity(value.operation_id, value.try_identity)
+                    or subject != subject_identity(value.try_identity)
                     or commitment != semantic_commitment(value)):
                     raise ValueError("failure identity contradiction")
                 failures.append(value)
@@ -241,10 +266,38 @@ class CandidateDStore:
     def replay(self, source: GenerationInput) -> StoreRead[ValidatedGenerationResult]:
         return self._read("identity", identity(source.operation_id, source.try_identity), "result")
 
+    def result_for_try(self, try_identity: LogicalTryIdentity) -> StoreRead[ValidatedGenerationResult]:
+        return self._read("result_subject", subject_identity(try_identity), "result")
+
     def failure(self, operation_id: str, try_identity: LogicalTryIdentity) -> StoreRead[GenerationFailure]:
         return self._read("identity", identity(operation_id, try_identity), "failure")
 
-    def _commit(self, key: str, kind: str, result_id: str | None,
+    def failures_for_try(self, try_identity: LogicalTryIdentity) -> StoreRead[tuple[GenerationFailure, ...]]:
+        if not self.path.is_file():
+            return StoreRead(LocalReadStatus.UNAVAILABLE)
+        try:
+            with self._connect() as db:
+                self._inspect(db)
+                rows = db.execute(
+                    "SELECT payload FROM authority WHERE subject_identity=? AND kind='failure' "
+                    "ORDER BY identity",
+                    (subject_identity(try_identity),),
+                ).fetchall()
+                values = tuple(decode(json.loads(row[0])) for row in rows)
+                if any(not isinstance(value, GenerationFailure) for value in values):
+                    raise ValueError("invalid failure payload")
+                return StoreRead(
+                    LocalReadStatus.FOUND if values else LocalReadStatus.NOT_FOUND,
+                    values if values else None,
+                )
+        except sqlite3.IntegrityError:
+            return StoreRead(LocalReadStatus.REPAIR_REQUIRED)
+        except (sqlite3.Error, OSError):
+            return StoreRead(LocalReadStatus.UNAVAILABLE)
+        except (ValueError, TypeError, KeyError):
+            return StoreRead(LocalReadStatus.REPAIR_REQUIRED)
+
+    def _commit(self, key: str, subject: str, kind: str, result_id: str | None,
                 commitment: str, raw: str) -> StoreRead:
         try:
             with self._connect() as db:
@@ -255,8 +308,26 @@ class CandidateDStore:
                     (key,),
                 ).fetchone()
                 if old is None:
-                    db.execute("INSERT INTO authority VALUES (?,?,?,?,?)",
-                               (key, kind, result_id, commitment, raw))
+                    if kind == "result":
+                        authoritative = db.execute(
+                            "SELECT result_id,commitment,payload FROM authority "
+                            "WHERE result_subject=?",
+                            (subject,),
+                        ).fetchone()
+                        if authoritative is not None:
+                            existing = ValidatedGenerationResult(
+                                authoritative[0], authoritative[1],
+                                decode(json.loads(authoritative[2])),
+                            )
+                            candidate = ValidatedGenerationResult(
+                                result_id, commitment, decode(json.loads(raw)),
+                            )
+                            if not _subject_equivalent(existing, candidate):
+                                return StoreRead(LocalReadStatus.REPAIR_REQUIRED)
+                            return StoreRead(LocalReadStatus.FOUND, existing)
+                    db.execute("INSERT INTO authority VALUES (?,?,?,?,?,?,?)",
+                               (key, subject, subject if kind == "result" else None,
+                                kind, result_id, commitment, raw))
                 elif old != (kind, result_id, commitment, raw):
                     return StoreRead(LocalReadStatus.REPAIR_REQUIRED)
                 db.commit()
@@ -272,12 +343,14 @@ class CandidateDStore:
         if not isinstance(value, ValidatedGenerationResult):
             raise TypeError("validated result required")
         source = value.content.input
-        return self._commit(identity(source.operation_id, source.try_identity), "result",
+        return self._commit(identity(source.operation_id, source.try_identity),
+                            subject_identity(source.try_identity), "result",
                             value.validated_result_id, value.semantic_commitment,
                             payload(value.content))
 
     def commit_failure(self, value: GenerationFailure) -> StoreRead[GenerationFailure]:
         if not isinstance(value, GenerationFailure):
             raise TypeError("typed failure required")
-        return self._commit(identity(value.operation_id, value.try_identity), "failure",
+        return self._commit(identity(value.operation_id, value.try_identity),
+                            subject_identity(value.try_identity), "failure",
                             None, semantic_commitment(value), payload(value))

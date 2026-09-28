@@ -107,7 +107,7 @@ def test_schema_two_causal_round_trip(tmp_path):
     assert restored.value.content.claims[-1].causal_assertion == content.claims[-1].causal_assertion
 
 
-def test_independent_identities_and_complete_enumeration(case, tmp_path):
+def test_different_operations_share_one_subject_result_authority(case, tmp_path):
     store = CandidateDStore(tmp_path / "candidate_d.sqlite")
     assert store.initialize() is LocalReadStatus.FOUND
     first = ValidatedGenerationResult.from_content(case.content)
@@ -116,12 +116,32 @@ def test_independent_identities_and_complete_enumeration(case, tmp_path):
     with ThreadPoolExecutor(max_workers=2) as pool:
         writes = list(pool.map(store.commit_result, (first, second)))
     assert all(item.status is LocalReadStatus.FOUND for item in writes)
+    assert writes[0].value == writes[1].value
     recovered = CandidateDStore(store.path).recovery()
     assert recovered.status is LocalReadStatus.FOUND
-    assert {item.validated_result_id for item in recovered.value.results} == {
+    assert len(recovered.value.results) == 1
+    assert recovered.value.results[0].validated_result_id in {
         first.validated_result_id, second.validated_result_id,
     }
     assert recovered.value == CandidateDStore(store.path).recovery().value
+
+
+def test_concurrent_different_operations_cannot_commit_contradictory_results(case, tmp_path):
+    store = CandidateDStore(tmp_path / "candidate_d.sqlite")
+    assert store.initialize() is LocalReadStatus.FOUND
+    first = ValidatedGenerationResult.from_content(case.content)
+    second_source = replace(case.content.input, operation_id="operation-2")
+    second = ValidatedGenerationResult.from_content(replace(
+        case.content, input=second_source, summary="Different supported summary",
+    ))
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        writes = list(pool.map(store.commit_result, (first, second)))
+    assert {item.status for item in writes} == {
+        LocalReadStatus.FOUND, LocalReadStatus.REPAIR_REQUIRED,
+    }
+    recovered = store.recovery()
+    assert recovered.status is LocalReadStatus.FOUND
+    assert len(recovered.value.results) == 1
 
 
 def test_result_failure_collision_is_repair_required(case, tmp_path):
@@ -148,7 +168,10 @@ def test_missing_unavailable_and_no_raw_payload(case, tmp_path):
     assert store.commit_result(result).status is LocalReadStatus.FOUND
     with sqlite3.connect(path) as db:
         columns = {row[1] for row in db.execute("PRAGMA table_info(authority)")}
-    assert columns == {"identity", "kind", "result_id", "commitment", "payload"}
+    assert columns == {
+        "identity", "subject_identity", "result_subject", "kind",
+        "result_id", "commitment", "payload",
+    }
     assert not {"raw_request", "raw_response", "authorization", "api_key"} & columns
 
 
