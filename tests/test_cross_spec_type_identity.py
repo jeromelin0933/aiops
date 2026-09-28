@@ -1,5 +1,8 @@
 """Regression coverage for canonical cross-SPEC Python type identity."""
 
+import ast
+from pathlib import Path
+
 from alert_correlation import (
     AnchorStrength,
     AnchorTransition,
@@ -21,6 +24,38 @@ import runtime_orchestration.recovery as runtime_recovery
 import shadow_management.contracts as shadow_contracts
 import shadow_management.manager as shadow_manager
 import shadow_management.sqlite_store as shadow_store
+from rca_shared.claim_types import ClaimCategory as CanonicalClaimCategory
+from llm_generation.contracts import ClaimCategory as DClaimCategory
+from rca_persistence.contracts import ClaimCategory as AClaimCategory
+import rca_persistence.contracts as a_contracts
+import rca_persistence.sqlite_store as a_store
+import llm_generation.contracts as d_contracts
+import rca_shared.claim_types as shared_claim_types
+
+
+def test_claim_category_has_one_canonical_python_identity() -> None:
+    assert DClaimCategory is AClaimCategory is CanonicalClaimCategory
+    assert [(item.name, item.value) for item in CanonicalClaimCategory] == [
+        ("OBSERVED_FACT", "OBSERVED_FACT"),
+        ("ANALYTICAL_INFERENCE", "ANALYTICAL_INFERENCE"),
+        ("KNOWLEDGE_BACKED_GUIDANCE", "KNOWLEDGE_BACKED_GUIDANCE"),
+        ("MODEL_SUGGESTED_GUIDANCE", "MODEL_SUGGESTED_GUIDANCE"),
+    ]
+
+
+def test_claim_category_is_declared_once_and_a_does_not_import_d() -> None:
+    modules = (a_contracts, a_store, d_contracts, shared_claim_types)
+    definitions = 0
+    for module in modules:
+        tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+        definitions += sum(isinstance(node, ast.ClassDef) and node.name == "ClaimCategory" for node in tree.body)
+        if module in (a_contracts, a_store):
+            assert not any(
+                isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("llm_generation")
+                or isinstance(node, ast.Import) and any(alias.name.startswith("llm_generation") for alias in node.names)
+                for node in ast.walk(tree)
+            )
+    assert definitions == 1
 
 
 def test_one_canonical_correlation_intent_crosses_all_public_boundaries() -> None:

@@ -14,6 +14,8 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Mapping, Protocol
 
+from rca_shared.claim_types import ClaimCategory
+
 
 class GenerationLifecycle(str, Enum):
     PENDING = "PENDING"
@@ -449,6 +451,176 @@ class KnowledgeReference:
 
 
 @dataclass(frozen=True, slots=True)
+class ArtifactEvidenceFact:
+    reference_id: str
+    evidence_snapshot_id: str
+    reference_schema_version: str
+    canonical_path: str
+    canonical_fact_commitment: str
+
+    def __post_init__(self) -> None:
+        for name in ("reference_id", "evidence_snapshot_id", "reference_schema_version", "canonical_path", "canonical_fact_commitment"):
+            _reference(getattr(self, name), name)
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactKnowledgeFact:
+    reference_id: str
+    knowledge_snapshot_id: str
+    snapshot_commitment: str
+    corpus_id: str
+    build_id: str
+    index_id: str
+    document_id: str
+    document_version: str
+    section_id: str
+    chunk_id: str
+    content_commitment: str
+    metadata_commitment: str
+
+    def __post_init__(self) -> None:
+        for name in self.__dataclass_fields__:
+            _reference(getattr(self, name), name)
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactClaim:
+    claim_id: str
+    category: ClaimCategory
+    text: str
+    supporting_evidence_ids: tuple[str, ...]
+    contradicting_evidence_ids: tuple[str, ...]
+    knowledge_reference_ids: tuple[str, ...]
+    evidential_support: EvidentialSupport | None = None
+
+    def __post_init__(self) -> None:
+        _reference(self.claim_id, "claim_id")
+        _require_enum(self.category, ClaimCategory, "category")
+        _text(self.text, "text")
+        for name in ("supporting_evidence_ids", "contradicting_evidence_ids", "knowledge_reference_ids"):
+            if not isinstance(getattr(self, name), tuple):
+                _fail(f"{name} must be an explicit tuple", name)
+            _tuple_of_references(getattr(self, name), name)
+        if self.evidential_support is not None:
+            _require_enum(self.evidential_support, EvidentialSupport, "evidential_support")
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactCausalAssertion:
+    inference_claim_id: str
+    cause_claim_ids: tuple[str, ...]
+    effect_claim_ids: tuple[str, ...]
+    relation: str
+
+    def __post_init__(self) -> None:
+        _reference(self.inference_claim_id, "inference_claim_id")
+        for name in ("cause_claim_ids", "effect_claim_ids"):
+            values = getattr(self, name)
+            if not isinstance(values, tuple) or not values:
+                _fail(f"{name} must be an explicit non-empty tuple", name)
+            _tuple_of_references(values, name)
+        if set(self.cause_claim_ids) & set(self.effect_claim_ids):
+            _fail("causal endpoints must be distinct", "cause_claim_ids")
+        if self.relation not in {"CAUSES", "CONTRIBUTES_TO"}:
+            _fail("unsupported causal relation", "relation")
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactCausalSupportProof:
+    proof_id: str
+    inference_claim_id: str
+    causal_rule_id: str
+    causal_rule_version: str
+    supporting_observed_claim_ids: tuple[str, ...]
+    evidence_snapshot_id: str
+    proof_commitment: str
+
+    def __post_init__(self) -> None:
+        for name in ("proof_id", "inference_claim_id", "causal_rule_id", "causal_rule_version", "evidence_snapshot_id", "proof_commitment"):
+            _reference(getattr(self, name), name)
+        if not isinstance(self.supporting_observed_claim_ids, tuple) or not self.supporting_observed_claim_ids:
+            _fail("causal proof requires explicit Observed Fact support", "supporting_observed_claim_ids")
+        _tuple_of_references(self.supporting_observed_claim_ids, "supporting_observed_claim_ids")
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactClaimSemantics:
+    """A-side structural record of admitted D semantics; no grounding authority."""
+
+    schema_version: str
+    claims: tuple[ArtifactClaim, ...]
+    evidence_references: tuple[ArtifactEvidenceFact, ...]
+    knowledge_references: tuple[ArtifactKnowledgeFact, ...]
+    summary_claim_ids: tuple[str, ...]
+    severity_claim_ids: tuple[str, ...]
+    hypothesis_claim_ids: tuple[tuple[str, ...], ...]
+    remediation_claim_ids: tuple[tuple[str, ...], ...]
+    prevention_claim_ids: tuple[tuple[str, ...], ...]
+    causal_assertions: tuple[ArtifactCausalAssertion, ...] = ()
+    causal_proofs: tuple[ArtifactCausalSupportProof, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.schema_version not in {"1", "2"}:
+            _fail("unsupported claim semantics version", "schema_version")
+        if self.schema_version == "1" and (self.causal_assertions or self.causal_proofs):
+            _fail("legacy typed claim schema cannot carry causal semantics", "schema_version")
+        for name, kind in (("claims", ArtifactClaim), ("evidence_references", ArtifactEvidenceFact), ("knowledge_references", ArtifactKnowledgeFact)):
+            values = getattr(self, name)
+            if not isinstance(values, tuple) or any(not isinstance(item, kind) for item in values):
+                _fail(f"{name} must be an immutable typed tuple", name)
+            identity = "claim_id" if name == "claims" else "reference_id"
+            if len({getattr(item, identity) for item in values}) != len(values):
+                _fail(f"{name} identities must be unique", name)
+        claim_ids = {item.claim_id for item in self.claims}
+        claim_by_id = {item.claim_id: item for item in self.claims}
+        evidence_ids = {item.reference_id for item in self.evidence_references}
+        knowledge_ids = {item.reference_id for item in self.knowledge_references}
+        if not isinstance(self.causal_assertions, tuple) or any(
+            not isinstance(item, ArtifactCausalAssertion) for item in self.causal_assertions
+        ) or not isinstance(self.causal_proofs, tuple) or any(
+            not isinstance(item, ArtifactCausalSupportProof) for item in self.causal_proofs
+        ):
+            _fail("causal semantics must be immutable typed tuples", "causal_assertions")
+        assertions = {item.inference_claim_id: item for item in self.causal_assertions}
+        if len(assertions) != len(self.causal_assertions):
+            _fail("causal assertion inference identity must be unique", "causal_assertions")
+        for assertion in self.causal_assertions:
+            inference = claim_by_id.get(assertion.inference_claim_id)
+            if inference is None or inference.category is not ClaimCategory.ANALYTICAL_INFERENCE:
+                _fail("causal assertion must resolve to an Analytical Inference", "causal_assertions")
+            for claim_id in assertion.cause_claim_ids + assertion.effect_claim_ids:
+                endpoint = claim_by_id.get(claim_id)
+                if endpoint is None or endpoint.category is not ClaimCategory.OBSERVED_FACT:
+                    _fail("causal endpoint must resolve to an Observed Fact", "causal_assertions")
+        if len({item.proof_id for item in self.causal_proofs}) != len(self.causal_proofs) or len({
+            item.inference_claim_id for item in self.causal_proofs
+        }) != len(self.causal_proofs):
+            _fail("causal proof identity must be unique", "causal_proofs")
+        for proof in self.causal_proofs:
+            assertion = assertions.get(proof.inference_claim_id)
+            if assertion is None or proof.supporting_observed_claim_ids != (
+                assertion.cause_claim_ids + assertion.effect_claim_ids
+            ):
+                _fail("causal proof must resolve to local Observed Facts", "causal_proofs")
+        for claim in self.claims:
+            if not set(claim.supporting_evidence_ids + claim.contradicting_evidence_ids) <= evidence_ids:
+                _fail("claim contains unresolved Evidence reference", "claims")
+            if not set(claim.knowledge_reference_ids) <= knowledge_ids:
+                _fail("claim contains unresolved Knowledge reference", "claims")
+        for name in ("summary_claim_ids", "severity_claim_ids"):
+            values = getattr(self, name)
+            if not isinstance(values, tuple) or not set(_tuple_of_references(values, name)) <= claim_ids:
+                _fail(f"{name} contains unresolved claim", name)
+        for name in ("hypothesis_claim_ids", "remediation_claim_ids", "prevention_claim_ids"):
+            groups = getattr(self, name)
+            if not isinstance(groups, tuple):
+                _fail(f"{name} must be an explicit tuple", name)
+            for group in groups:
+                if not isinstance(group, tuple) or not set(_tuple_of_references(group, name)) <= claim_ids:
+                    _fail(f"{name} contains unresolved claim", name)
+
+
+@dataclass(frozen=True, slots=True)
 class ArtifactProvenance:
     evidence_snapshot_id: str
     evidence_revision_id: str
@@ -478,6 +650,32 @@ class ArtifactProvenance:
             _fail("generation must be GenerationProvenance", "generation")
         object.__setattr__(self, "evidence_references", evidence)
         object.__setattr__(self, "knowledge_references", knowledge)
+
+
+@dataclass(frozen=True, slots=True)
+class TypedArtifactProvenanceRead:
+    """Read projection of persisted typed provenance, never a second store."""
+
+    evidence_snapshot_id: str
+    evidence_revision_id: str
+    knowledge_snapshot_id: str
+    evidence_references: tuple[ArtifactEvidenceFact, ...]
+    knowledge_references: tuple[ArtifactKnowledgeFact, ...]
+    generation: GenerationProvenance
+
+    def __post_init__(self) -> None:
+        for name in ("evidence_snapshot_id", "evidence_revision_id", "knowledge_snapshot_id"):
+            _reference(getattr(self, name), name)
+        if not isinstance(self.evidence_references, tuple) or any(
+            not isinstance(item, ArtifactEvidenceFact) for item in self.evidence_references
+        ):
+            _fail("typed Evidence provenance must be an immutable tuple")
+        if not isinstance(self.knowledge_references, tuple) or any(
+            not isinstance(item, ArtifactKnowledgeFact) for item in self.knowledge_references
+        ):
+            _fail("typed Knowledge provenance must be an immutable tuple")
+        if not isinstance(self.generation, GenerationProvenance):
+            _fail("generation must be GenerationProvenance", "generation")
 
 
 @dataclass(frozen=True, slots=True)
@@ -528,6 +726,7 @@ class RcaArtifact:
     evidence_completeness: EvidenceCompleteness
     knowledge_gap: bool
     provenance: ArtifactProvenance
+    claim_semantics: ArtifactClaimSemantics | None = None
 
     def __post_init__(self) -> None:
         _text(self.summary, "summary")
@@ -547,9 +746,37 @@ class RcaArtifact:
             _fail("action collections must contain RcaAction values")
         if not isinstance(self.provenance, ArtifactProvenance):
             _fail("provenance must be ArtifactProvenance", "provenance")
+        semantics = self.claim_semantics
+        if semantics is not None:
+            if not isinstance(semantics, ArtifactClaimSemantics):
+                _fail("claim_semantics must be typed", "claim_semantics")
+            if (len(semantics.hypothesis_claim_ids) != len(hypotheses)
+                    or len(semantics.remediation_claim_ids) != len(remediation)
+                    or len(semantics.prevention_claim_ids) != len(prevention)):
+                _fail("presentation coverage does not match Artifact fields", "claim_semantics")
+            if any(item.evidence_snapshot_id != self.provenance.evidence_snapshot_id for item in semantics.evidence_references):
+                _fail("Evidence fact Snapshot lineage mismatch", "claim_semantics")
+            if any(item.knowledge_snapshot_id != self.provenance.knowledge_snapshot_id for item in semantics.knowledge_references):
+                _fail("Knowledge fact Snapshot lineage mismatch", "claim_semantics")
+            if any(item.evidence_snapshot_id != self.provenance.evidence_snapshot_id for item in semantics.causal_proofs):
+                _fail("causal proof Evidence Snapshot lineage mismatch", "claim_semantics")
         limitations = _tuple_of_text(self.limitations, "limitations")
-        evidence_ids = {item.reference_id for item in self.provenance.evidence_references}
-        knowledge_ids = {item.reference_id for item in self.provenance.knowledge_references}
+        if semantics is None:
+            evidence_ids = {item.reference_id for item in self.provenance.evidence_references}
+            knowledge_ids = {item.reference_id for item in self.provenance.knowledge_references}
+        else:
+            evidence_ids = {item.reference_id for item in semantics.evidence_references}
+            knowledge_ids = {item.reference_id for item in semantics.knowledge_references}
+            if not {item.reference_id for item in self.provenance.evidence_references} <= evidence_ids:
+                _fail("legacy Evidence provenance adds an unadmitted typed reference", "provenance")
+            if not {item.reference_id for item in self.provenance.knowledge_references} <= knowledge_ids:
+                _fail("legacy Knowledge provenance adds an unadmitted typed reference", "provenance")
+            typed_knowledge = {item.reference_id: item for item in semantics.knowledge_references}
+            for legacy in self.provenance.knowledge_references:
+                typed = typed_knowledge[legacy.reference_id]
+                for name in ("corpus_id", "index_id", "document_id", "document_version", "section_id", "chunk_id"):
+                    if getattr(legacy, name) != getattr(typed, name):
+                        _fail("Knowledge reference identity contradicts typed provenance", "provenance")
         for hypothesis in hypotheses:
             if not set(hypothesis.supporting_evidence_ids + hypothesis.contradicting_evidence_ids) <= evidence_ids:
                 _fail("hypothesis contains unresolved evidence provenance", "hypotheses")
@@ -757,7 +984,7 @@ class RcaReadPort(Protocol):
     def get_version(self, version_id: str) -> RcaVersion | None: ...
     def get_version_history(self, aggregate_id: str) -> tuple[RcaVersion, ...]: ...
     def get_artifact(self, version_id: str) -> RcaArtifact | None: ...
-    def get_artifact_provenance(self, version_id: str) -> ArtifactProvenance | None: ...
+    def get_artifact_provenance(self, version_id: str) -> ArtifactProvenance | TypedArtifactProvenanceRead | None: ...
     def get_current(self, aggregate_id: str) -> CurrentRcaRead | None: ...
     def get_freshness_lineage(self, aggregate_id: str) -> tuple[CurrentRca, ...]: ...
     def get_publication_result(self, publication_operation_id: str) -> PublicationResult | None: ...

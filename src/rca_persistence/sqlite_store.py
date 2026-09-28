@@ -9,6 +9,7 @@ local A-side receipt as full publication authority.
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -21,6 +22,13 @@ from .contracts import (
     AdmitAttemptRequest,
     AdmittedRetryDisposition,
     ArtifactProvenance,
+    ArtifactClaim,
+    ArtifactClaimSemantics,
+    ArtifactCausalAssertion,
+    ArtifactCausalSupportProof,
+    ArtifactEvidenceFact,
+    ArtifactKnowledgeFact,
+    TypedArtifactProvenanceRead,
     ArtifactStatementKind,
     AttemptLineage,
     AttemptLineageRead,
@@ -55,6 +63,7 @@ from .contracts import (
     VersionRole,
     require_equivalent_attempt_lineage,
 )
+from rca_shared.claim_types import ClaimCategory
 
 
 SCHEMA_VERSION = "7"
@@ -798,9 +807,22 @@ class SqliteRcaStore:
         version = self.get_version(version_id)
         return None if version is None else version.artifact
 
-    def get_artifact_provenance(self, version_id: str) -> ArtifactProvenance | None:
+    def get_artifact_provenance(self, version_id: str) -> ArtifactProvenance | TypedArtifactProvenanceRead | None:
         artifact = self.get_artifact(version_id)
-        return None if artifact is None else artifact.provenance
+        if artifact is None:
+            return None
+        if artifact.claim_semantics is None:
+            return artifact.provenance
+        provenance = artifact.provenance
+        semantics = artifact.claim_semantics
+        return TypedArtifactProvenanceRead(
+            provenance.evidence_snapshot_id,
+            provenance.evidence_revision_id,
+            provenance.knowledge_snapshot_id,
+            semantics.evidence_references,
+            semantics.knowledge_references,
+            provenance.generation,
+        )
 
     def get_publication_result(
         self, publication_operation_id: str
@@ -2362,12 +2384,25 @@ def _artifact_matches_lineage(artifact: RcaArtifact, lineage: AttemptLineage) ->
 
 
 def _encode_artifact(artifact: RcaArtifact) -> str:
+    payload = asdict(artifact)
+    if artifact.claim_semantics is None:
+        del payload["claim_semantics"]  # preserve the exact historical JSON shape
+    else:
+        if artifact.claim_semantics.schema_version == "1":
+            del payload["claim_semantics"]["causal_assertions"]
+            del payload["claim_semantics"]["causal_proofs"]
+        payload["claim_semantics_commitment"] = _claim_semantics_commitment(payload["claim_semantics"])
     return json.dumps(
-        asdict(artifact),
+        payload,
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
     )
+
+
+def _claim_semantics_commitment(value: object) -> str:
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+    return hashlib.sha256(("rca-artifact-claims-v1\n" + encoded).encode("utf-8")).hexdigest()
 
 
 def _expect_object(value: object, keys: set[str], label: str) -> dict[str, object]:
@@ -2377,15 +2412,22 @@ def _expect_object(value: object, keys: set[str], label: str) -> dict[str, objec
 
 
 def _decode_artifact_object(value: object) -> RcaArtifact:
-    data = _expect_object(
-        value,
-        {
+    legacy_keys = {
             "summary", "severity_assessment", "diagnostic_conclusion", "hypotheses",
             "remediation_actions", "prevention_actions", "limitations",
             "evidence_completeness", "knowledge_gap", "provenance",
-        },
-        "Artifact",
-    )
+        }
+    if not isinstance(value, dict):
+        raise ValueError("Artifact must be an object")
+    if set(value) == legacy_keys:
+        semantics = None
+    elif set(value) == legacy_keys | {"claim_semantics", "claim_semantics_commitment"}:
+        if value["claim_semantics_commitment"] != _claim_semantics_commitment(value["claim_semantics"]):
+            raise ValueError("claim semantics commitment mismatch")
+        semantics = _decode_claim_semantics(value["claim_semantics"])
+    else:
+        raise ValueError("Artifact has unsupported or missing fields")
+    data = value
     provenance_data = _expect_object(
         data["provenance"],
         {
@@ -2478,6 +2520,74 @@ def _decode_artifact_object(value: object) -> RcaArtifact:
         EvidenceCompleteness(data["evidence_completeness"]),
         data["knowledge_gap"],  # type: ignore[arg-type]
         provenance,
+        semantics,
+    )
+
+
+def _decode_claim_semantics(value: object) -> ArtifactClaimSemantics:
+    base_keys = {
+        "schema_version", "claims", "evidence_references", "knowledge_references",
+        "summary_claim_ids", "severity_claim_ids", "hypothesis_claim_ids",
+        "remediation_claim_ids", "prevention_claim_ids",
+    }
+    if not isinstance(value, dict):
+        raise ValueError("claim semantics must be an object")
+    version = value.get("schema_version")
+    if version == "1":
+        data = _expect_object(value, base_keys, "claim semantics")
+    elif version == "2":
+        data = _expect_object(value, base_keys | {"causal_assertions", "causal_proofs"}, "claim semantics")
+    else:
+        raise ValueError("unsupported claim semantics version")
+    evidence = tuple(ArtifactEvidenceFact(**_expect_object(item, {
+        "reference_id", "evidence_snapshot_id", "reference_schema_version",
+        "canonical_path", "canonical_fact_commitment",
+    }, "Evidence fact")) for item in _object_list(data["evidence_references"], "Evidence facts"))
+    knowledge = tuple(ArtifactKnowledgeFact(**_expect_object(item, {
+        "reference_id", "knowledge_snapshot_id", "snapshot_commitment", "corpus_id",
+        "build_id", "index_id", "document_id", "document_version", "section_id",
+        "chunk_id", "content_commitment", "metadata_commitment",
+    }, "Knowledge fact")) for item in _object_list(data["knowledge_references"], "Knowledge facts"))
+    claims = tuple(ArtifactClaim(
+        item["claim_id"], ClaimCategory(item["category"]), item["text"],
+        tuple(_string_list(item["supporting_evidence_ids"], "claim support")),
+        tuple(_string_list(item["contradicting_evidence_ids"], "claim contradiction")),
+        tuple(_string_list(item["knowledge_reference_ids"], "claim Knowledge")),
+        None if item["evidential_support"] is None else EvidentialSupport(item["evidential_support"]),
+    ) for item in (
+        _expect_object(raw, {"claim_id", "category", "text", "supporting_evidence_ids",
+                             "contradicting_evidence_ids", "knowledge_reference_ids", "evidential_support"}, "claim")
+        for raw in _object_list(data["claims"], "claims")
+    ))
+    def groups(name: str) -> tuple[tuple[str, ...], ...]:
+        return tuple(tuple(_string_list(group, name)) for group in _object_list(data[name], name))
+    assertions = ()
+    proofs = ()
+    if version == "2":
+        assertions = tuple(ArtifactCausalAssertion(
+            item["inference_claim_id"],
+            tuple(_string_list(item["cause_claim_ids"], "causal causes")),
+            tuple(_string_list(item["effect_claim_ids"], "causal effects")),
+            item["relation"],
+        ) for item in (
+            _expect_object(raw, {"inference_claim_id", "cause_claim_ids", "effect_claim_ids", "relation"}, "causal assertion")
+            for raw in _object_list(data["causal_assertions"], "causal assertions")
+        ))
+        proofs = tuple(ArtifactCausalSupportProof(
+            item["proof_id"], item["inference_claim_id"], item["causal_rule_id"],
+            item["causal_rule_version"],
+            tuple(_string_list(item["supporting_observed_claim_ids"], "causal proof support")),
+            item["evidence_snapshot_id"], item["proof_commitment"],
+        ) for item in (
+            _expect_object(raw, {"proof_id", "inference_claim_id", "causal_rule_id", "causal_rule_version", "supporting_observed_claim_ids", "evidence_snapshot_id", "proof_commitment"}, "causal proof")
+            for raw in _object_list(data["causal_proofs"], "causal proofs")
+        ))
+    return ArtifactClaimSemantics(
+        data["schema_version"], claims, evidence, knowledge,
+        tuple(_string_list(data["summary_claim_ids"], "summary coverage")),
+        tuple(_string_list(data["severity_claim_ids"], "severity coverage")),
+        groups("hypothesis_claim_ids"), groups("remediation_claim_ids"),
+        groups("prevention_claim_ids"), assertions, proofs,
     )
 
 
