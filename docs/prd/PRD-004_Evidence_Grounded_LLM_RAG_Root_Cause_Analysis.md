@@ -30,7 +30,7 @@
 | 0.3 | 2026-09-18 | Draft — PM Final Approval Candidate | Narrow PM Final Review patch：釐清authority hierarchy、加入`INITIAL_PENDING` downstream projection、封閉Incident `rca_status` refresh semantics。 |
 | 1.0 | 2026-09-18 | Approved | PM Final Approval completed；D1～D10、Revision Round 1、Narrow Final Patch及AC-004-A～X通過Final Review；正式凍結為RCA Domain後續Engineering SPEC與cross-document reconciliation的產品需求權威。 |
 
-> **Status Honesty：**`PRD-004 v1.0`已完成PM Final Review，Product Status維持`Approved`，正式成為RCA Domain後續Engineering SPEC與cross-document reconciliation的產品需求權威。Post-integration repository reality為Candidate A／B／C已依SPEC-012／013／014實作；Candidate D／E／F、LLM generation、RCA Runtime orchestration、final RCA／RAG E2E及Production Ready仍為Pending。產品語意版本不因本次implementation reconciliation升版。
+> **Status Honesty：**`PRD-004 v1.0`已完成PM Final Review，Product Status維持`Approved`，正式成為RCA Domain後續Engineering SPEC與cross-document reconciliation的產品需求權威。Post-integration repository reality為Candidate A／B／C／D已依SPEC-012／013／014／015實作；Candidate E／F、RCA Runtime orchestration、Publication／Publication Reconciliation orchestration、Startup RCA recovery、final RCA／RAG E2E仍為Pending，Production Ready為`NO`。產品語意版本不因本次implementation reconciliation升版。
 
 ---
 
@@ -962,7 +962,7 @@ S1～S6 fixtures、repeated-run、main metrics、Conclusion Calibration、degrad
 
 建議順序：先完成upstream reconciliation與A；B／C可平行；D依賴A／B／C；E整合A～D與SPEC-008／011；F進行full validation。
 
-## 21.1 Post-Integration Downstream Mapping／Reconciliation Ledger（2026-09-26）
+## 21.1 Post-Integration Downstream Mapping／Reconciliation Ledger（2026-09-29）
 
 本ledger是additive current mapping，不改寫上述historical planning／decomposition，也不表示PRD-004在當時已指定SPEC number。
 
@@ -971,11 +971,11 @@ S1～S6 fixtures、repeated-run、main metrics、Conclusion Calibration、degrad
 | Candidate A — RCA Artifact & Persistence | SPEC-012 | Implemented |
 | Candidate B — Incident Evidence Collection & Snapshot | SPEC-013 | Implemented |
 | Candidate C — RAG Knowledge Index & Retrieval | SPEC-014 | Implemented；AC-014-X另依該SPEC記錄為`NOT EXECUTED — PM-DIRECTED SKIP FOR CURRENT CLOSURE`，不是PASS |
-| Candidate D — LLM Generation & Validation | 尚無completed downstream implementation | Pending |
+| Candidate D — LLM Generation & Validation | SPEC-015 | Implemented；Live Gemini為`NOT EXECUTED` |
 | Candidate E — RCA Orchestration, Publication & Recovery | 尚無completed downstream implementation；caller-driven publication coordinator不等於RCA Runtime scheduler／recovery authority | Pending |
 | Candidate F — RCA Evaluation & E2E Validation | 尚無completed downstream implementation | Pending |
 
-Integrated develop full regression evidence為`1669 passed, 3 skipped, 0 failed`。此evidence支持completed SPEC的current implementation reconciliation；3個skipped tests不構成AC-014-X、live Google provider或final RCA E2E的PASS evidence。
+Integrated develop full regression evidence為`1829 passed, 4 skipped`。此evidence支持completed SPEC的current implementation reconciliation；4個skipped tests不構成AC-014-X、Live Gemini、live Google provider或final RCA E2E的PASS evidence。
 
 ---
 

@@ -32,7 +32,7 @@
 
 > **Draft ≠ Approved；Approved ≠ Implemented；Slice implementation ≠ RCA E2E complete。**
 
-**SPEC-014 v1.0 Engineering Contract與v1.1 Production Knowledge Governance amendment維持historical authority；v1.2為documentation-only closure，Current Status為`Implemented`。** Repository現已包含approved six-document corpus、governed manifest、Google `text-embedding-004` adapter、Chroma index adapter、build／validate／activate／retrieve CLI、Knowledge Snapshot與public provenance。AC-014-X未執行，依PM指示作current closure的explicit verification exception；這不是PASS，也沒有four-member evidence。Default regression亦不構成live Google provider或real-RAG PASS。此closure不表示Candidate D／E／F、LLM generation、final RCA E2E或Production Ready。
+**SPEC-014 v1.0 Engineering Contract與v1.1 Production Knowledge Governance amendment維持historical authority；v1.2為documentation-only closure，Current Status為`Implemented`。** Repository現已包含approved six-document corpus、governed manifest、Google `text-embedding-004` adapter、Chroma index adapter、build／validate／activate／retrieve CLI、Knowledge Snapshot與public provenance。AC-014-X未執行，依PM指示作current closure的explicit verification exception；這不是PASS，也沒有four-member evidence。Default regression亦不構成live Google provider或real-RAG PASS。Candidate D／SPEC-015 LLM generation／validation現已實作；Candidate E／F與final RCA E2E仍為Pending，Production Ready為`NO`。
 
 ---
 

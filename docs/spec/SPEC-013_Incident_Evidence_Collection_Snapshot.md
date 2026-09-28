@@ -30,7 +30,7 @@
 
 本文件的normative baseline仍是Candidate B v1.0 Approved Engineering Contract；v1.1只記錄current implementation closure，Current Status為`Implemented`。
 
-Repository現已包含Candidate-B production Evidence capability：Evidence Store、trusted-core capture、bounded Loki／Prometheus adapters、immutable Snapshot／Revision、pairwise Materiality、replay／concurrency／integrity、recovery及security boundaries，並提供Candidate A所需的public semantic handoff。Historical approval phase中「尚未包含implementation」的文字只描述當時狀態。此closure不表示SPEC-011 RCA Runtime orchestration、LLM generation、final RCA E2E或Production Ready已完成。
+Repository現已包含Candidate-B production Evidence capability：Evidence Store、trusted-core capture、bounded Loki／Prometheus adapters、immutable Snapshot／Revision、pairwise Materiality、replay／concurrency／integrity、recovery及security boundaries，並提供Candidate A所需的public semantic handoff。Historical approval phase中「尚未包含implementation」的文字只描述當時狀態。Candidate D／SPEC-015 LLM generation／validation已實作；Candidate B仍不擁有LLM generation。Candidate E／F、SPEC-011 RCA Runtime orchestration及final RCA E2E仍為Pending，Production Ready為`NO`。
 
 ## 0.2 Authority Order
 
@@ -1402,4 +1402,4 @@ This v1.0 Engineering Contract is Approved — Implementation Pending as of 2026
 
 ## 23.1 Post-Integration Implementation Closure（2026-09-26）
 
-SPEC-013 current Status為`Implemented`。Current repository reality包含production Evidence capability、Evidence Store、trusted-core capture、Loki／Prometheus adapters、Materiality、recovery與security behavior。Human提供的integrated develop full regression結果為`1669 passed, 3 skipped, 0 failed`（63.11s），develop integration baseline為`b034921eab7d0fa17754eea902c9e12bc2932052`。此documentation-only closure不修改v1.0 Approved contract或D1～D5，也不宣稱SPEC-011 RCA Runtime orchestration、LLM generation、final RCA E2E或Production Ready。
+SPEC-013 current Status為`Implemented`。Current repository reality包含production Evidence capability、Evidence Store、trusted-core capture、Loki／Prometheus adapters、Materiality、recovery與security behavior。Human提供的Candidate-A／B／C integrated develop full regression結果為`1669 passed, 3 skipped, 0 failed`（63.11s），該階段develop integration baseline為`b034921eab7d0fa17754eea902c9e12bc2932052`。此historical evidence及documentation-only closure不修改v1.0 Approved contract或D1～D5。Candidate D／SPEC-015現已實作；這不表示Candidate B擁有LLM generation，也不宣稱Candidate E／F、SPEC-011 RCA Runtime orchestration、final RCA E2E或Production Ready。

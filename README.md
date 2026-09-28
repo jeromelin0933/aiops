@@ -1,8 +1,8 @@
 # AIOps Incident-driven Platform
 
-Last reviewed against current governance baseline: 2026-09-26
+Last reviewed against current governance baseline: 2026-09-29
 
-本repository目前已實作Mock Data generation、Observability foundation、Event Detection、Event Detection Runner、Scenario runtime／validation、SPEC-006～011既有核准範圍，以及PRD-004 Candidate A／B／C：RCA persistence／publication、Incident Evidence Snapshot／Materiality與Knowledge Corpus／Index／Retrieval／Snapshot。PRD-001 v3.5仍為overall platform authority，PRD-003 v1.1是Alert Correlation／Incident Management authority，PRD-004 v1.0維持`Approved`產品需求權威。
+本repository目前已實作Mock Data generation、Observability foundation、Event Detection、Event Detection Runner、Scenario runtime／validation、SPEC-006～011既有核准範圍，以及PRD-004 Candidate A／B／C／D：RCA persistence／publication、Incident Evidence Snapshot／Materiality、Knowledge Corpus／Index／Retrieval／Snapshot與LLM Generation／Validation。PRD-001 v3.5仍為overall platform authority，PRD-003 v1.1是Alert Correlation／Incident Management authority，PRD-004 v1.0維持`Approved`產品需求權威。
 
 ## Current implementation
 
@@ -22,12 +22,13 @@ Last reviewed against current governance baseline: 2026-09-26
 - SPEC-012 RCA Artifact persistence、Current／History／Freshness、public reads與SPEC-008 publication coordination
 - SPEC-013 Incident Evidence Store、trusted-core capture、Loki／Prometheus adapters、Snapshot／Revision與Materiality
 - SPEC-014 approved six-document Knowledge Corpus、governed manifest、Google embedding／Chroma adapters、build／validate／activate／retrieve CLI、Knowledge Snapshot與public provenance
+- SPEC-015 Gemini provider boundary、structured generation、validation and grounding、durable Candidate-D result、Same-Try safety and replay、Candidate-A lossless Artifact projection support
 
 Current PoC implementation uses Python stdlib `sqlite3` for the Correlation State Store及independent D2 Runtime Work Store。D2只保存orchestration continuity，不是Event、Pending、Processed、Intent、Incident、Shadow或Workflow authority；SQLite是current implementation reality，不是platform或production database requirement。
 
 SPEC-014 Candidate C核准範圍目前為`Implemented`。AC-014-X未執行，closure disposition為`NOT EXECUTED — PM-DIRECTED SKIP FOR CURRENT CLOSURE`；這不是PASS，且沒有four-member evidence。Adapter存在及default regression PASS均不能冒充live Google provider或real-RAG PASS。
 
-仍Pending的PRD-004 scope包括Candidate D／E／F、LLM generation、SPEC-011 RCA Runtime orchestration及final RCA／RAG E2E；repository亦非Production Ready。SPEC-012／SPEC-008 caller-driven publication coordinator不等於Runtime scheduler或recovery authority。
+Candidate D／SPEC-015核准範圍目前為`Implemented`。仍Pending的PRD-004 scope包括Candidate E／F、SPEC-011 RCA Runtime orchestration、Publication／Publication Reconciliation orchestration、Startup RCA recovery及final RCA／RAG E2E；repository亦非Production Ready。SPEC-012／SPEC-008 caller-driven publication coordinator不等於Runtime scheduler或recovery authority。Live Gemini為`NOT EXECUTED`。
 
 SPEC-014 local setup、credential boundary、commands及generated artifact規則見 [`docs/knowledge_index.md`](docs/knowledge_index.md)。Default `python -m pytest -q`不需要live Google credential；real provider validation必須explicit opt-in。
 
@@ -205,7 +206,7 @@ __pycache__/
 
 ## Authoritative documents / governance
 
-治理依domain分工：PRD-002與SPEC-001～004治理Event Detection；PRD-003 v1.1治理Alert Correlation／Incident Management；PRD-004 v1.0治理RCA產品需求，SPEC-012／013／014治理Candidate A／B／C semantics；SPEC-011治理既有Runtime orchestration，尚未完成PRD-004 RCA Runtime orchestration。PRD-001 v3.5治理overall platform direction；DDS-001是supporting repository-level reference；README只提供入口與索引。
+治理依domain分工：PRD-002與SPEC-001～004治理Event Detection；PRD-003 v1.1治理Alert Correlation／Incident Management；PRD-004 v1.0治理RCA產品需求，SPEC-012／013／014／015治理Candidate A／B／C／D semantics；SPEC-011治理既有Runtime orchestration，尚未完成PRD-004 RCA Runtime orchestration。PRD-001 v3.5治理overall platform direction；DDS-001是supporting repository-level reference；README只提供入口與索引。
 
 | Document | Role |
 |---|---|
@@ -227,9 +228,10 @@ __pycache__/
 | SPEC-012 v1.1 | Implemented；RCA Artifact／Persistence及publication-side truth |
 | SPEC-013 v1.1 | Implemented；Incident Evidence Collection／Snapshot／Materiality |
 | SPEC-014 v1.2 | Implemented；Knowledge Corpus／Index／Retrieval／Snapshot；AC-014-X PM-directed skip，不是PASS |
-| DDS-001 v1.6 | Supporting repository-level implementation architecture reference |
+| SPEC-015 v1.1 | Implemented；LLM Generation／Validation、durable result、Same-Try safety／replay；Live Gemini未執行 |
+| DDS-001 v1.7 | Supporting repository-level implementation architecture reference |
 
-PRD-002與SPEC-001～SPEC-004提供正式Event Detection contract；PRD-003 v1.1提供Alert Correlation／Incident Management requirements；PRD-004 v1.0與SPEC-012～014提供RCA Candidate A／B／C authority。DDS／README不建立新的normative authority。
+PRD-002與SPEC-001～SPEC-004提供正式Event Detection contract；PRD-003 v1.1提供Alert Correlation／Incident Management requirements；PRD-004 v1.0與SPEC-012～015提供RCA Candidate A／B／C／D authority。DDS／README不建立新的normative authority。
 
 SDD、ADR-001 與 PM team instructions 是由 Google Drive 管理的 external governance documents。Repository 不建立其 mirror，本 README 也不推測其版本或內容。
 
@@ -238,5 +240,5 @@ SDD、ADR-001 與 PM team instructions 是由 Google Drive 管理的 external go
 - Grafana datasource provisioning 與 dashboard import 尚未自動化。
 - Model artifacts 是 local runtime prerequisites。
 - SPEC-006～011已依各自核准scope完成；SPEC-011的Host與Docker Runtime E2E已驗證，但目前Runtime仍是single-process／single-node PoC，沒有HA、distributed coordination、Kafka／broker、exactly-once transport infrastructure或cross-store 2PC。
-- Candidate A／B／C已實作，但Candidate D／E／F、LLM generation、RCA Runtime orchestration、final RCA／RAG E2E、Jira、Discord／ChatOps、complete Dashboard workflow、Email fallback／escalation、automatic remediation、production hardening與complete closed loop仍未完成；因此不得宣稱Production Ready。
+- Candidate A／B／C／D已實作，但Candidate E／F、RCA Runtime orchestration、Publication／Publication Reconciliation orchestration、Startup RCA recovery、final RCA／RAG E2E、operational adapters、Jira、Discord／ChatOps、complete Dashboard workflow、Email fallback／escalation、automatic remediation、production hardening與complete closed loop仍未完成；因此不得宣稱Production Ready。
 - Demo / E2E validation controller 與其 validation-specific behavior 不構成 production architecture requirement。

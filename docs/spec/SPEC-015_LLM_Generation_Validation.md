@@ -1,6 +1,6 @@
 # SPEC-015 — LLM Generation & Validation
 
-## Engineering Specification v1.0
+## Engineering Specification v1.1
 
 ---
 
@@ -10,8 +10,8 @@
 |---|---|
 | Document ID | SPEC-015 |
 | Document Name | LLM Generation & Validation |
-| Version | 1.0 |
-| Status | Approved — Implementation Pending |
+| Version | 1.1 |
+| Status | Implemented |
 | Candidate | Candidate D |
 | Requirement Authority | PRD-004 v1.0 Approved |
 | Upstream Engineering Contracts | SPEC-012, SPEC-013, SPEC-014, SPEC-011, SPEC-008 current approved contracts |
@@ -24,10 +24,11 @@
 |---|---|---|---|
 | 0.1 | 2026-09-27 | Draft | Phase 2 initial Engineering Contract draft；formalized Frozen D1–D8 plus D1-4／G1–G9；Phase 3 semantic review completed；F-001 identified |
 | 1.0 | 2026-09-27 | Approved — Implementation Pending | Phase 4 narrow editorial patch completed；F-001 closed；Phase 3 re-review PASS；no blocker／major／minor findings remain；D1–D8 and G1–G9 preserved；approved as Candidate-D implementation baseline；implementation has not started |
+| 1.1 | 2026-09-29 | Implemented — Documentation-only Closure | Post-integration reconciliation：記錄Candidate-D approved scope已實作、Same-Try corrective已完成並整合至develop；保留v1.0 Approved normative baseline、Frozen D1～D8、G1～G9及Approved Acceptance Criteria語意。 |
 
 ### Status Honesty
 
-本文件是SPEC-015 v1.0 Approved Engineering Contract，狀態為`Approved — Implementation Pending`。Approved不等於Implemented，也不是implementation completion evidence；Candidate-D production implementation尚未開始。Current repository已完成Candidate A／B／C，但尚未實作Candidate D LLM generation、Candidate E RCA orchestration或Candidate F evaluation。本文件不得被用來宣稱Gemini live validation、RCA Runtime complete、Candidate E或Candidate F complete、final RCA/RAG E2E或Production Ready。
+SPEC-015 v1.0 Approved Engineering Contract持續作為normative baseline；v1.1只記錄documentation-only implementation closure，Current Status為`Implemented`。Current repository已完成Candidate A／B／C／D；Candidate E RCA orchestration與Candidate F evaluation仍為Pending。`Implemented`只表示Candidate-D approved scope已實作並驗證，不表示Live Gemini PASS、Candidate E／F implemented、RCA Runtime orchestration complete、final RCA／RAG E2E complete或Production Ready。
 
 ---
 
@@ -1093,3 +1094,25 @@ Final Consistency Audit: PASS
 Phase 3 Re-review: PASS
 Open Findings: NONE
 ```
+
+---
+
+# 32. Post-Integration Implementation Closure
+
+SPEC-015 v1.0 Approved normative baseline、historical approval／implementation rows、Frozen Engineering Decisions及Approved Acceptance Criteria語意均維持不變。Same-Try corrective是approved semantics enforcement correction，不是新的SPEC semantic amendment。
+
+Current implementation closure evidence：
+
+```text
+Initial implementation: 7ccf85c33c68352da0f108aa23c22825d34d5902
+Same-Try corrective: d5a7f3e06c5475b475f954391246372cf4a678ff
+Develop integration: bb71e124a53f7e73e4ecdb1adc5bb69ada0908cb
+Integrated full regression: 1829 passed, 4 skipped
+Live Gemini: NOT EXECUTED
+```
+
+Implemented capability涵蓋Gemini provider boundary、Generation Profile／provenance、structured generation、schema／typed claim／Evidence reference／Knowledge reference／guidance／grounding／machine-verifiable causal validation、typed provider／validation failure、retry-safety facts、Same-Try local execution safety、durable Candidate-D validated result、result replay／recovery、subject-level `(attempt_id, try_ordinal)` durable result authority，以及Candidate-A lossless Artifact projection support。
+
+Candidate D不擁有Candidate-A Try history、Artifact／Version authority、publication、Incident mutation、Runtime scheduling、retry timing／budget、next `try_ordinal`、startup recovery orchestration或cross-domain reconciliation。
+
+Status honesty：`SPEC-015 Implemented`只表示Candidate-D approved scope已實作並驗證。Candidate E／SPEC-016與Candidate F／SPEC-017仍為Pending／Not Started；PRD-004 RCA Runtime orchestration、Publication orchestration、Publication Reconciliation orchestration、Startup RCA recovery及final RCA／RAG E2E仍為Pending；Production Ready為`NO`。4個skipped tests不構成Live Gemini或final RCA E2E PASS evidence。

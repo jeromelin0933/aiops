@@ -28,7 +28,7 @@
 | 1.2 | 2026-09-18 | Post-PRD-004 approved additive reconciliation：承諾future authorized RCA relationship mutation、Current publication integrity、same logical publication operation identity、authoritative read與Publication Reconciliation capability。僅補capability boundary；未凍結exact API／DTO／SQL／receipt table／CAS／transaction implementation，未實作RCA integration，且不變更D1～D12或v1.1既有behavior。 |
 | 1.3 | 2026-09-26 | Documentation-only implementation reconciliation：v1.2 additive RCA relationship scope已實作，涵蓋publication request／result、durable receipt、Current replacement、stale／conflict handling、public reads及SPEC-012／SPEC-008 caller-driven publication coordinator；不修改historical rows、D1～D12或Approved AC text。 |
 
-> **Implementation Status Honesty：SPEC-008 v1.1既有Incident Core scope與v1.2 additive RCA relationship scope均已實作；v1.3只記錄post-integration documentation closure。** Current capability包含RCA publication request／result、durable receipt、authorized Current replacement、stale／conflict handling、public reads及SPEC-012／SPEC-008 caller-driven publication coordinator。該coordinator不是SPEC-011 RCA Runtime scheduler、retry、wake-up或recovery authority；RCA Runtime orchestration、LLM generation、final RCA E2E及Production Ready仍為Pending。
+> **Implementation Status Honesty：SPEC-008 v1.1既有Incident Core scope與v1.2 additive RCA relationship scope均已實作；v1.3只記錄post-integration documentation closure。** Current capability包含RCA publication request／result、durable receipt、authorized Current replacement、stale／conflict handling、public reads及SPEC-012／SPEC-008 caller-driven publication coordinator。Candidate D／SPEC-015 LLM generation／validation已實作；該coordinator仍不是SPEC-011 RCA Runtime scheduler、retry、wake-up或recovery authority，Candidate E／F、RCA Runtime orchestration及final RCA E2E仍為Pending，Production Ready為`NO`。
 
 ---
 
@@ -1111,7 +1111,7 @@ SPEC-010可消費本SPEC提供的public read-only Event→Incident ownership cap
 
 Current repository已實作RCA publication request／result、durable publication receipt、authorized Current replacement、older／superseded rejection、identity conflict handling與authoritative public reads。SPEC-012／SPEC-008 publication coordinator只在caller明確呼叫時協調兩個domain的public semantic APIs；它不排程工作、不擁有retry／wake-up／startup recovery，也不取代仍Pending的SPEC-011 RCA Runtime orchestration。
 
-Human提供的integrated develop full regression為`1669 passed, 3 skipped, 0 failed`（63.11s），develop integration baseline為`b034921eab7d0fa17754eea902c9e12bc2932052`。此evidence支持RCA relationship additive scope current status `Implemented`，不證明LLM generation或final RCA E2E。
+Human提供的Candidate-A／B／C integrated develop full regression為`1669 passed, 3 skipped, 0 failed`（63.11s），該階段develop integration baseline為`b034921eab7d0fa17754eea902c9e12bc2932052`。此historical evidence支持RCA relationship additive scope current status `Implemented`。Candidate D／SPEC-015現亦已實作；這不證明Candidate E／F、RCA Runtime orchestration或final RCA E2E。
 
 ---
 
