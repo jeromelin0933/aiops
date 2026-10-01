@@ -27,6 +27,8 @@ from .errors import (
     RetryDisposition,
 )
 from .identity import canonical_json, capture_command_semantic_identity, semantic_identity
+from .materiality import MaterialityEvaluator
+from .contracts import MaterialityRequest, MaterialityResult
 from .policy import EvidencePolicy, SourceAdmissionPolicy
 from .sqlite_store import SqliteEvidenceStore
 from .trusted_core import AuthoritativeEventReader, IncidentReader, admit_capture_plan
@@ -269,6 +271,14 @@ class EvidenceCaptureService:
 
     def resolve_revision(self, revision_id: str) -> EvidenceRevision | None:
         return self._store.resolve_revision(revision_id)
+
+    def compare_materiality(self, request: MaterialityRequest) -> MaterialityResult:
+        """Resolve Candidate-B Materiality through the same public service boundary.
+
+        The evaluator's durable receipt remains the authority; this method is a
+        semantic convenience for consumers which must not couple to the store.
+        """
+        return MaterialityEvaluator(self._store).compare_materiality(request)
 
     @staticmethod
     def _validate_finalization(

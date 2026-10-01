@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timedelta, timezone
+from dataclasses import replace
 from enum import Enum
 from pathlib import Path
 
@@ -477,7 +478,7 @@ def test_config_validates_loop_and_authority_store_paths(tmp_path) -> None:
 
 def test_real_runtime_application_empty_store_runs_until_idle(tmp_path) -> None:
     config_path = Path("configs/runtime_orchestration.yaml").resolve()
-    config = load_runtime_config(config_path)
+    config = replace(load_runtime_config(config_path), rca=None)
     application = build_runtime_application(
         config, project_root=tmp_path, config_path=config_path
     )
@@ -489,7 +490,7 @@ def test_real_runtime_application_empty_store_runs_until_idle(tmp_path) -> None:
 
 def test_real_runtime_application_corrupt_event_store_fails_bootstrap(tmp_path) -> None:
     config_path = Path("configs/runtime_orchestration.yaml").resolve()
-    config = load_runtime_config(config_path)
+    config = replace(load_runtime_config(config_path), rca=None)
     event_path = tmp_path / config.authority_stores.event_store_path
     event_path.parent.mkdir(parents=True)
     event_path.write_text("{broken", encoding="utf-8")

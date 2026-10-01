@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import re
 from datetime import datetime
 from enum import Enum
 from typing import Any, Protocol
@@ -46,7 +48,15 @@ _ALLOWED_FIELDS = frozenset(
         "reconciliation_result",
         "status",
         "corruption_code",
+        "root_id", "work_kind", "action", "attempt_id", "try_ordinal", "retry_lane",
+        "consumed_slots", "frontier_count", "coalesced_count",
+        "wake_at", "publication_classification", "recovery_classification",
+        "exhaustion", "conflict", "completion",
     }
+)
+
+_SECRET_SHAPE = re.compile(
+    r"(?i)(?:bearer\s+\S+|authorization\s*[:=]\s*\S+|(?:api[_-]?key|password|secret|credential|token)\s*[:=]\s*\S+|sk-[A-Za-z0-9_-]{12,})"
 )
 
 
@@ -80,6 +90,11 @@ class StdlibRuntimeTelemetry:
                 value = value.value
             if value is not None and not isinstance(value, (str, int, float, bool)):
                 raise TypeError(f"telemetry field {key} must be a scalar")
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                if not math.isfinite(value) or abs(value) > 1_000_000_000:
+                    raise ValueError(f"telemetry field {key} must be finite and bounded")
+            if isinstance(value, str):
+                value = "[REDACTED]" if _SECRET_SHAPE.search(value) else value[:256]
             payload[key] = value
         self._logger.log(self._level, json.dumps(payload, sort_keys=True, separators=(",", ":")))
 

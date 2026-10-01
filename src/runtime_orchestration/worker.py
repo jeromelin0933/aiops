@@ -60,6 +60,12 @@ class RuntimeWorkerCore(Protocol):
     def run_cycle(self) -> RuntimeCycleResult: ...
 
 
+class RcaRuntimePort(Protocol):
+    """Candidate-E steps dispatched by the existing Runtime worker."""
+    def recover(self, runtime_snapshot: object) -> None: ...
+    def run_cycle(self, *, should_stop: object) -> RuntimeCycleResult: ...
+
+
 class RetryStatePort(Protocol):
     def resolve(self, event_id: str) -> ResolvedCorrelationState: ...
 
@@ -158,6 +164,7 @@ class CorrelationRuntimeCore:
         clock: RuntimeClock,
         stop: RuntimeStopController,
         telemetry: RuntimeTelemetry | None = None,
+        rca: RcaRuntimePort | None = None,
     ) -> None:
         if not isinstance(bootstrap, RuntimeBootstrap):
             raise TypeError("bootstrap must be RuntimeBootstrap")
@@ -180,6 +187,7 @@ class CorrelationRuntimeCore:
         self._clock = clock
         self._stop = stop
         self._telemetry = telemetry or NullRuntimeTelemetry()
+        self._rca = rca
 
     def startup(self) -> None:
         self._telemetry.emit(
@@ -262,6 +270,8 @@ class CorrelationRuntimeCore:
                 ),
                 reconciliation_result=outcome.outcome_kind,
             )
+        if self._rca is not None:
+            self._rca.recover(snapshot)
         self._bootstrap._complete_recovery(snapshot)
         self._telemetry.emit(
             RuntimeTelemetryEvent.RECOVERY,
@@ -374,7 +384,15 @@ class CorrelationRuntimeCore:
                 self._emit_correlation_outcome(outcome, stage="PENDING")
 
         eligibility = self._retry.enumerate_eligibility()
-        return RuntimeCycleResult(acquired, completed, eligibility.next_eligibility)
+        next_at = eligibility.next_eligibility
+        if self._rca is not None and not self._stop.requested:
+            rca = self._rca.run_cycle(should_stop=lambda: self._stop.requested)
+            acquired += rca.acquired_work
+            completed += rca.completed_safe_boundaries
+            if rca.next_eligibility is not None:
+                next_at = (rca.next_eligibility if next_at is None else
+                           min(next_at, rca.next_eligibility))
+        return RuntimeCycleResult(acquired, completed, next_at)
 
     def _emit_correlation_outcome(self, outcome: object, *, stage: str) -> None:
         terminal = getattr(outcome, "terminal", None)

@@ -99,7 +99,7 @@ class _Time:
 
 
 class _HostRuntime:
-    def __init__(self, root, events, *, time: _Time | None = None) -> None:
+    def __init__(self, root, events, *, time: _Time | None = None, rca=None) -> None:
         root.mkdir(parents=True, exist_ok=True)
         self.root = root
         self.time = time or _Time()
@@ -192,6 +192,7 @@ class _HostRuntime:
             clock=self.clock,
             stop=stop,
             telemetry=self.telemetry,
+            rca=rca,
         )
         self.worker = RuntimeWorker(
             self.core,

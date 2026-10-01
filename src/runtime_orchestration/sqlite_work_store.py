@@ -55,6 +55,12 @@ class RuntimeWorkStoreClosedError(RuntimeWorkStoreError):
 
 _SCHEMA_VERSION = 1
 _TABLES = frozenset({"runtime_work_store_metadata", "runtime_work_records"})
+# Candidate-E S1 may add these continuation tables to this *same* Runtime D2
+# database.  They are deliberately not Runtime Work records and must never be
+# decoded as such.
+_RCA_CONTINUATION_TABLES = frozenset({
+    "rca_continuation_store_metadata", "rca_runtime_continuations",
+})
 _METADATA_COLUMNS = (
     ("singleton", "INTEGER", 1, 1),
     ("schema_version", "INTEGER", 1, 0),
@@ -337,9 +343,9 @@ class SqliteRuntimeWorkStore:
                 COMMIT;
                 """
             )
-        elif tables != _TABLES:
+        elif tables not in (_TABLES, _TABLES | _RCA_CONTINUATION_TABLES):
             raise RuntimeWorkStoreIntegrityError(
-                "database is not an independent Runtime Work Store"
+                "database is not an independent Runtime Work Store with a recognized extension"
             )
         self._validate_schema()
 

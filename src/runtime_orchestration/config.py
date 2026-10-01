@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from dataclasses import dataclass
 from pathlib import Path, PurePath
 from typing import Any, Mapping
+from urllib.parse import urlsplit
 
 import yaml
 from incident_management import AssignmentPolicyConfig
@@ -43,6 +45,18 @@ class RuntimeLoopConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class RuntimeRcaConfig:
+    a_store_path: str
+    b_store_path: str
+    d_store_path: str
+    knowledge_config_path: str
+    generation_config_path: str
+    evidence_config_path: str
+    loki_endpoint: str
+    prometheus_endpoint: str
+
+
+@dataclass(frozen=True, slots=True)
 class RuntimeConfig:
     version: str
     event_intake_poll_seconds: float
@@ -55,6 +69,7 @@ class RuntimeConfig:
     automation_actor: str
     assignment_policy: AssignmentPolicyConfig
     telemetry: RuntimeTelemetryConfig
+    rca: RuntimeRcaConfig | None = None
 
 
 _ROOT_KEYS = {
@@ -106,8 +121,24 @@ def _non_empty(value: Any, label: str) -> str:
 def _repo_relative_path(value: Any, label: str = "work_store.path") -> str:
     text = _non_empty(value, label)
     path = PurePath(text)
-    if path.is_absolute() or ".." in path.parts:
+    if (len(text) > 256 or path.is_absolute() or ".." in path.parts
+        or re.search(r"(?i)(?:api[_-]?key|password|secret|credential|token)[=:]", text)):
         raise RuntimeConfigError(f"{label} must be a safe repo-relative path")
+    return text
+
+
+def _local_endpoint(value: Any, label: str) -> str:
+    text = _non_empty(value, label)
+    parsed = urlsplit(text)
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise RuntimeConfigError(f"{label} has an invalid port") from exc
+    if (len(text) > 256 or parsed.scheme != "http" or parsed.username or parsed.password or
+        parsed.query or parsed.fragment or parsed.hostname not in
+        {"localhost", "127.0.0.1", "loki", "prometheus"} or not port or
+        re.search(r"(?i)(?:api[_-]?key|password|secret|credential|token|bearer)", parsed.path)):
+        raise RuntimeConfigError(f"{label} must be a local non-secret HTTP endpoint")
     return text
 
 
@@ -118,7 +149,8 @@ def load_runtime_config(path: str | Path) -> RuntimeConfig:
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
         raise RuntimeConfigError(f"runtime config is unreadable: {path}") from exc
     root = _mapping(raw, "runtime config")
-    _exact_keys(root, _ROOT_KEYS, "runtime config")
+    if set(root) not in (_ROOT_KEYS, _ROOT_KEYS | {"rca"}):
+        raise RuntimeConfigError("runtime config keys are incomplete or unsupported")
     if root["version"] != "1.0":
         raise RuntimeConfigError("unsupported runtime config version")
 
@@ -202,6 +234,21 @@ def load_runtime_config(path: str | Path) -> RuntimeConfig:
     except (TypeError, ValueError) as exc:
         raise RuntimeConfigError("assignment must be a valid SPEC-009 policy") from exc
 
+    rca = None
+    if "rca" in root:
+        raw_rca = _mapping(root["rca"], "rca")
+        fields = {"a_store_path", "b_store_path", "d_store_path",
+                  "knowledge_config_path", "generation_config_path",
+                  "evidence_config_path", "loki_endpoint", "prometheus_endpoint"}
+        _exact_keys(raw_rca, fields, "rca")
+        rca = RuntimeRcaConfig(
+            *(_repo_relative_path(raw_rca[name], f"rca.{name}") for name in (
+                "a_store_path", "b_store_path", "d_store_path",
+                "knowledge_config_path", "generation_config_path", "evidence_config_path")),
+            _local_endpoint(raw_rca["loki_endpoint"], "rca.loki_endpoint"),
+            _local_endpoint(raw_rca["prometheus_endpoint"], "rca.prometheus_endpoint"),
+        )
+
     return RuntimeConfig(
         version="1.0",
         event_intake_poll_seconds=_positive_number(
@@ -221,4 +268,5 @@ def load_runtime_config(path: str | Path) -> RuntimeConfig:
         telemetry=RuntimeTelemetryConfig(
             _non_empty(telemetry["logger_name"], "telemetry.logger_name"), level
         ),
+        rca=rca,
     )

@@ -84,6 +84,16 @@ def _assert_integrity(snapshot: dict) -> None:
     assert all(item["workflow_audits"] == 1 for item in snapshot["incidents"])
     assert len(snapshot["work"]) == 2
     assert all(item["status"] == "COMPLETED" for item in snapshot["work"])
+    assert snapshot["rca"] == {
+        "a_candidates": 0,
+        "b_readiness": "READY",
+        "b_integrity": "VALID",
+        "c_readiness": "NOT_INITIALIZED",
+        "d_readiness": "FOUND",
+        "d_recovery": "FOUND",
+        "d2_roots": 0,
+        "d2_corruptions": 0,
+    }
 
 
 def test_docker_runtime_four_path_restart_and_graceful_stop() -> None:
