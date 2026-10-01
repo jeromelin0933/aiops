@@ -1,8 +1,8 @@
 # AIOps Incident-driven Platform
 
-Last reviewed against current governance baseline: 2026-09-29
+Last reviewed against current governance baseline: 2026-10-02
 
-本repository目前已實作Mock Data generation、Observability foundation、Event Detection、Event Detection Runner、Scenario runtime／validation、SPEC-006～011既有核准範圍，以及PRD-004 Candidate A／B／C／D：RCA persistence／publication、Incident Evidence Snapshot／Materiality、Knowledge Corpus／Index／Retrieval／Snapshot與LLM Generation／Validation。PRD-001 v3.5仍為overall platform authority，PRD-003 v1.1是Alert Correlation／Incident Management authority，PRD-004 v1.0維持`Approved`產品需求權威。
+本repository目前已實作Mock Data generation、Observability foundation、Event Detection、Event Detection Runner、Scenario runtime／validation、SPEC-006～011核准範圍，以及PRD-004 Candidate A～E：RCA persistence／publication、Incident Evidence Snapshot／Materiality、Knowledge Corpus／Index／Retrieval／Snapshot、LLM Generation／Validation與RCA Orchestration／Publication／Recovery。PRD-001 v3.5仍為overall platform authority，PRD-003 v1.1是Alert Correlation／Incident Management authority，PRD-004 v1.0維持`Approved`產品需求權威。
 
 ## Current implementation
 
@@ -23,12 +23,13 @@ Last reviewed against current governance baseline: 2026-09-29
 - SPEC-013 Incident Evidence Store、trusted-core capture、Loki／Prometheus adapters、Snapshot／Revision與Materiality
 - SPEC-014 approved six-document Knowledge Corpus、governed manifest、Google embedding／Chroma adapters、build／validate／activate／retrieve CLI、Knowledge Snapshot與public provenance
 - SPEC-015 Gemini provider boundary、structured generation、validation and grounding、durable Candidate-D result、Same-Try safety and replay、Candidate-A lossless Artifact projection support
+- SPEC-016 Candidate-E initial／refresh／post-context orchestration、Attempt-scoped retry continuity、publication-first recovery及Runtime completion-last，於既有SPEC-011 singular Runtime內執行
 
-Current PoC implementation uses Python stdlib `sqlite3` for the Correlation State Store及independent D2 Runtime Work Store。D2只保存orchestration continuity，不是Event、Pending、Processed、Intent、Incident、Shadow或Workflow authority；SQLite是current implementation reality，不是platform或production database requirement。
+Current PoC implementation uses Python stdlib `sqlite3` for the Correlation State Store及independent D2 Runtime Work Store。Candidate-E RCA continuation tables位於同一D2 database，只保存orchestration continuity，不是Event、Pending、Processed、Intent、Incident、Shadow、Workflow、Evidence、Knowledge、Generation result或RCA Artifact authority；SQLite是current implementation reality，不是platform或production database requirement。
 
 SPEC-014 Candidate C核准範圍目前為`Implemented`。AC-014-X未執行，closure disposition為`NOT EXECUTED — PM-DIRECTED SKIP FOR CURRENT CLOSURE`；這不是PASS，且沒有four-member evidence。Adapter存在及default regression PASS均不能冒充live Google provider或real-RAG PASS。
 
-Candidate D／SPEC-015核准範圍目前為`Implemented`。仍Pending的PRD-004 scope包括Candidate E／F、SPEC-011 RCA Runtime orchestration、Publication／Publication Reconciliation orchestration、Startup RCA recovery及final RCA／RAG E2E；repository亦非Production Ready。SPEC-012／SPEC-008 caller-driven publication coordinator不等於Runtime scheduler或recovery authority。Live Gemini為`NOT EXECUTED`。
+Candidate D／SPEC-015與Candidate E／SPEC-016核准範圍目前為`Implemented`。SPEC-016在既有SPEC-011 singular Runtime Worker、D2、Runtime Clock、retry framework、Startup Recovery Barrier及controlled drain內執行；沒有第二套Runtime或recovery authority。仍Pending的PRD-004 scope包括Candidate F及final real-LLM／RAG quality evaluation；repository亦非Production Ready。Docker Candidate-E execution與Live Gemini均為`NOT EXECUTED`。
 
 SPEC-014 local setup、credential boundary、commands及generated artifact規則見 [`docs/knowledge_index.md`](docs/knowledge_index.md)。Default `python -m pytest -q`不需要live Google credential；real provider validation必須explicit opt-in。
 
@@ -46,10 +47,14 @@ SPEC-009 Lifecycle / Workflow     ✅ individually implemented
 SPEC-010 Shadow Store             ✅ individually implemented
 SPEC-011 Runtime Worker           ✅ implemented and verified
 Host Runtime E2E                  ✅ verified
-Docker Runtime E2E                ✅ verified (opt-in test executed separately)
+Docker Runtime E2E (historical correlation scope) ✅ verified
+SPEC-012～015 Candidate A～D      ✅ implemented
+SPEC-016 Candidate E             ✅ implemented inside SPEC-011 Runtime
+Candidate-E Docker execution     ⚪ NOT EXECUTED
+Candidate F / final evaluation   ⏳ pending
 ```
 
-Current Runtime Logical Flow（SPEC-011 v1.0）：
+Current Runtime Logical Flow（SPEC-011 v1.2）：
 
 ```text
 Event Detection
@@ -63,7 +68,9 @@ SPEC-011 Runtime Orchestration Worker
       ├── SPEC-007 Correlation State
       ├── SPEC-008 Incident Management
       ├── SPEC-009 Lifecycle / Workflow
-      └── SPEC-010 Shadow / Unclassified
+      ├── SPEC-010 Shadow / Unclassified
+      └── SPEC-016 Candidate-E orchestration
+            └── public A / B / C / D / SPEC-008 capabilities
 ```
 
 Event Detection與Runtime是independent process boundaries；Runtime不屬於`EventDetectionRunner`。Runtime從durable authoritative EventStore intake，負責coordination、startup recovery、Pending／AUTO_ASSIGN orchestration與bounded retry；各Domain保留business authority及side effects。Engine decides. State remembers. Runtime orchestrates. Domain stores own the side effects.
@@ -78,6 +85,8 @@ STARTING
 → expired Pending handling
 → retry restoration
 → AUTO_ASSIGN reconstruction / reconciliation
+→ RCA publication-first classification / reconciliation
+→ RCA obligation / retry / follow-up restoration
 → READY
 → normal intake
 ```
@@ -99,6 +108,11 @@ src/alert_correlation/state/      # state contracts, SQLite PoC adapter,
 src/incident_management/          # SPEC-008 incident core and SPEC-009 lifecycle workflow
 src/shadow_management/            # SPEC-010 shadow / unclassified store
 src/runtime_orchestration/         # SPEC-011 independent Runtime core and D2 SQLite store
+src/runtime_orchestration/rca_*.py # SPEC-016 protocol inside the existing Runtime
+src/rca_persistence/               # Candidate A authority
+src/incident_evidence/              # Candidate B authority
+src/knowledge_index/                # Candidate C authority
+src/llm_generation/                 # Candidate D authority
 
 scripts/run_mock_runtime.py
 scripts/run_correlation_runtime.py
@@ -108,6 +122,9 @@ scripts/train_metrics_model.py
 
 configs/runtime_orchestration.yaml
 configs/runtime_orchestration.docker.yaml
+configs/incident_evidence.yaml
+configs/knowledge_index.yaml
+configs/rca_generation.json
 
 docker/prometheus/
 docker/promtail/
@@ -129,7 +146,7 @@ Compose中的`runtime` service使用相同Runtime core及`continuous` Docker con
 docker compose up -d
 ```
 
-Runtime service使用`runtime-events`與`runtime-state` named volumes，支援controlled drain、graceful stop及restart continuity。其READY是startup recovery barrier完成後的structured telemetry event，不是network healthcheck。詳細啟動與opt-in Docker E2E命令見`docs/runtime_orchestration.md`。此Compose topology仍不是「完整平台／所有服務」或production-ready deployment。
+Runtime service使用`runtime-events`、`runtime-state`與`runtime-knowledge` named volumes，支援controlled drain、graceful stop及restart continuity。其READY是startup recovery barrier完成後的structured telemetry event，不是network healthcheck。Historical SPEC-011 correlation Runtime Docker E2E已獨立驗證；Candidate-E Docker execution為`NOT EXECUTED`。詳細啟動與opt-in Docker E2E命令見`docs/runtime_orchestration.md`。此Compose topology仍不是「完整平台／所有服務」或production-ready deployment。
 
 Scenario runtime 是另一個程序；以下參數已由 script 原始碼靜態確認：
 
@@ -206,7 +223,7 @@ __pycache__/
 
 ## Authoritative documents / governance
 
-治理依domain分工：PRD-002與SPEC-001～004治理Event Detection；PRD-003 v1.1治理Alert Correlation／Incident Management；PRD-004 v1.0治理RCA產品需求，SPEC-012／013／014／015治理Candidate A／B／C／D semantics；SPEC-011治理既有Runtime orchestration，尚未完成PRD-004 RCA Runtime orchestration。PRD-001 v3.5治理overall platform direction；DDS-001是supporting repository-level reference；README只提供入口與索引。
+治理依domain分工：PRD-002與SPEC-001～004治理Event Detection；PRD-003 v1.1治理Alert Correlation／Incident Management；PRD-004 v1.0治理RCA產品需求，SPEC-012～016治理Candidate A～E semantics；SPEC-011維持唯一Runtime orchestration、scheduling、Clock／retry與startup recovery authority，SPEC-016在該framework內實作Candidate-E protocol。PRD-001 v3.5治理overall platform direction；DDS-001是supporting repository-level reference；README只提供入口與索引。
 
 | Document | Role |
 |---|---|
@@ -224,14 +241,15 @@ __pycache__/
 | SPEC-008 v1.3 | Implemented；Incident Core及additive RCA relationship／publication integration |
 | SPEC-009 v1.0 | Implemented；Lifecycle／Human Workflow contract |
 | SPEC-010 v1.0 | Implemented；Shadow／Unclassified Store contract |
-| SPEC-011 v1.0 | Implemented；Runtime Orchestration／E2E contract；Final Full Contract Audit與PM Final Review PASS |
+| SPEC-011 v1.2 | Implemented；Existing Scope and RCA Additive Runtime Boundary；singular Runtime authority |
 | SPEC-012 v1.1 | Implemented；RCA Artifact／Persistence及publication-side truth |
 | SPEC-013 v1.1 | Implemented；Incident Evidence Collection／Snapshot／Materiality |
 | SPEC-014 v1.2 | Implemented；Knowledge Corpus／Index／Retrieval／Snapshot；AC-014-X PM-directed skip，不是PASS |
 | SPEC-015 v1.1 | Implemented；LLM Generation／Validation、durable result、Same-Try safety／replay；Live Gemini未執行 |
-| DDS-001 v1.7 | Supporting repository-level implementation architecture reference |
+| SPEC-016 v1.1 | Implemented；Candidate-E RCA Orchestration／Publication／Recovery；Docker Candidate-E與Live Gemini未執行 |
+| DDS-001 v1.8 | Supporting repository-level implementation architecture reference |
 
-PRD-002與SPEC-001～SPEC-004提供正式Event Detection contract；PRD-003 v1.1提供Alert Correlation／Incident Management requirements；PRD-004 v1.0與SPEC-012～015提供RCA Candidate A／B／C／D authority。DDS／README不建立新的normative authority。
+PRD-002與SPEC-001～SPEC-004提供正式Event Detection contract；PRD-003 v1.1提供Alert Correlation／Incident Management requirements；PRD-004 v1.0與SPEC-012～016提供RCA Candidate A～E authority。SPEC-011仍是singular Runtime authority。DDS／README不建立新的normative authority。
 
 SDD、ADR-001 與 PM team instructions 是由 Google Drive 管理的 external governance documents。Repository 不建立其 mirror，本 README 也不推測其版本或內容。
 
@@ -240,5 +258,5 @@ SDD、ADR-001 與 PM team instructions 是由 Google Drive 管理的 external go
 - Grafana datasource provisioning 與 dashboard import 尚未自動化。
 - Model artifacts 是 local runtime prerequisites。
 - SPEC-006～011已依各自核准scope完成；SPEC-011的Host與Docker Runtime E2E已驗證，但目前Runtime仍是single-process／single-node PoC，沒有HA、distributed coordination、Kafka／broker、exactly-once transport infrastructure或cross-store 2PC。
-- Candidate A／B／C／D已實作，但Candidate E／F、RCA Runtime orchestration、Publication／Publication Reconciliation orchestration、Startup RCA recovery、final RCA／RAG E2E、operational adapters、Jira、Discord／ChatOps、complete Dashboard workflow、Email fallback／escalation、automatic remediation、production hardening與complete closed loop仍未完成；因此不得宣稱Production Ready。
+- Candidate A～E已實作；Candidate F、final real-LLM／RAG quality evaluation、Docker Candidate-E execution、Live Gemini、operational adapters、Jira、Discord／ChatOps、complete Dashboard workflow、Email fallback／escalation、automatic remediation、production hardening與complete closed loop仍未完成或未執行；因此不得宣稱Production Ready。
 - Demo / E2E validation controller 與其 validation-specific behavior 不構成 production architecture requirement。

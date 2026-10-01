@@ -1,6 +1,6 @@
 # SPEC-016 — RCA Orchestration / Publication / Recovery
 
-## Engineering Specification v1.0
+## Engineering Specification v1.1
 
 ---
 
@@ -10,15 +10,16 @@
 |---|---|
 | Document ID | SPEC-016 |
 | Document Name | RCA Orchestration / Publication / Recovery |
-| Version | 1.0 |
-| Status | Approved — Implementation Pending |
+| Version | 1.1 |
+| Status | Implemented |
 | Date | 2026-09-29 |
 | Approval Date | 2026-09-29 |
 | Requirement Authority | PRD-004 v1.0 Approved |
-| Runtime Authority | SPEC-011 v1.1 |
+| Runtime Authority | SPEC-011 v1.2 |
 | Upstream RCA Contracts | SPEC-012～015 |
 | Incident Contract | SPEC-008 |
 | Candidate | Candidate E |
+| Implementation Owner | 夜羽 |
 
 ### Change History
 
@@ -27,13 +28,15 @@
 | v0.1 | Draft | Phase 2 initial Engineering Contract; formalized E1–E4. |
 | v0.1 | Semantic Review / Narrow Patch | Phase 3 identified F-001～F-005; Phase 4 narrow patch closed all findings; E1-C1 / E2-C1 / E3-C1 frozen clarifications added; Phase 3 re-review PASS. |
 | v1.0 | Approved — Implementation Pending | SPEC Lead Final Review PASS; BLOCKER / MAJOR / MINOR = NONE; E1–E4 and E1-C1 / E2-C1 / E3-C1 frozen as Candidate-E implementation baseline; implementation has not started. |
+| v1.1 | Implemented — Documentation-only Closure | Candidate-E implementation commit `eff7eb067cc09974c7679050f5136a7cfdffadaf` accepted after Post-Handoff Final Full Contract Re-audit PASS and SPEC Lead Final Review PASS. E1～E4, E1-C1 / E2-C1 / E3-C1 and AC-016-A～Z were preserved. Full regression: `2064 passed, 4 skipped`. Docker and Live Gemini: `NOT EXECUTED`; Candidate F and final RCA／RAG evaluation: Pending; Production Ready: `NO`. Git sequence deviation: `PM-AUTHORIZED WIP HANDOFF CHECKPOINT`. |
 
 ### Status Honesty
 
-Draft ≠ Approved. Approved ≠ Implemented. This document approves the Candidate-E Engineering Contract only and does not establish implementation or verification completion.
+Draft ≠ Approved. Approved ≠ Implemented. SPEC-016 v1.0 remains the Approved normative Candidate-E Engineering Contract; v1.1 records documentation-only implementation closure and does not add or alter normative requirements.
 
 ```text
-SPEC-016 = Approved v1.0 — Implementation Pending
+SPEC-016 normative baseline = Approved v1.0
+SPEC-016 current status = Implemented (v1.1 documentation-only closure)
 Candidate-E Engineering Contract = Approved
 
 Candidate A = Implemented
@@ -41,17 +44,18 @@ Candidate B = Implemented
 Candidate C = Implemented
 Candidate D = Implemented
 
-Candidate E = Approved — Implementation Pending
-Candidate E implementation = NOT Implemented
-Candidate F = NOT Implemented
+Candidate E = Implemented
+Candidate E implementation commit = eff7eb067cc09974c7679050f5136a7cfdffadaf
+Candidate F = Pending
 
-RCA Runtime integration = Pending
+RCA Runtime integration within the singular SPEC-011 Runtime = Implemented
 Final RCA/RAG E2E = Pending
+Docker Candidate-E execution = NOT EXECUTED
 Live Gemini = NOT EXECUTED
 Production Ready = NO
 ```
 
-Candidate-C AC-014-X remains `NOT EXECUTED — PM-DIRECTED SKIP FOR CURRENT CLOSURE`; this is not PASS. Existing Candidate-A／SPEC-008 caller-driven publication coordination is compatibility evidence only and is not RCA Runtime scheduling, startup recovery or Candidate-E completion.
+Candidate-C AC-014-X remains `NOT EXECUTED — PM-DIRECTED SKIP FOR CURRENT CLOSURE`; this is not PASS. SPEC-011 remains the singular Runtime authority. Candidate E implements the approved RCA orchestration protocol inside that existing Runtime framework and does not create a second Runtime, scheduler, Runtime Clock, retry authority or recovery framework. Candidate F, final real-LLM／RAG quality evaluation and Production Ready remain outside this closure.
 
 ---
 
@@ -827,6 +831,8 @@ Draft or future Candidate-E implementation evidence does not imply Candidate F, 
 
 # 20. Verification Strategy
 
+Historical-phase qualifier: the following strategy and statement that no tests were executed describe the v1.0 approval patch. The v1.1 documentation-only closure evidence is recorded in section 23; the approved verification semantics below remain unchanged.
+
 Future implementation must provide at least:
 
 1. unit tests for identity composition, state classification, lane selection, coalescing and completion guards;
@@ -844,7 +850,9 @@ Tests must use deterministic fake adapters where appropriate. This approval patc
 
 ---
 
-# 21. Implementation Handoff Boundary
+# 21. Historical v1.0 Implementation Handoff Boundary
+
+This section preserves the implementation handoff boundary as approved in v1.0. Its future-tense wording is historical and does not describe the current implementation status.
 
 Future implementation planning may define semantic implementation areas for:
 
@@ -861,6 +869,35 @@ This approved Engineering Contract does not freeze exact files, package layout, 
 
 ---
 
-# 22. Approval Gate
+# 22. Historical v1.0 Approval Gate
+
+The following statement is the preserved v1.0 approval-phase truth and is not a current-state claim:
 
 SPEC-016 v1.0 is an approved Candidate-E Engineering Contract with implementation pending. Candidate E remains `NOT Implemented`. No production code, tests, configuration or existing authority document is changed by this approval patch.
+
+---
+
+# 23. Post-Implementation Documentation-only Closure
+
+SPEC-016 v1.0 remains the Approved normative baseline. This v1.1 closure records current implementation evidence only and does not modify Frozen E1～E4, E1-C1／E2-C1／E3-C1, Approved AC-016-A～Z or any upstream authority.
+
+```text
+Accepted implementation commit: eff7eb067cc09974c7679050f5136a7cfdffadaf
+Git sequence deviation: PM-AUTHORIZED WIP HANDOFF CHECKPOINT
+Post-Handoff Final Full Contract Re-audit: PASS
+SPEC Lead Final Review: PASS
+E1 / E1-C1: PASS / preserved
+E2 / E2-C1: PASS / preserved
+E3 / E3-C1: PASS / preserved
+E4: PASS / preserved
+AC-016-A～Z: PASS
+Full regression: 2064 passed, 4 skipped
+Docker Candidate-E execution: NOT EXECUTED
+Live Gemini: NOT EXECUTED
+Candidate F: Pending
+Final real-LLM/RAG quality evaluation: Pending
+Production Ready: NO
+Remaining implementation blocker: NONE
+```
+
+The PM-authorized WIP handoff checkpoint was not an early Implemented declaration, Final Audit bypass or semantic waiver. The complete committed tree was subsequently re-audited and accepted. SPEC-011 remains the singular Runtime authority; Candidate E executes within its existing worker, D2, Runtime Clock, retry, Startup Recovery Barrier and controlled-drain framework. Candidates A～D and SPEC-008 retain their respective domain authority.

@@ -703,7 +703,7 @@ git branch -D
 
 `PRD-003 v1.0 — Alert Correlation & Incident Management`已於2026-08-29定稿為Final Requirements，並以Runtime Event evidence定義evidence-driven Strong／Known Weak／Shadow policies、rolling Correlation Window、Pending Grace、Incident ownership／dedup／recovery，以及`OPEN → ASSIGNED → IN_PROGRESS → AWAITING_REVIEW → CLOSED` lifecycle。
 
-PRD-003是downstream correlation／Incident detailed requirement authority；PRD-002仍只負責Event Detection。Current downstream implementation reality為SPEC-006～010已依各自核准scope Implemented，SPEC-011 Runtime Orchestration與complete Runtime／Docker E2E仍Pending；此狀態不改變PRD-003的Final requirement authority。EventStore中的normalized Event evidence保持immutable；Pending／Processed／Dedup屬PRD-003 Correlation State，Incident lifecycle status屬Incident，不得以修改`Event.status`表達。
+PRD-003是downstream correlation／Incident detailed requirement authority；PRD-002仍只負責Event Detection。Current downstream implementation reality為SPEC-006～011已依各自核准scope Implemented，SPEC-011 RCA additive boundary亦已由SPEC-016在同singular Runtime內實作。Historical correlation Runtime Docker E2E已驗證；Docker Candidate-E execution為`NOT EXECUTED`。此狀態不改變PRD-003的Final requirement authority。EventStore中的normalized Event evidence保持immutable；Pending／Processed／Dedup屬PRD-003 Correlation State，Incident lifecycle status屬Incident，不得以修改`Event.status`表達。
 
 Event Detection 對應文件現況如下；僅保留必要 traceability：
 
@@ -730,9 +730,9 @@ Event Detection implementation已由SPEC-001～SPEC-004完成；SPEC-005 v1.3提
 | G1 Mock Data | ✅ Completed（DDS-001） |
 | G2 Observability Platform | ✅ Completed（DDS-001） |
 | G3 Event Detection | ✅ Implementation／validation completed（SPEC-001～005 current baseline） |
-| G4 Alert Correlation | SPEC-006～008與SPEC-010 individually Implemented；SPEC-011／complete Runtime E2E Pending（PRD-003 v1.0 Final） |
+| G4 Alert Correlation | SPEC-006～011 implemented；SPEC-011 remains the singular Runtime authority（PRD-003 v1.0 Final） |
 | G5 Incident Manager | SPEC-008／009 individually Implemented；complete downstream integrations Pending（PRD-003 v1.0 Final） |
-| G6 LLM + RAG RCA | Planned（PRD-004） |
+| G6 LLM + RAG RCA | Candidate A～E Implemented；Candidate F／final evaluation Pending（PRD-004） |
 | G7 Dashboard Integration | Planned（PRD-005） |
 | G8 Email Notification | Planned（PRD-005） |
 

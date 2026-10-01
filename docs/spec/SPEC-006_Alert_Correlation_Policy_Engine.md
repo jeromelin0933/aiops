@@ -22,7 +22,7 @@
 | 1.0 | 2026-08-30 | PRD-003 第一份 Engineering SPEC；定義 deterministic Alert Correlation Policy Engine、versioned Policy Registry、candidate selection、decision 與 structured failure contract。 |
 | 1.0 | 2026-09-01 | Implementation completed and PM reviewed；Alert Correlation Policy Engine production package、targeted tests、production Event integration-lite 與 full repository regression通過，Status 更新為 Implemented。Engineering Contract 未變更。 |
 
-> **Implementation Status：** SPEC-006 v1.0 已完成 implementation；targeted tests、production Event contract／integration-lite、full repository regression與 PM Final Review均已完成，Status 已更新為 `Implemented`。此狀態只表示 SPEC-006 Deterministic Alert Correlation Policy Engine完成，不代表完整 Alert Correlation Runtime完成。SPEC-007～010已依各自核准scope Implemented；SPEC-011 Runtime Orchestration及完整downstream Docker correlation E2E仍屬future work。上述downstream狀態不擴張SPEC-006自身scope。
+> **Implementation Status：** SPEC-006 v1.0 已完成 implementation；targeted tests、production Event contract／integration-lite、full repository regression與 PM Final Review均已完成，Status 已更新為 `Implemented`。此狀態只表示 SPEC-006 Deterministic Alert Correlation Policy Engine完成，不代表完整platform或Production Ready。SPEC-007～011已依各自核准scope Implemented，SPEC-011 RCA additive boundary亦已由SPEC-016在同singular Runtime內實作；Candidate-E Docker execution為`NOT EXECUTED`。上述downstream狀態不擴張SPEC-006自身scope。
 
 ---
 

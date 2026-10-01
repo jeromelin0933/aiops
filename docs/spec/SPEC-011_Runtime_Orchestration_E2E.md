@@ -1,6 +1,6 @@
 # SPEC-011 — Runtime Orchestration / E2E
 
-## Software Design Specification v1.1
+## Software Design Specification v1.2
 
 ---
 
@@ -10,14 +10,14 @@
 |---|---|
 | Document ID | SPEC-011 |
 | Document Name | Runtime Orchestration / E2E |
-| Version | 1.1 |
-| Status | Implemented Existing Scope — RCA Runtime Boundary Approved / Implementation Pending |
+| Version | 1.2 |
+| Status | Implemented — Existing Scope and RCA Additive Runtime Boundary |
 | Approval Date | 2026-09-18 |
 | Requirement Authority | PRD-003 v1.1 Final；PRD-004 v1.0 Approved（RCA Runtime boundary） |
 | Upstream Event Contract | PRD-002 v1.5 + SPEC-001 v2.4 EventStore authoritative enumeration |
 | Upstream Correlation Contract | SPEC-006 v1.0 Implemented |
 | Upstream Correlation State Contract | SPEC-007 v1.0 Implemented |
-| Incident Contract | SPEC-008 v1.2（v1.1 existing scope Implemented；RCA integration pending） |
+| Incident Contract | SPEC-008 v1.3 Implemented |
 | Lifecycle / Human Workflow Contract | SPEC-009 v1.0 Implemented |
 | Shadow Contract | SPEC-010 v1.0 Implemented |
 | Implementation Owner | 富裕 |
@@ -30,14 +30,15 @@
 | 1.0 | 2026-09-13 | Approved — Implementation Pending | PM完成final semantic review並核准；D1～D8凍結為implementation baseline；不需upstream semantic revision，implementation尚未開始。 |
 | 1.0 | 2026-09-16 | Implemented | SPEC-011 Phase 1～7與PM-authorized corrective fixes完成；Final Full Contract Audit及PM Final Review均PASS。Implementation commit：`cd481e8a1ed6b390d51bd81a519da43914b0b786`。D1～D8與architecture semantics未變更。 |
 | 1.1 | 2026-09-18 | Approved Additive Boundary — Implementation Pending | Post-PRD-004 reconciliation：要求既有singular Runtime framework future-compatible with initial RCA、Material Evidence refresh、post-context、Attempt retry、STALE refresh及Publication Reconciliation obligations。D1～D8與v1.0 implemented behavior不變；未凍結exact RCA work enum／record／worker／metric，亦未實作RCA integration。 |
+| 1.2 | 2026-10-02 | Implemented — Documentation-only RCA Boundary Closure | SPEC-016 Candidate E已於既有singular Runtime Worker、D2 Runtime Work Store、Runtime Clock、retry framework、Startup Recovery Barrier及controlled drain內完成RCA orchestration implementation。Accepted implementation commit：`eff7eb067cc09974c7679050f5136a7cfdffadaf`；Post-Handoff Final Full Contract Re-audit與SPEC Lead Final Review均PASS；full regression `2064 passed, 4 skipped`。本closure不修改D1～D8或v1.1 approved boundary semantics。 |
 
 ### Implementation Status Honesty
 
 > **Draft ≠ Approved；Approved ≠ Implemented。** SPEC-011現已另以implementation及verification evidence滿足Implemented gate。
 
-**SPEC-011 v1.0既有Runtime Orchestration / E2E scope已Implemented；v1.1 RCA additive Runtime boundary為Approved／Implementation Pending。** D1～D8仍是FROZEN IMPLEMENTATION BASELINE。
+**SPEC-011 v1.0既有Runtime Orchestration / E2E scope已Implemented；v1.1保留RCA additive Runtime boundary核准時的Approved／Implementation Pending歷史事實；v1.2記錄該boundary已由SPEC-016實作。** D1～D8仍是FROZEN IMPLEMENTATION BASELINE。
 
-**Existing Scope Implementation Status: IMPLEMENTED。** Independent Runtime Worker、D2 SQLite Runtime Work Store、startup recovery barrier、Pending與AUTO_ASSIGN recovery、bounded retry、Runtime clock、structured telemetry、host CLI及Docker Runtime service已實作並驗證。RCA work categories、RCA startup recovery、post-context wake-up及Publication Reconciliation尚未實作；本文件亦不表示RCA／RAG、external adapters、完整AIOps closed loop或production readiness已完成。
+**Current Implementation Status: IMPLEMENTED — Existing Scope and RCA Additive Runtime Boundary。** Independent Runtime Worker、D2 SQLite Runtime Work Store、startup recovery barrier、Pending與AUTO_ASSIGN recovery、bounded retry、Runtime Clock、structured telemetry、host CLI及Docker Runtime service維持既有權威。SPEC-016 Candidate E已在同一Runtime Worker、D2、Clock、retry、Startup Recovery Barrier與controlled-drain framework內實作RCA work categories、startup classification、post-context wake continuity與Publication Reconciliation。沒有第二套Runtime、scheduler、Runtime Clock、retry authority或recovery framework。Candidate-E Docker execution為`NOT EXECUTED`；本closure不表示Candidate F、final real-LLM／RAG evaluation或production readiness已完成。
 
 Implementation closure evidence：
 
@@ -70,7 +71,7 @@ SPEC-011是WHEN、ORDER、RETRY、RECOVERY與CROSS-STORE COORDINATION authority�
 | Event persistence／enumeration | SPEC-001 v2.4、SPEC-004 v1.1 | Detector寫入；Runtime只從authoritative public read surface取得durable Event |
 | Correlation Policy | SPEC-006 v1.0 | Decision、fingerprint、candidate、window、phase、policy identity與evaluation failure authority |
 | Correlation State | SPEC-007 v1.0 | Claim、Pending、Intent、Processed、Blocked與recovery precedence authority |
-| Incident | SPEC-008 v1.2 | Event→Incident ownership、create／attach及Incident-owned RCA relationship mutation／read authority；Runtime只呼叫public semantics |
+| Incident | SPEC-008 v1.3 | Event→Incident ownership、create／attach及Incident-owned RCA relationship mutation／read authority；Runtime只呼叫public semantics |
 | Lifecycle | SPEC-009 v1.0 | Assignment、人工作業、workflow receipt與lifecycle authority |
 | Shadow | SPEC-010 v1.0 | Event→Shadow ownership、Shadow mutation／receipt／reason authority |
 | Runtime | SPEC-011 | intake ordering、scheduling、cross-store protocol、retry timing、startup與telemetry |
@@ -80,6 +81,8 @@ PRD-001、DDS-001、README與SPEC-005提供supporting context，不得覆蓋上�
 ## 0.3 Purpose
 
 本SPEC定義從durable Runtime Event到Incident或Shadow terminal ownership的獨立Runtime Worker contract，並涵蓋Pending reevaluation、CREATE_NEW後AUTO_ASSIGN、bounded retry、restart recovery及最小E2E evidence。依PRD-004 v1.0，本SPEC亦定義既有singular Runtime framework未來承接RCA orchestration obligations的capability boundary，但不設計RCA domain或worker implementation。
+
+上述「未來承接」描述保留v1.1核准時的boundary語意；current implementation reality由v1.2 closure記錄：SPEC-016已在同一SPEC-011 Runtime framework內完成Candidate-E implementation，未建立第二套Runtime authority。
 
 本SPEC不重新定義任何detector或domain business semantics。
 
@@ -99,6 +102,8 @@ PRD-001、DDS-001、README與SPEC-005提供supporting context，不得覆蓋上�
 ## 0.5 PRD-004 Additive RCA Runtime Boundary
 
 本節是v1.1 approved additive amendment。D1～D8、既有correlation／Pending／AUTO_ASSIGN behavior及v1.0 implementation evidence全部維持不變；不得另建第二套RCA scheduler、retry database、recovery framework或clock authority。
+
+Historical qualifier：本節保留的「未來」、「必須能承接」及exact representation未凍結等文字，是v1.1 approval-phase boundary，不是current implementation pending claim；v1.2只記錄該boundary已由SPEC-016實作，並不改寫其normative semantics。
 
 既有Runtime framework未來至少必須能承接下列orchestration obligations，但exact enum、record、queue、worker、operation identity encoding與physical store均留Candidate E：
 
@@ -181,6 +186,8 @@ Runtime依賴public Event、Policy、State、Incident、Workflow與Shadow ports�
 
 Repository目前包含independent Runtime Worker、config-driven host CLI、SQLite D2 Runtime Work Store及Docker Compose `runtime` service。Host與Docker共用同一Runtime core；checked-in host config使用`run-until-idle`，Docker config使用`continuous`。Docker service透過named volumes保存authoritative EventStore與Runtime相關SQLite state，並已驗證controlled shutdown、restart continuity及opt-in Docker E2E。這是single-process／single-node PoC topology，不表示HA、distributed coordination或production readiness。
 
+Current RCA deployment reality adds SPEC-016 Candidate E to this same Runtime process. The checked-in `rca:` configuration composes Candidate A／B／C／D and SPEC-008 public semantic capabilities, retains RCA continuation in the existing D2 database, performs publication-first startup reconciliation and dispatches RCA work only after the existing Startup Recovery Barrier. This is not a second Runtime. Earlier correlation Runtime Docker evidence remains historical PASS; Candidate-E Docker execution at `eff7eb067cc09974c7679050f5136a7cfdffadaf` is `NOT EXECUTED`.
+
 ---
 
 # 3. Runtime Logical Domain Model
@@ -208,6 +215,7 @@ Runtime至少要能協調：
 - retry-eligible domain operation
 - outstanding AUTO_ASSIGN
 - operator-visible exhausted／repair-required work
+- RCA initial, Attempt, singleton follow-up and publication-reconciliation continuity within the same D2／worker framework
 
 ## 3.3 Authoritative Precedence
 
@@ -1179,6 +1187,8 @@ Implementation至少建立：
 14. Full repository regression。
 15. v1.1 RCA Runtime future tests：work continuity、startup discovery、typed retry scheduling、absolute post-context wake-up、publication reconciliation、telemetry與controlled restart；本次reconciliation不宣稱此layer已實作或通過。
 
+Historical-phase qualifier：上一項是v1.1 approval reconciliation的原文與當時事實。v1.2 closure另記錄SPEC-016對此layer的implementation／audit evidence，不修改required test semantics。
+
 必要unit/contract tests不得依賴real Docker、network、long real sleep、real wall clock或competition expected answer。Docker/local-infrastructure E2E須與fast deterministic regression分離。
 
 ## 25.1 Mandatory Semantic Recovery Scenarios
@@ -1241,6 +1251,8 @@ Post-Implementation Documentation Reconciliation已於2026-09-16執行，並同�
 
 D1～D8是既有approved product requirements的engineering orchestration contract；2026-09-18 Post-PRD-004 reconciliation只新增第0.5節future RCA accommodation boundary，不修改其semantics。SPEC-006、007、009、010 semantics未被改動；SPEC-008僅另行加入相配的RCA relationship integration boundary。
 
+2026-10-02 v1.2 documentation-only reconciliation記錄SPEC-016 Candidate E已在既有singular Runtime framework內完成RCA boundary implementation。Accepted implementation commit為`eff7eb067cc09974c7679050f5136a7cfdffadaf`；Post-Handoff Final Full Contract Re-audit與SPEC Lead Final Review均PASS；full regression為`2064 passed, 4 skipped`。Docker Candidate-E execution與Live Gemini均為`NOT EXECUTED`；Candidate F與final real-LLM／RAG quality evaluation仍Pending；Production Ready為`NO`。
+
 ---
 
 # 29. Implementation Consideration — Non-normative Suggested Sequence
@@ -1285,4 +1297,6 @@ D1～D8是既有approved product requirements的engineering orchestration contra
 
 ## Approval Freeze Gate
 
-本文件目前為v1.1。v1.0既有scope的Implementation、Docker integration、Final Full Contract Audit及PM Final Review均已完成；D1～D8持續凍結且未被本次reconciliation改變。v1.1僅新增PM-approved RCA Runtime accommodation boundary，Implementation Status為Pending；exact RCA work record／worker／metric未凍結。RCA business semantics、external adapters、HA／distributed runtime、production hardening與完整AIOps closed loop仍不在既有implementation closure範圍內。
+Historical v1.1 gate：v1.0既有scope的Implementation、Docker integration、Final Full Contract Audit及PM Final Review均已完成；D1～D8持續凍結。v1.1新增PM-approved RCA Runtime accommodation boundary，當時Implementation Status為Pending；exact RCA work record／worker／metric未由v1.1凍結。
+
+Current v1.2 closure：SPEC-016 Candidate E已實作v1.1 additive boundary，並保留SPEC-011為唯一Runtime authority。RCA business semantics仍屬PRD-004／SPEC-016與Candidates A～D／SPEC-008；external operational adapters、Candidate F、final real-LLM／RAG evaluation、HA／distributed runtime、production hardening與完整AIOps closed loop仍不在本implementation closure範圍內。

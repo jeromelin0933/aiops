@@ -14,8 +14,8 @@
 | Status | Implemented |
 | Approval Date | 2026-09-26 |
 | Requirement Authority | PRD-004 v1.0 Approved |
-| Runtime Authority | SPEC-011 v1.1 |
-| Related Incident Contract | SPEC-008 v1.2；RCA integration implementation pending |
+| Runtime Authority | SPEC-011 v1.2 |
+| Related Incident Contract | SPEC-008 v1.3 Implemented |
 | Implementation Owner | 富裕 |
 
 ### Change History
@@ -32,7 +32,7 @@
 
 > **Draft ≠ Approved；Approved ≠ Implemented；Slice implementation ≠ RCA E2E complete。**
 
-**SPEC-014 v1.0 Engineering Contract與v1.1 Production Knowledge Governance amendment維持historical authority；v1.2為documentation-only closure，Current Status為`Implemented`。** Repository現已包含approved six-document corpus、governed manifest、Google `text-embedding-004` adapter、Chroma index adapter、build／validate／activate／retrieve CLI、Knowledge Snapshot與public provenance。AC-014-X未執行，依PM指示作current closure的explicit verification exception；這不是PASS，也沒有four-member evidence。Default regression亦不構成live Google provider或real-RAG PASS。Candidate D／SPEC-015 LLM generation／validation現已實作；Candidate E／F與final RCA E2E仍為Pending，Production Ready為`NO`。
+**SPEC-014 v1.0 Engineering Contract與v1.1 Production Knowledge Governance amendment維持historical authority；v1.2為documentation-only closure，Current Status為`Implemented`。** Repository現已包含approved six-document corpus、governed manifest、Google `text-embedding-004` adapter、Chroma index adapter、build／validate／activate／retrieve CLI、Knowledge Snapshot與public provenance。AC-014-X未執行，依PM指示作current closure的explicit verification exception；這不是PASS，也沒有four-member evidence。Default regression亦不構成live Google provider或real-RAG PASS。Candidate D／SPEC-015與Candidate E／SPEC-016現已實作；Candidate E僅透過Candidate-C public Knowledge semantics組合protocol，不擁有Knowledge authority。Candidate F與final real-LLM／RAG evaluation仍Pending，Production Ready為`NO`。
 
 ---
 
@@ -61,8 +61,8 @@ DDS / README / runtime docs
 | Domain | Authority | SPEC-014 Boundary |
 |---|---|---|
 | RCA product requirements | PRD-004 v1.0 Approved | Candidate C實作其Knowledge semantics，不改寫Evidence、RCA或Runtime authority |
-| Incident relationship | SPEC-008 v1.2 | Candidate C不得直接寫Incident persistence或`rca_ref` |
-| Runtime | SPEC-011 v1.1 | SPEC-011唯一擁有WHEN、ORDER、retry timing／budget、Runtime Clock、recovery execution與Startup Recovery |
+| Incident relationship | SPEC-008 v1.3 | Candidate C不得直接寫Incident persistence或`rca_ref` |
+| Runtime | SPEC-011 v1.2 | SPEC-011唯一擁有WHEN、ORDER、retry timing／budget、Runtime Clock、recovery execution與Startup Recovery |
 | Scenario／validation | SPEC-005 | 只屬test／evaluation；不得成為production Knowledge authority |
 | Candidate A／B | Current baseline無active SPEC-012／013 | 本SPEC不猜測其DTO、class、method或persistence |
 | Candidate D／E | Future downstream | 只凍結Candidate-C-owned semantic ports及opaque references |

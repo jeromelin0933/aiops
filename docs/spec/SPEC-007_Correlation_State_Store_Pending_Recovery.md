@@ -25,7 +25,7 @@
 | 1.0 | 2026-09-04 | Second PM Review completed；D1～D12、D2 narrow clarification、D12 Time／Phase Ownership amendment、state／recovery／crash consistency contracts與 AC-007-A～I通過 PM Review。Status更新為 Approved — Implementation Pending；Engineering Contract frozen for implementation。尚未開始 implementation。 |
 | 1.0 | 2026-09-07 | Implementation completed and PM Final Review PASS；Correlation State Store／Pending Recovery已合併至develop，Status更新為 Implemented。Engineering Contract未變更。 |
 
-> **Implementation Status Honesty：** SPEC-007 v1.0 已完成 implementation；Correlation State Store、Pending continuity、Blocked failure durability、MutationIntent、Processed／Dedup、Claim／fencing、restart／recovery及 retention／integrity guards均已通過對應測試與 PM Final Review，Status已更新為 `Implemented`。此狀態只表示 SPEC-007範圍完成，不代表完整 Alert Correlation Runtime完成；SPEC-008 Incident Store／Manager、SPEC-009 Lifecycle／Human Workflow與SPEC-010 Shadow／Unclassified Store已依各自核准scope Implemented，SPEC-011 Runtime Orchestration及full downstream Docker Correlation E2E仍Pending。
+> **Implementation Status Honesty：** SPEC-007 v1.0 已完成 implementation；Correlation State Store、Pending continuity、Blocked failure durability、MutationIntent、Processed／Dedup、Claim／fencing、restart／recovery及 retention／integrity guards均已通過對應測試與 PM Final Review，Status已更新為 `Implemented`。此狀態只表示 SPEC-007範圍完成，不代表完整platform或Production Ready；SPEC-008～011已依各自核准scope Implemented，SPEC-011 RCA additive boundary亦已由SPEC-016在同singular Runtime內實作。Historical correlation Runtime Docker E2E已驗證；Candidate-E Docker execution為`NOT EXECUTED`。
 
 ---
 
@@ -1037,7 +1037,7 @@ Implementation Owner為 **Tako**。SPEC-007 v1.0 production implementation已完
 
 > **Warning note：** Existing/environment dependency deprecation warnings outside SPEC-007 scope were observed in the PM post-merge environment.
 
-上述evidence滿足本SPEC原先定義的Implemented Gate，因此於2026-09-07將Status更新為`Implemented`。Evidence只證明SPEC-007範圍完成；SPEC-008～011與full downstream Docker Correlation E2E仍屬後續工作。
+上述evidence滿足本SPEC原先定義的Implemented Gate，因此於2026-09-07將Status更新為`Implemented`。此句所列downstream工作是當時的historical closure context；current repository的SPEC-008～011與SPEC-016狀態另依各自current closure為準。Evidence仍只證明SPEC-007自身範圍。
 
 > **Approved ≠ Implemented。** Approval只核准Engineering Contract；本文件已另以production implementation、targeted／persistence／concurrency／crash recovery tests、cross-SPEC integration、full repository regression與PM Final Review evidence滿足Implemented Gate。
 

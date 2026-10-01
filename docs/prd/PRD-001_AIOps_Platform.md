@@ -276,7 +276,7 @@ Incident 的 concept-level data needs 包含 identity、timestamps、lifecycle s
 | Refresh／Versioning | PRD-004所定義的Material Evidence可使Current RCA成為STALE，並在成功驗證與publication後形成新的immutable published version；不得將RCA描述為一次性static answer。 |
 | Persistence | Incident只保存coarse RCA availability／Current relationship，例如`rca_status`、`rca_ref`；完整Logical RCA Aggregate、Artifact與history由RCA persistence authority保存。PRD-001不鎖定physical persistence，Incident不得duplicate完整RCA Artifact；Dashboard只是View，Jira／Discord只接收授權projection、reference或presentation。 |
 | Failure／Fallback | 首次RCA尚未成功時可呈現`PENDING／GENERATING／FAILED` coarse availability；一旦已有Current，後續refresh pending／generating／failed不得抹除last-known-good Current。Mock／fallback RCA不是successful published RCA，也不自動關閉 Incident。 |
-| Requirement Authority／Status | RCA detailed product semantics由`PRD-004 v1.0 Approved`唯一擁有；目前為Approved Requirement／Implementation Pending，不得解讀為RCA／RAG Implemented。 |
+| Requirement Authority／Status | RCA detailed product semantics由`PRD-004 v1.0 Approved`唯一擁有；Candidate A～E已實作，Candidate F、final real-LLM／RAG quality evaluation與production readiness仍Pending。PRD-004 Product Status維持Approved，不得將部分downstream implementation解讀為overall product closure。 |
 
 ### G7 Dashboard — Technical View／Team Visibility
 
@@ -428,9 +428,9 @@ PM 負責 integration review、merge／integration decision，以及將 stable m
 | Completed | 已完成 | Event Detection。 |
 | Completed | 已完成 | Event Runner。 |
 | Completed | 已完成 | Scenario／E2E validation。 |
-| Completed contract scope | SPEC-006～011 existing scope Implemented | Alert Correlation／Incident／Lifecycle／Runtime既有核准scope已各自完成；不包含本次新增RCA integration capability的implementation。 |
-| In progress | Individual Engineering SPECs Implemented／Integration Pending | Incident Manager／lifecycle（PRD-003 v1.1 Final；SPEC-008既有Incident Core與SPEC-009 Lifecycle／Human Workflow scope已Implemented；RCA additive integration與complete downstream integrations仍pending）。 |
-| Approved downstream／Implementation Pending | 規劃中 | `PRD-004 v1.0 Approved`之RAG／LLM RCA，以及未來PRD-005 Dashboard、Jira、Discord／ChatOps、Email fallback／escalation、full integration／Demo。 |
+| Completed contract scope | SPEC-006～011 existing scope and SPEC-011 RCA additive boundary Implemented | Alert Correlation／Incident／Lifecycle／Runtime既有核准scope已完成；SPEC-016 Candidate E亦已在SPEC-011 singular Runtime內實作RCA integration。 |
+| Implemented engineering candidates | Candidate A～E Implemented | SPEC-012～016已實作；不表示Candidate F、final real-LLM／RAG quality evaluation或Production Ready。 |
+| Approved downstream／Implementation Pending | 規劃中 | Candidate F／PRD-004 final evaluation，以及未來PRD-005 Dashboard、Jira、Discord／ChatOps、Email fallback／escalation、full integration／Demo。 |
 
 SPEC-006～011各自既有核准scope Implemented不代表RCA additive integration、RCA／RAG、external operational integrations或整體平台已完成。既有產品目標維持資服盃截止 2026/11/07 與系上專題發表預計 2026/11 中旬。
 
@@ -521,11 +521,11 @@ SPEC-006～011各自既有核准scope Implemented不代表RCA additive integrati
 
 ## 13. 相關文件與驗證證據
 
-正式文件依domain分工：PRD-001 v3.5為執行中的overall platform direction；PRD-002 v1.5 Approved為Event Detection authority；SPEC-001 v2.3、SPEC-002 v1.4、SPEC-003 v1.1、SPEC-004 v1.1為Implemented engineering contracts；PRD-003 v1.1維持Final Alert Correlation／Incident Management detailed requirement authority；`PRD-004 v1.0 Approved`是RCA Domain product requirement authority。SPEC-006～011既有核准scope已Implemented；SPEC-008 v1.2與SPEC-011 v1.1的additive RCA integration boundary尚未實作，RCA／RAG、PRD-005 interfaces與完整downstream integrations仍為Implementation Pending。
+正式文件依domain分工：PRD-001 v3.5為執行中的overall platform direction；PRD-002 v1.5 Approved為Event Detection authority；SPEC-001 v2.3、SPEC-002 v1.4、SPEC-003 v1.1、SPEC-004 v1.1為Implemented engineering contracts；PRD-003 v1.1維持Final Alert Correlation／Incident Management detailed requirement authority；`PRD-004 v1.0 Approved`是RCA Domain product requirement authority。SPEC-006～011既有核准scope、SPEC-008 RCA integration與SPEC-011 RCA additive boundary已Implemented；SPEC-012～016 Candidate A～E亦已Implemented。Candidate F、final real-LLM／RAG evaluation、PRD-005 interfaces與完整downstream integrations仍為Implementation Pending；Production Ready為`NO`。
 
 SPEC-005 v1.3為Implemented implementation／validation evidence（non-normative），S3 Identity Revalidation PASS；它不取代PRD-002或SPEC-001～004 detector authority，也不將observed E2E values升級為永久門檻。
 
-DDS-001 v1.3是repository-level Mock Data／Observability reference；README只提供project entry point與governance index。
+DDS-001 v1.8是repository-level Mock Data／Observability reference；README只提供project entry point與governance index。
 
 PRD-001 v3.5完成Post-PRD-004 backward governance reconciliation，不retroactively modify frozen Event Detection、Correlation、Incident lifecycle或Runtime contracts。SPEC-003／SPEC-004／SPEC-005中的舊PRD references維持historical implementation／reconciliation baseline。
 

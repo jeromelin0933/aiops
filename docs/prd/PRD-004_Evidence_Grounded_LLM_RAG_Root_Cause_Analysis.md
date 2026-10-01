@@ -30,7 +30,7 @@
 | 0.3 | 2026-09-18 | Draft — PM Final Approval Candidate | Narrow PM Final Review patch：釐清authority hierarchy、加入`INITIAL_PENDING` downstream projection、封閉Incident `rca_status` refresh semantics。 |
 | 1.0 | 2026-09-18 | Approved | PM Final Approval completed；D1～D10、Revision Round 1、Narrow Final Patch及AC-004-A～X通過Final Review；正式凍結為RCA Domain後續Engineering SPEC與cross-document reconciliation的產品需求權威。 |
 
-> **Status Honesty：**`PRD-004 v1.0`已完成PM Final Review，Product Status維持`Approved`，正式成為RCA Domain後續Engineering SPEC與cross-document reconciliation的產品需求權威。Post-integration repository reality為Candidate A／B／C／D已依SPEC-012／013／014／015實作；Candidate E／F、RCA Runtime orchestration、Publication／Publication Reconciliation orchestration、Startup RCA recovery、final RCA／RAG E2E仍為Pending，Production Ready為`NO`。產品語意版本不因本次implementation reconciliation升版。
+> **Status Honesty：**`PRD-004 v1.0`已完成PM Final Review，Product Status維持`Approved`，正式成為RCA Domain後續Engineering SPEC與cross-document reconciliation的產品需求權威。Current repository reality為Candidate A～E已分別依SPEC-012～016實作；SPEC-016 Candidate E在既有SPEC-011 singular Runtime framework內實作RCA orchestration、Publication Reconciliation與startup recovery，不建立第二套Runtime權威。Candidate F、final real-LLM／RAG quality evaluation仍為Pending；Docker Candidate-E execution與Live Gemini為`NOT EXECUTED`；Production Ready為`NO`。產品語意版本不因本次implementation reconciliation升版，且Candidate E implemented不表示PRD-004 overall product closure complete。
 
 ---
 
@@ -972,10 +972,10 @@ S1～S6 fixtures、repeated-run、main metrics、Conclusion Calibration、degrad
 | Candidate B — Incident Evidence Collection & Snapshot | SPEC-013 | Implemented |
 | Candidate C — RAG Knowledge Index & Retrieval | SPEC-014 | Implemented；AC-014-X另依該SPEC記錄為`NOT EXECUTED — PM-DIRECTED SKIP FOR CURRENT CLOSURE`，不是PASS |
 | Candidate D — LLM Generation & Validation | SPEC-015 | Implemented；Live Gemini為`NOT EXECUTED` |
-| Candidate E — RCA Orchestration, Publication & Recovery | 尚無completed downstream implementation；caller-driven publication coordinator不等於RCA Runtime scheduler／recovery authority | Pending |
+| Candidate E — RCA Orchestration, Publication & Recovery | SPEC-016；implemented inside the existing SPEC-011 singular Runtime framework | Implemented |
 | Candidate F — RCA Evaluation & E2E Validation | 尚無completed downstream implementation | Pending |
 
-Integrated develop full regression evidence為`1829 passed, 4 skipped`。此evidence支持completed SPEC的current implementation reconciliation；4個skipped tests不構成AC-014-X、Live Gemini、live Google provider或final RCA E2E的PASS evidence。
+Historical Candidate-D integration evidence為`1829 passed, 4 skipped`。Current Candidate-E non-normative implementation evidence：accepted commit `eff7eb067cc09974c7679050f5136a7cfdffadaf`，Post-Handoff Final Full Contract Re-audit PASS，SPEC Lead Final Review PASS，full regression `2064 passed, 4 skipped`。Skipped／default regression不構成AC-014-X、Docker Candidate-E、Live Gemini、live Google provider或final RCA／RAG evaluation的PASS evidence。
 
 ---
 
