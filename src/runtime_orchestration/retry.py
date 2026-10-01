@@ -20,6 +20,7 @@ from .contracts import (
     RuntimeWorkStore,
 )
 from .identity import runtime_work_id
+from .sqlite_work_store import ContradictoryRuntimeWorkError
 from .telemetry import NullRuntimeTelemetry, RuntimeTelemetry, RuntimeTelemetryEvent
 
 
@@ -76,6 +77,80 @@ class DurableRetryController:
     @property
     def domain_attempt_limit(self) -> int:
         return self.automatic_retry_limit + 1
+
+    def establish_rca_attempt_budget(
+        self, *, root_id: str, attempt_id: str, incident_id: str, event_id: str,
+    ) -> RuntimeWorkRecord:
+        """Use the existing D2 work authority for one Attempt's shared slots."""
+        work_id = runtime_work_id(RuntimeWorkKind.RCA_ATTEMPT, root_id, attempt_id)
+        work = self._work_store.get(work_id)
+        if work is None:
+            now = self._clock.now()
+            proposal = RuntimeWorkRecord(
+                work_id, RuntimeWorkKind.RCA_ATTEMPT, event_id, "INITIAL", "EXECUTE_TRY",
+                0, self.automatic_retry_limit, RuntimeWorkStatus.OUTSTANDING,
+                now, now, now, incident_id=incident_id, operation_id=attempt_id,
+                workflow_operation_id=root_id,
+            )
+            try:
+                work = self._work_store.create(proposal)
+            except ContradictoryRuntimeWorkError:
+                # A competing initial executor may have committed this subject.
+                work = self._work_store.get(work_id)
+                if work is None:
+                    raise
+        if (work.work_id != work_id or work.work_kind is not RuntimeWorkKind.RCA_ATTEMPT
+            or work.incident_id != incident_id or work.event_id != event_id
+            or work.operation_id != attempt_id or work.workflow_operation_id != root_id
+            or work.retry_limit != self.automatic_retry_limit):
+            raise RuntimeRetryIntegrityError("Attempt retry budget binding contradicts D2")
+        return work
+
+    def mark_rca_initial_invoking(self, work: RuntimeWorkRecord) -> RuntimeWorkRecord:
+        if (work.work_kind is not RuntimeWorkKind.RCA_ATTEMPT or work.stage != "INITIAL"
+            or work.attempt_count != 0 or work.status is not RuntimeWorkStatus.OUTSTANDING):
+            raise RuntimeRetryIntegrityError("initial physical invocation is not eligible")
+        now = self._clock.now()
+        return self._work_store.update(replace(work, stage="INITIAL_INVOKING",
+            updated_at=now, observed_at=now), expected_revision=work.revision)
+
+    def schedule_rca_failure(self, work: RuntimeWorkRecord, error: DomainRetryFailure) -> RuntimeWorkRecord:
+        disposition = getattr(error, "retry_safety", None)
+        code = getattr(error, "failure_class", None)
+        if (work.work_kind is not RuntimeWorkKind.RCA_ATTEMPT
+            or work.stage not in {"INITIAL_INVOKING", "RETRY_INVOKING"}
+            or work.status is not RuntimeWorkStatus.OUTSTANDING
+            or not isinstance(disposition, Enum) or disposition.value not in
+                {"RETRYABLE", "NON_RETRYABLE", "REPAIR_REQUIRED"}
+            or not isinstance(code, Enum)):
+            raise RuntimeRetryIntegrityError("invalid Candidate-D retry scheduling authority")
+        now = self._clock.now()
+        retryable = disposition.value == "RETRYABLE"
+        exhausted = retryable and work.attempt_count == work.retry_limit
+        status = (RuntimeWorkStatus.EXHAUSTED if exhausted else
+                  RuntimeWorkStatus.OUTSTANDING if retryable else RuntimeWorkStatus.FAILED_CLOSED)
+        due = (now + timedelta(seconds=self._delays[work.attempt_count])
+               if retryable and not exhausted else None)
+        return self._work_store.update(replace(work,
+            stage="EXHAUSTED" if exhausted else "RETRY_PENDING" if retryable else "FAILED_CLOSED",
+            next_action="RETRY" if retryable and not exhausted else "NONE",
+            next_retry_at=due, last_attempt_at=now,
+            source_domain="CANDIDATE_D", source_error_code=code.value,
+            source_retry_disposition=disposition.value, status=status,
+            updated_at=now, observed_at=now), expected_revision=work.revision)
+
+    def consume_rca_retry_slot(self, work: RuntimeWorkRecord) -> RuntimeWorkRecord:
+        now = self._clock.now()
+        if (work.work_kind is not RuntimeWorkKind.RCA_ATTEMPT
+            or work.stage != "RETRY_PENDING" or work.status is not RuntimeWorkStatus.OUTSTANDING
+            or work.next_retry_at is None or now < work.next_retry_at
+            or work.attempt_count >= work.retry_limit
+            or work.source_retry_disposition != "RETRYABLE"):
+            raise RuntimeRetryIntegrityError("Attempt retry slot is not eligible")
+        return self._work_store.update(replace(work, stage="RETRY_INVOKING",
+            next_action="EXECUTE_TRY", attempt_count=work.attempt_count + 1,
+            next_retry_at=None, updated_at=now, observed_at=now),
+            expected_revision=work.revision)
 
     def record_domain_failure(
         self,
@@ -172,6 +247,10 @@ class DurableRetryController:
         eligible: list[RuntimeWorkRecord] = []
         future: list[datetime] = []
         for work in enumeration.records:
+            if work.work_kind is RuntimeWorkKind.RCA_ATTEMPT:
+                # S3 steps use this same D2 work record, but RCA dispatch is
+                # not wired into the existing worker until a later slice.
+                continue
             if work.status is not RuntimeWorkStatus.OUTSTANDING:
                 continue
             if work.source_retry_disposition not in (None, RetryDisposition.RETRYABLE.value):

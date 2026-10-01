@@ -15,8 +15,8 @@
 | Approval Date | 2026-09-20 |
 | Requirement Authority | PRD-004 v1.0 Approved |
 | Related Product Authorities | PRD-001 v3.5；PRD-003 v1.1 Final |
-| Related Incident Contract | SPEC-008 v1.2 |
-| Related Runtime Contract | SPEC-011 v1.1 |
+| Related Incident Contract | SPEC-008 v1.3 |
+| Related Runtime Contract | SPEC-011 v1.2 |
 | Implementation Owner | 富裕 |
 
 ### Change History
@@ -31,7 +31,7 @@
 
 > **Draft ≠ Approved；Approved ≠ Implemented。**
 
-本文件的normative baseline仍是Candidate A v1.0 Approved Engineering Contract；v1.1只記錄current implementation closure。Repository現已實作RCA Aggregate／Attempt／Try／Version／immutable Artifact persistence、Current／History／Freshness、durable publication receipt、public semantic reads、integrity及recovery capability，並透過SPEC-012／SPEC-008 caller-driven publication coordinator完成authorized relationship publication。Candidate D／SPEC-015 generation／validation已實作；Candidate E／F、SPEC-011 RCA Runtime orchestration、final RCA E2E仍為Pending，Production Ready為`NO`。Candidate A仍是RCA Artifact／Version／Try durable truth，Candidate D是generation／validation authority，Candidate E是protocol orchestration authority。
+本文件的normative baseline仍是Candidate A v1.0 Approved Engineering Contract；v1.1只記錄current implementation closure。Repository現已實作RCA Aggregate／Attempt／Try／Version／immutable Artifact persistence、Current／History／Freshness、durable publication receipt、public semantic reads、integrity及recovery capability，並透過SPEC-012／SPEC-008 caller-driven publication coordinator完成authorized relationship publication。Candidate D／SPEC-015與Candidate E／SPEC-016已實作；Candidate F與final RCA／RAG evaluation仍Pending，Production Ready為`NO`。Candidate A仍是RCA Artifact／Version／Try durable truth，Candidate D是generation／validation authority，Candidate E在SPEC-011 singular Runtime內實作protocol orchestration。
 
 ---
 
@@ -589,4 +589,4 @@ Version: 1.1
 Status: Implemented
 ```
 
-SPEC-012 v1.0持續作為Approved normative baseline；v1.1為documentation-only implementation closure。Human提供的Candidate-A integration regression結果為`1669 passed, 3 skipped, 0 failed`（63.11s），且該階段develop integration baseline為`b034921eab7d0fa17754eea902c9e12bc2932052`。此historical evidence支持Candidate A current status `Implemented`。Candidate D／SPEC-015現亦已實作；這不證明full RCA workflow、Candidate E／F、final RCA E2E或Production Ready。
+SPEC-012 v1.0持續作為Approved normative baseline；v1.1為documentation-only implementation closure。Human提供的Candidate-A integration regression結果為`1669 passed, 3 skipped, 0 failed`（63.11s），且該階段develop integration baseline為`b034921eab7d0fa17754eea902c9e12bc2932052`。此historical evidence支持Candidate A current status `Implemented`。Candidate D／SPEC-015與Candidate E／SPEC-016現亦已實作；這不證明Candidate F、final RCA／RAG evaluation或Production Ready。

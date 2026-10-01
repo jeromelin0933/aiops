@@ -28,7 +28,7 @@
 
 ### Status Honesty
 
-SPEC-015 v1.0 Approved Engineering Contract持續作為normative baseline；v1.1只記錄documentation-only implementation closure，Current Status為`Implemented`。Current repository已完成Candidate A／B／C／D；Candidate E RCA orchestration與Candidate F evaluation仍為Pending。`Implemented`只表示Candidate-D approved scope已實作並驗證，不表示Live Gemini PASS、Candidate E／F implemented、RCA Runtime orchestration complete、final RCA／RAG E2E complete或Production Ready。
+SPEC-015 v1.0 Approved Engineering Contract持續作為normative baseline；v1.1只記錄documentation-only implementation closure，Current Status為`Implemented`。Current repository已完成Candidate A～E；Candidate E／SPEC-016在SPEC-011 singular Runtime內消費Candidate-D public result／failure／Same-Try safety facts，不取代Candidate D generation／validation authority。Candidate F evaluation仍Pending。`Implemented`只表示Candidate-D approved scope已實作並驗證，不表示Live Gemini PASS、Candidate F implemented、final RCA／RAG evaluation complete或Production Ready。
 
 ---
 
@@ -1115,4 +1115,4 @@ Implemented capability涵蓋Gemini provider boundary、Generation Profile／prov
 
 Candidate D不擁有Candidate-A Try history、Artifact／Version authority、publication、Incident mutation、Runtime scheduling、retry timing／budget、next `try_ordinal`、startup recovery orchestration或cross-domain reconciliation。
 
-Status honesty：`SPEC-015 Implemented`只表示Candidate-D approved scope已實作並驗證。Candidate E／SPEC-016與Candidate F／SPEC-017仍為Pending／Not Started；PRD-004 RCA Runtime orchestration、Publication orchestration、Publication Reconciliation orchestration、Startup RCA recovery及final RCA／RAG E2E仍為Pending；Production Ready為`NO`。4個skipped tests不構成Live Gemini或final RCA E2E PASS evidence。
+Status honesty：`SPEC-015 Implemented`只表示Candidate-D approved scope已實作並驗證。Candidate E／SPEC-016現已Implemented，並在SPEC-011 singular Runtime內實作RCA Runtime／Publication／Recovery orchestration；Candidate F／SPEC-017與final real-LLM／RAG quality evaluation仍為Pending。Live Gemini與Docker Candidate-E execution為`NOT EXECUTED`；Production Ready為`NO`。4個skipped tests不構成Live Gemini或final RCA／RAG evaluation PASS evidence。

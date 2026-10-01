@@ -21,7 +21,7 @@
 | 1.0 | 2026-08-29 | Initial Final requirements for evidence-driven Alert Correlation, Incident lifecycle/state, Pending/Dedup recovery, Shadow routing, and persistence governance. |
 | 1.1 | 2026-09-18 | Post-PRD-004 v1.0 backward reconciliation：clarify Incident coarse RCA availability／Current relationship projection、`rca_ref` meaning、Assignment-independent RCA eligibility及Material Evidence authority handoff。此為narrow boundary clarification，不變更Strong／Weak、Pending、Incident lifecycle、ownership、Shadow或assignment behavior。 |
 
-> **Implementation Status Honesty：**本文件是 Final Requirements，不代表implementation complete。SPEC-006～011既有核准scope已各自Implemented；SPEC-008／011新增的RCA integration boundary、RCA／RAG workflow、PRD-005 interfaces及完整AIOps closed loop仍為Implementation Pending。不得將本文件解讀為RCA Implemented、Production Ready或Completed。
+> **Implementation Status Honesty：**本文件是 Final Requirements，不代表implementation complete。SPEC-006～011既有核准scope、SPEC-008 RCA integration boundary與SPEC-011 RCA additive boundary已Implemented；Candidate E／SPEC-016已在SPEC-011 singular Runtime內實作RCA orchestration。Candidate F、final real-LLM／RAG evaluation、PRD-005 interfaces及完整AIOps closed loop仍為Implementation Pending。不得將本文件解讀為Production Ready或overall platform Completed。
 
 ---
 

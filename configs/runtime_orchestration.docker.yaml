@@ -24,3 +24,12 @@ assignment:
 telemetry:
   logger_name: runtime_orchestration
   level: INFO
+rca:
+  a_store_path: var/runtime_orchestration/rca.sqlite3
+  b_store_path: var/runtime_orchestration/evidence.sqlite3
+  d_store_path: var/runtime_orchestration/generation.sqlite3
+  knowledge_config_path: configs/knowledge_index.yaml
+  generation_config_path: configs/rca_generation.json
+  evidence_config_path: configs/incident_evidence.yaml
+  loki_endpoint: http://loki:3100/loki/api/v1/query_range
+  prometheus_endpoint: http://prometheus:9090/api/v1/query_range

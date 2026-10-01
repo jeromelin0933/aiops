@@ -13,6 +13,9 @@ from .clock import canonical_utc
 class RuntimeWorkKind(str, Enum):
     DOMAIN_OPERATION = "DOMAIN_OPERATION"
     AUTO_ASSIGN = "AUTO_ASSIGN"
+    RCA_INITIAL = "RCA_INITIAL"
+    RCA_ATTEMPT = "RCA_ATTEMPT"
+    RCA_FOLLOW_UP = "RCA_FOLLOW_UP"
 
 
 class RuntimeWorkStatus(str, Enum):

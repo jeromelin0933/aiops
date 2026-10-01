@@ -10,6 +10,11 @@ import sys
 from alert_correlation.state import SqliteCorrelationStateStore
 from event_detection.store.event_store import EventStore
 from incident_management import SqliteIncidentStore
+from incident_evidence import SqliteEvidenceStore
+from knowledge_index import SqliteKnowledgeStore, load_knowledge_config
+from llm_generation.sqlite_store import CandidateDStore
+from rca_persistence import SqliteRcaStore
+from runtime_orchestration.rca_continuation import SqliteRcaContinuationStore
 from runtime_orchestration import SqliteRuntimeWorkStore
 from shadow_management import SqliteShadowStore
 
@@ -64,6 +69,13 @@ def snapshot() -> None:
     incidents = SqliteIncidentStore(str(STATE_ROOT / "incidents.sqlite3"))
     shadows = SqliteShadowStore(STATE_ROOT / "shadows.sqlite3")
     work = SqliteRuntimeWorkStore(STATE_ROOT / "runtime_work.sqlite3")
+    a = SqliteRcaStore(STATE_ROOT / "rca.sqlite3")
+    b = SqliteEvidenceStore(STATE_ROOT / "evidence.sqlite3")
+    knowledge_config = load_knowledge_config("/app/configs/knowledge_index.yaml")
+    c = SqliteKnowledgeStore(Path("/app") / knowledge_config.authority_store_path)
+    d = CandidateDStore(STATE_ROOT / "generation.sqlite3",
+                        resource_config_path="/app/configs/rca_generation.json")
+    d2 = SqliteRcaContinuationStore(STATE_ROOT / "runtime_work.sqlite3")
     try:
         resolved = {event_id: state.resolve(event_id) for event_id in EVENT_IDS}
         incident_ids = sorted(
@@ -116,6 +128,19 @@ def snapshot() -> None:
                 for record in work.enumerate_all().records
             ],
             "work_corruptions": len(work.enumerate_all().isolated_corruptions),
+            "rca": {
+                "a_candidates": len(a.enumerate_recovery_candidates()),
+                "b_readiness": b.validate_local_readiness().value,
+                "b_integrity": b.enumerate_recovery_facts().integrity_status.value,
+                "c_readiness": c.local_readiness(
+                    required_profile_reference=knowledge_config.capability.profile_reference,
+                    required_capability_identity=knowledge_config.capability.capability_identity,
+                ).status.value,
+                "d_readiness": d.local_readiness().value,
+                "d_recovery": d.recovery().status.value,
+                "d2_roots": len(d2.enumerate_all().records),
+                "d2_corruptions": len(d2.enumerate_all().isolated_corruptions),
+            },
         }
         print(json.dumps(result, sort_keys=True))
     finally:
@@ -123,6 +148,10 @@ def snapshot() -> None:
         incidents.close()
         shadows.close()
         work.close()
+        a.close()
+        b.close()
+        c.close()
+        d2.close()
 
 
 if __name__ == "__main__":

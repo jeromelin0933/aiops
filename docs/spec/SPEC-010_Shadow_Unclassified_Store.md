@@ -27,7 +27,7 @@
 | 1.0 | 2026-09-08 | Draft Review #1、Revision Round #1 與 PM Review #2 完成；D1～D12、010-R1～R5、ShadowReason semantics、Shadow／Incident ownership boundary、operation replay／crash recovery、closed Shadow error contract、Acceptance Criteria 與 cross-SPEC boundaries 完成 final review。Status 更新為 Approved — Implementation Pending；Engineering Contract frozen for implementation。 |
 | 1.0 | 2026-09-09 | Implementation completed and PM Final Review PASS；SPEC-010 Phase 1～6、Shadow persistence、ownership、operation replay／crash recovery、SPEC-008 public ownership integration及AC-010-A～J均已實作並完成驗證。Status更新為 Implemented；Engineering semantics與approved v1.0 contract一致，無implementation deviation。 |
 
-> **Implementation Status Honesty：SPEC-010 v1.0已完成implementation，Status為`Implemented`。** SPEC-009 v1.0 Lifecycle／Human Workflow亦已依其核准scope Implemented；SPEC-011 Runtime Orchestration、full downstream Docker E2E、RCA／RAG、ChatOps或完整AIOps closed loop仍Pending，整體平台亦非Production Ready。SPEC-010的Shadow semantics與ownership authority不因downstream狀態而改變。
+> **Implementation Status Honesty：SPEC-010 v1.0已完成implementation，Status為`Implemented`。** SPEC-009 v1.0 Lifecycle／Human Workflow、SPEC-011 Runtime Orchestration與SPEC-016 Candidate-E RCA orchestration已依各自核准scope Implemented；Candidate F、final real-LLM／RAG evaluation、Candidate-E Docker execution、ChatOps與完整AIOps closed loop仍Pending或`NOT EXECUTED`，整體平台亦非Production Ready。SPEC-010的Shadow semantics與ownership authority不因downstream狀態而改變。
 
 ---
 

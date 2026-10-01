@@ -1,0 +1,30 @@
+{
+  "version": "1.0",
+  "provider": "google",
+  "model": "gemini-2.5-flash",
+  "profile": {"identity": "spec016-google-generation-profile-v1", "version": "1"},
+  "prompt": {"identity": "spec016-rca-prompt-v1", "version": "1"},
+  "result_schema": {"identity": "spec015-rca-result-v1", "version": "1"},
+  "configuration": {"identity": "cfg_c4c0532057d9d56f943c7bdcc4c3028b87b8fe4952e8fc460bf7df46205f8611", "version": "1"},
+  "bounds": {
+    "maximum_request_bytes": 32768,
+    "maximum_input_bytes": 32768,
+    "maximum_output_bytes": 32768,
+    "maximum_input_tokens": 32768,
+    "maximum_output_tokens": 32768,
+    "maximum_total_tokens": 32768,
+    "timeout_seconds": 30,
+    "maximum_invocations": 1,
+    "maximum_rate_units": 32768,
+    "maximum_quota_units": 32768,
+    "maximum_cost_units": 32768,
+    "maximum_resource_units": 32768,
+    "maximum_hypotheses": 8,
+    "maximum_claims": 32,
+    "maximum_text_bytes": 32768
+  },
+  "hidden_retries_disabled": true,
+  "prompt_template": "Analyze admitted incident evidence and return the pinned RCA result schema",
+  "result_schema_commitment": "25d85d4df0684a2cd605110e3a8ad8bd9166aca6411324a9c25d5e53cbf905e0",
+  "configuration_commitment": "c4c0532057d9d56f943c7bdcc4c3028b87b8fe4952e8fc460bf7df46205f8611"
+}

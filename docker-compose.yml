@@ -12,6 +12,7 @@ services:
     volumes:
       - runtime-events:/app/events
       - runtime-state:/app/var/runtime_orchestration
+      - runtime-knowledge:/app/var/knowledge_index
     stop_grace_period: 30s
 
   prometheus:
@@ -62,3 +63,4 @@ volumes:
   grafana-storage:
   runtime-events:
   runtime-state:
+  runtime-knowledge:
