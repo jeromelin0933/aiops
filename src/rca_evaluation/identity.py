@@ -38,6 +38,18 @@ def commitment(value: object) -> str:
     return "sha256:" + hashlib.sha256(canonical_bytes(value)).hexdigest()
 
 
+def canonical_text_bytes(raw: bytes) -> bytes:
+    """Strict UTF-8 bytes with CRLF, and only CRLF, normalized to LF."""
+    if type(raw) is not bytes:
+        raise TypeError("canonical text commitment requires bytes")
+    return raw.decode("utf-8", errors="strict").replace("\r\n", "\n").encode("utf-8")
+
+
+def canonical_text_commitment(raw: bytes) -> str:
+    """SHA-256 commitment for a governed UTF-8 textual artifact."""
+    return "sha256:" + hashlib.sha256(canonical_text_bytes(raw)).hexdigest()
+
+
 def identity(domain: str, semantic_key: object) -> str:
     if domain not in DOMAINS:
         raise ValueError("unknown evaluation identity domain")

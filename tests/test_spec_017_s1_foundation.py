@@ -1,6 +1,7 @@
 """Focused S1 authority, isolation, and replay checks."""
 
 from dataclasses import FrozenInstanceError, replace
+import hashlib
 import json
 import sqlite3
 
@@ -15,7 +16,10 @@ from rca_evaluation.authority import (
     PM_AUTHORITY, TrustedAmendmentAuthorization, TrustedApprovalRegistry,
     TrustedOracleApproval,
 )
-from rca_evaluation.identity import canonical_bytes, commitment, identity
+from rca_evaluation.identity import (
+    canonical_bytes, canonical_text_bytes, canonical_text_commitment,
+    commitment, identity,
+)
 from rca_evaluation.ledger import LedgerConflict, LedgerRecord
 from rca_evaluation.oracle import EvaluationPlan, OracleRevision
 from rca_evaluation.sqlite_store import EvaluationStoreIntegrityError, SqliteEvaluationStore
@@ -154,6 +158,32 @@ def test_canonicalization_commitment_and_immutable_revision():
     changed["scenarios"]["S1"]["O1"] = "new approved rule"
     assert oracle(changed).oracle_revision_id != original.oracle_revision_id
     assert original.semantic_content_commitment != oracle(changed).semantic_content_commitment
+
+
+def test_governed_text_commitment_has_one_strict_eol_rule():
+    lf = b"alpha\n  beta\n"
+    crlf = b"alpha\r\n  beta\r\n"
+    mixed = b"alpha\r\n  beta\n"
+    expected = "sha256:" + hashlib.sha256(lf).hexdigest()
+
+    assert canonical_text_commitment(lf) == expected
+    assert canonical_text_commitment(crlf) == expected
+    assert canonical_text_commitment(mixed) == expected
+    assert canonical_text_bytes(b"alpha\rbeta\r\n") == b"alpha\rbeta\n"
+    assert canonical_text_commitment(b"alpha\rbeta\n") != expected
+    with pytest.raises(UnicodeDecodeError):
+        canonical_text_commitment(b"invalid:\xff")
+
+
+@pytest.mark.parametrize("mutated", (
+    b"Alpha\n  beta\n",
+    b"alpha \n  beta\n",
+    b"alpha\n beta\n",
+    b"alpha\n  beta",
+))
+def test_governed_text_commitment_rejects_canonical_content_mutation(mutated):
+    assert canonical_text_commitment(mutated) != canonical_text_commitment(
+        b"alpha\n  beta\n")
 
 
 def test_approval_version_and_exact_pinning(tmp_path):

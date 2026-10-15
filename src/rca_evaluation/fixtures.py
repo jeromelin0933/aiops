@@ -9,7 +9,7 @@ from pathlib import Path
 
 import yaml
 
-from .identity import commitment
+from .identity import canonical_text_bytes, canonical_text_commitment, commitment
 from .oracle import OfficialOracleArtifact, SCENARIOS
 
 
@@ -33,7 +33,7 @@ REQUIRED_RESTART_BOUNDARIES = (
 OFFICIAL_FIXTURE_MANIFEST_IDENTITY = "spec017-s1-s6-fixtures-v2"
 OFFICIAL_FIXTURE_REVISION = "spec017-fixtures-v2"
 OFFICIAL_FIXTURE_MANIFEST_COMMITMENT = (
-    "sha256:6e9d3ac098e7f7309b4b8443ffbd74b24e646eaf57e0f943851316a791e72159"
+    "sha256:3deee326137845127d9582a6ff9ea369211ce045c5debc04a2052241aed32429"
 )
 
 _VERIFIED_LOADER_PROVENANCE = object()
@@ -289,7 +289,8 @@ def load_fixture_manifest(
         raise TypeError("fixture manifest admission requires the official Oracle artifact")
     oracle.revision.validate()
     manifest_path = Path(path)
-    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_bytes = canonical_text_bytes(manifest_path.read_bytes())
+    raw = json.loads(manifest_bytes)
     if not isinstance(raw, dict) or set(raw) != {
         "schema_version", "manifest_identity", "fixture_revision",
         "source_oracle_artifact_revision", "source_oracle_revision_id",
@@ -383,10 +384,11 @@ def load_fixture_manifest(
                 if resolved != root and root not in resolved.parents:
                     raise ValueError("fixture source escapes repository root")
                 content = resolved.read_bytes()
-                actual_source = "sha256:" + hashlib.sha256(content).hexdigest()
+                canonical_content = canonical_text_bytes(content)
+                actual_source = canonical_text_commitment(content)
                 if actual_source != item.source_commitment:
                     raise ValueError("fixture source commitment mismatch")
-                document = yaml.safe_load(content)
+                document = yaml.safe_load(canonical_content)
                 if is_recovery:
                     cursor = document
                     for component in selector.split("."):
