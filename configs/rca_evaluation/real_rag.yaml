@@ -1,0 +1,24 @@
+version: "1.0"
+gate: REAL_RAG
+profile_identity: spec017-real-rag-gate-v1
+default_enabled: false
+authorization:
+  opt_in_environment: RUN_SPEC017_REAL_RAG
+  authorization_environment: SPEC017_REAL_RAG_AUTHORIZED
+  credential_environment: GEMINI_API_KEY
+knowledge:
+  config_path: configs/knowledge_index.yaml
+  manifest_path: configs/knowledge_manifest.json
+  release_reference: spec014-production-knowledge-release@1.0
+  manifest_commitment: kmf_1f98f62afda12b1c49dda11c67be0249bec9bf3c788e00f22fbe61f50cfb41ee
+  embedding_adapter: knowledge_index.google_embedding_adapter.GoogleEmbeddingAdapter
+  embedding_provider: google
+  embedding_model: text-embedding-004
+  embedding_profile_reference: spec014-google-embedding-profile-v1
+  embedding_profile_identity: spec014-google-document-query-v1
+  index_engine: chromadb
+  index_schema_identity: spec014-chroma-cosine-v1
+  retrieval_profile_identity: spec014-retrieval-v1
+  active_or_lkg_required: true
+  public_retrieval_required: true
+  isolated_chroma_root: var/rca_evaluation/real_rag

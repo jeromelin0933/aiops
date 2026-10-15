@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from knowledge_index.contracts import (
     KnowledgeReadStatus, KnowledgeSnapshotKey, RetrievalResolution,
 )
-from llm_generation.contracts import LocalReadStatus, ValidatedGenerationResult
+from llm_generation.contracts import Claim, LocalReadStatus, ValidatedGenerationResult
 from rca_persistence.contracts import (
     DiagnosticConclusion, EvidenceCompleteness, EvidentialSupport, GuidanceSource,
 )
@@ -62,6 +62,7 @@ class AuthoritativeProductionFacts:
     competing_alternatives_fact: LineagedBooleanFact
     sop_backed_guidance_fact: LineagedBooleanFact
     production_projection: dict
+    production_claims: tuple[Claim, ...] = ()
 
     def __post_init__(self) -> None:
         require_identity(self.execution_id, "execution")
@@ -238,5 +239,5 @@ class S3SourceAuthority:
                 machine_sop_guidance, result.validated_result_id, result.semantic_commitment,
                 "SPEC015_TYPED_GUIDANCE_SOURCE",
             ),
-            projection,
+            projection, tuple(result.content.claims),
         )

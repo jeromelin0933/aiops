@@ -1,0 +1,101 @@
+{
+  "artifact_schema": "spec017.oracle-artifact.v1",
+  "artifact_revision": "spec017-s1-s6-v1",
+  "oracle_set_id": "PM-S1-S6",
+  "source": {
+    "document": "docs/spec/SPEC-017_RCA_Evaluation_E2E_Validation.md",
+    "section": "§7",
+    "approved_commit": "7996d39242d9aeabbfc481532a89afa530a12088"
+  },
+  "approval": {
+    "authority": "林子豪（PM）",
+    "reference": "SPEC-017-v1.0-§7@7996d39242d9aeabbfc481532a89afa530a12088",
+    "approved_at": "2026-10-02T00:00:00Z",
+    "created_at": "2026-10-02T00:00:00Z"
+  },
+  "semantics": {
+    "scenarios": {
+      "S1": {
+        "O1": {"text": "credential abuse／brute-force authentication attempt；同一來源對同一或可追蹤使用者，在bounded window持續大量未授權authentication attempts。", "causal_class": "CREDENTIAL_ABUSE_BRUTE_FORCE"},
+        "O2": {"text": "至少authentication／credential-abuse operation level；login anomaly、many 401s、authentication error或service error過粗；不要求attacker identity、location、tool或infrastructure。", "accepted_granularities": ["credential-operation"]},
+        "O3": {"text": "brute-force login attempts、repeated password guessing、common-source repeated unauthorized authentication；credential stuffing只有Evidence支持外洩credential set時才接受。", "accepted_alternatives": ["brute-force-login-attempts", "repeated-password-guessing", "common-source-repeated-unauthorized-authentication"]},
+        "O4": {"text": "無Evidence不得宣稱account compromised、password leaked、successful login、data breach、attacker identity/location、botnet/tool、credential stuffing、IdP或database failure；Account Locked是可能後果，不是root cause。", "material_forbidden_overclaims": ["account_compromised", "password_leaked", "successful_login", "data_breach", "attacker_identity_or_location", "botnet_or_tool", "unsupported_credential_stuffing", "idp_or_database_failure"]},
+        "O5": {"text": "normal/full至少有authoritative brute_force_detected、same source_ip、same／traceable user_id及bounded window repeated HTTP 401；只有label沒有pattern不足。", "required_evidence_classes": ["brute_force_detected", "same_source", "same_user", "repeated_401"]},
+        "O6": {"text": "nominal MATCH expected，category=credential abuse / brute-force response；合法NO_MATCH不直接使accuracy FAIL。", "knowledge_expected": "MATCH", "no_match_legal": true},
+        "O7": {"text": "raw logs部分缺失但remaining authoritative Evidence仍明確支持，可為MOST_SUPPORTED；更不足或competing explanation無法排除時INCONCLUSIVE合法。", "required_evidence_classes": ["brute_force_detected", "same_source", "same_user"], "allowed_conclusions": ["MOST_SUPPORTED", "INCONCLUSIVE"]},
+        "O8": {"text": "OOM、DB/network、external dependency、rate limiting、generic auth/service error、只靠Knowledge建立攻擊事實、無Evidence宣稱compromise／leak皆FAIL。", "unacceptable": ["wrong-causal-class", "knowledge-only-attack-fact", "unsupported-compromise-or-leak"]},
+        "O9": {"text": "更多同類401、Account Locked或不改變diagnosis/ranking/conclusion的support不要求new version；outcome改變、meaningful contradiction或足以改變interpretation/ranking/conclusion者為Material Evidence。", "refresh": "material-semantic-change-only"},
+        "O10": {"text": "Top hypothesis命中brute-force／credential-abuse，granularity與Evidence適當，alternative合法，無material overclaim，Conclusion calibration正確。", "top_hypothesis_required": true}
+      },
+      "S2": {
+        "O1": {"text": "database slow-query／database-side latency造成upstream API timeout cascade；core-db slowness → AP latency → Gateway timeout/504。", "causal_class": "DATABASE_LATENCY_CASCADE"},
+        "O2": {"text": "至少dependency + service-chain causal level；只說API latency、Gateway 504或DB problem過粗；SQL、table、index、plan或lock非必需。", "accepted_granularities": ["dependency-service-chain"]},
+        "O3": {"text": "slow database dependency、core-db latency causing cascade、DB delay propagating via AP to Gateway、DB performance degradation causing upstream failure；Evidence只支持dependency slowness時不強迫slow query字樣。", "accepted_alternatives": ["slow-database-dependency", "core-db-latency-causing-cascade", "db-delay-via-ap-to-gateway", "db-performance-degradation-causing-upstream-failure"]},
+        "O4": {"text": "無Evidence不得宣稱specific SQL/table/index、DB CPU、lock、pool、storage I/O或Gateway自身為root cause。", "material_forbidden_overclaims": ["specific_sql", "specific_table_or_index", "db_cpu_lock_pool_or_storage", "gateway_primary"]},
+        "O5": {"text": "至少authoritative cross_service_failure、shared trace/service chain、downstream_service=core-db、DB→AP→Gateway propagation及high_latency_detected／duration／compatible Metric；只有latency Metric無chain不足。", "required_evidence_classes": ["cross_service_failure", "shared_trace", "core_db", "db_ap_gateway", "high_latency"]},
+        "O6": {"text": "nominal MATCH expected，category=database slow-query / API-timeout diagnosis；NO_MATCH合法。", "knowledge_expected": "MATCH", "no_match_legal": true},
+        "O7": {"text": "chain + core-db但部分latency缺失，可MOST_SUPPORTED；不能判DB或AP先異常時可conservative shared-dependency diagnosis或INCONCLUSIVE。", "required_evidence_classes": ["cross_service_failure", "shared_trace", "core_db", "db_ap_gateway"], "allowed_conclusions": ["MOST_SUPPORTED", "INCONCLUSIVE"]},
+        "O8": {"text": "Gateway primary、unsupported AP bug、external API、OOM、rate limit、只描述504、unsupported SQL/index/lock/pool皆FAIL。", "unacceptable": ["wrong-causal-class", "gateway-primary", "unsupported-deeper-db-mechanism"]},
+        "O9": {"text": "更多相同cascade/latency/504且semantics不變，不新建version；新slow-query evidence提升granularity、改變Top hypothesis或證明DB非主因則refresh。", "refresh": "material-semantic-change-only"},
+        "O10": {"text": "Top hypothesis命中database-side slowness causing upstream API/service cascade，granularity適當、無unsupported deeper mechanism且calibration正確。", "top_hypothesis_required": true}
+      },
+      "S3": {
+        "O1": {"text": "memory exhaustion／Out-of-Memory causing application or service failure；不是單純high memory。", "causal_class": "MEMORY_EXHAUSTION_SERVICE_FAILURE"},
+        "O2": {"text": "至少affected service + memory exhaustion/OOM failure；不要求memory leak、object allocation、GC或container limit。", "accepted_granularities": ["service-oom-failure"]},
+        "O3": {"text": "OutOfMemory failure、memory exhaustion causing crash、service exhausted memory and failed、OOM causing application failure；memory leak不預設等價。", "accepted_alternatives": ["out-of-memory-failure", "memory-exhaustion-causing-crash", "service-exhausted-memory-and-failed", "oom-causing-application-failure"]},
+        "O4": {"text": "無Evidence不得宣稱memory/heap leak、GC thrashing、JVM heap config、Kubernetes limit、OOMKill、specific allocation或deployment defect；502不等於Gateway root cause。", "material_forbidden_overclaims": ["memory_leak", "gc_or_heap_configuration", "kubernetes_limit_or_oomkill", "specific_allocation", "deployment_defect", "gateway-primary"]},
+        "O5": {"text": "normal/full至少authoritative oom_crash_detected、log OutOfMemoryError及system_memory_usage_pct >= threshold或high_memory_detected；宣稱OOM→crash/downstream failure另需failure Evidence。", "required_evidence_classes": ["oom_crash_detected", "out_of_memory_error", "high_memory", "service_failure"]},
+        "O6": {"text": "nominal MATCH expected，category=high-memory / OOM / service-crash handling；NO_MATCH合法。", "knowledge_expected": "MATCH", "no_match_legal": true},
+        "O7": {"text": "明確OutOfMemoryError但Metric unavailable，可MOST_SUPPORTED — OOM / memory exhaustion；只有high memory則只可high-memory MOST_SUPPORTED或INCONCLUSIVE。", "required_evidence_classes": ["oom_crash_detected", "out_of_memory_error"], "allowed_conclusions": ["MOST_SUPPORTED", "INCONCLUSIVE"]},
+        "O8": {"text": "DB、external dependency、rate limit、auth attack、generic 5xx漏掉OOM、high memory直接等於leak、unsupported JVM/container mechanism皆FAIL。", "unacceptable": ["wrong-causal-class", "high-memory-equals-leak", "unsupported-runtime-mechanism"]},
+        "O9": {"text": "更多相同memory/OOM不產生version；新service crash、502、matching service或contradiction足以改變chain/conclusion則refresh。", "refresh": "material-semantic-change-only"},
+        "O10": {"text": "Top hypothesis命中memory exhaustion/OOM causing service failure，granularity不超Evidence、無unsupported mechanism、calibration正確；full Evidence下只答high memory不足。", "top_hypothesis_required": true}
+      },
+      "S4": {
+        "O1": {"text": "external／third-party dependency failure造成affected transaction或service request failure／timeout。", "causal_class": "EXTERNAL_DEPENDENCY_FAILURE"},
+        "O2": {"text": "至少external dependency + request/transaction failure；不要求provider internal server、region、DB或network component。", "accepted_granularities": ["external-request-failure"]},
+        "O3": {"text": "external API failure、third-party failure/outage、external timeout、provider server-side failure；只有5xx不強迫timeout，只有timeout不要求provider-wide outage。", "accepted_alternatives": ["external-api-failure", "third-party-failure", "external-timeout", "provider-server-side-failure"]},
+        "O4": {"text": "無Evidence不得宣稱region/global outage、DNS、TLS/cert、packet loss、rate limit、credential failure、specific crash或data breach。", "material_forbidden_overclaims": ["global_outage", "dns_tls_or_packet_loss", "rate_limit_or_credential_failure", "specific_provider_crash", "data_breach"]},
+        "O5": {"text": "至少authoritative external_dependency_failure、clear external_service、transaction_id等lineage，以及status≥500、timeout/duration/log或compatible failure evidence；只有local 5xx不足。", "required_evidence_classes": ["external_dependency_failure", "external_service", "transaction_lineage", "failure_evidence"]},
+        "O6": {"text": "nominal MATCH expected，category=external / third-party API timeout or outage handling；Knowledge不得建立outage fact。", "knowledge_expected": "MATCH", "no_match_legal": true},
+        "O7": {"text": "identity + failure明確但mode不完整，可MOST_SUPPORTED — external dependency failure；internal fault未排除時可leading hypothesis或INCONCLUSIVE。", "required_evidence_classes": ["external_dependency_failure", "external_service", "transaction_lineage"], "allowed_conclusions": ["MOST_SUPPORTED", "INCONCLUSIVE"]},
+        "O8": {"text": "DB、OOM、rate limit、credential abuse、generic 500未辨識external dependency、unsupported DNS/TLS/global outage或以SOP common cause當truth皆FAIL。", "unacceptable": ["wrong-causal-class", "generic-500", "unsupported-provider-mechanism", "knowledge-as-incident-truth"]},
+        "O9": {"text": "更多相同external 5xx/timeout不需new version；dependency恢復但local failure持續、internal contradiction或更強causal evidence改變interpretation時refresh。", "refresh": "material-semantic-change-only"},
+        "O10": {"text": "Top hypothesis命中external/third-party dependency failure並達dependency + affected request/transaction level，不overclaim provider mechanism。", "top_hypothesis_required": true}
+      },
+      "S5": {
+        "O1": {"text": "shared database/network dependency connectivity failure causing multi-service downstream cascade；多個independent services/requests對同一core-db發生connectivity/ConnectionRefused。", "causal_class": "SHARED_DATABASE_CONNECTIVITY_CASCADE"},
+        "O2": {"text": "至少shared downstream dependency + connectivity failure + multi-service impact；不要求DB crash、firewall、route、NIC、switch或network segment。", "accepted_granularities": ["shared-connectivity-multiservice"]},
+        "O3": {"text": "shared DB connectivity failure、core-db connection refusal causing cross-service failures、shared DB/network dependency outage、common core-db unreachable。", "accepted_alternatives": ["shared-db-connectivity-failure", "core-db-refusal-cross-service", "shared-db-network-dependency-outage", "common-core-db-unreachable"]},
+        "O4": {"text": "無Evidence不得宣稱DB crash/overload、pool exhaustion、firewall change、network partition、DNS、blocked port、storage、router/switch或individual deployment issue。", "material_forbidden_overclaims": ["db-crash-or-overload", "pool-exhaustion", "firewall_change", "network-partition-or-dns", "blocked-port-or-storage", "router-switch-or-deployment"]},
+        "O5": {"text": "至少authoritative downstream_cascade_failure、multiple service_name、same downstream_service=core-db、error_type=ConnectionRefused及multiple Trace IDs／independent requests；單一service不足。", "required_evidence_classes": ["downstream_cascade_failure", "multiple_services", "core_db", "connection_refused", "independent_traces"]},
+        "O6": {"text": "nominal MATCH expected，category=shared database / network dependency interruption handling；Knowledge不得提升firewall/partition為Incident fact。", "knowledge_expected": "MATCH", "no_match_legal": true},
+        "O7": {"text": "multi-service + core-db + ConnectionRefused明確但部分logs缺失，可MOST_SUPPORTED；common dependency未可靠確認時只可suspected shared dependency或INCONCLUSIVE。", "required_evidence_classes": ["downstream_cascade_failure", "multiple_services", "core_db", "connection_refused"], "allowed_conclusions": ["MOST_SUPPORTED", "INCONCLUSIVE"]},
+        "O8": {"text": "各service分開當root cause、S2 latency、OOM、rate limit、external API、generic multi-service error未辨識shared core-db、unsupported exact mechanism皆FAIL。", "unacceptable": ["wrong-causal-class", "separate-service-roots", "generic-multiservice-error", "unsupported-connectivity-mechanism"]},
+        "O9": {"text": "更多相同service→core-db→ConnectionRefused且diagnosis不變通常不新建version；meaningful contradiction、更具體且受支持的connectivity mechanism，或改變remediation／ranking／granularity時refresh。", "refresh": "material-semantic-change-only"},
+        "O10": {"text": "Top hypothesis必須保留shared core-db/database dependency、connectivity failure及multi-service cascade；DB problem不足。", "top_hypothesis_required": true}
+      },
+      "S6": {
+        "O1": {"text": "request/QPS surge exceeding rate-limit/quota capacity，造成target service repeated HTTP 429 throttling。", "causal_class": "REQUEST_SURGE_RATE_LIMIT"},
+        "O2": {"text": "至少target service + request-volume spike + rate-limit/quota throttling；只說many 429、service busy或traffic high過粗；不要求campaign、bug、bot或attack。", "accepted_granularities": ["service-surge-throttling"]},
+        "O3": {"text": "QPS spike triggered rate limiting、request surge exceeded quota、traffic burst caused repeated 429、rate-limit saturation；不要求storm字樣。", "accepted_alternatives": ["qps-spike-triggered-rate-limiting", "request-surge-exceeded-quota", "traffic-burst-caused-repeated-429", "rate-limit-saturation"]},
+        "O4": {"text": "無Evidence不得宣稱DDoS、bot/malicious traffic、credential abuse、client retry loop、app bug、quota misconfiguration、capacity/autoscaling failure或third-party policy defect。", "material_forbidden_overclaims": ["ddos", "bot-or-malicious-traffic", "credential-abuse", "client-retry-or-app-bug", "quota-misconfiguration", "capacity-autoscaling-or-policy-defect"]},
+        "O5": {"text": "normal/full至少authoritative rate_limit_storm、same target_service、repeated 429、valid quota context、request_spike_detected或equivalent QPS evidence，且current顯著超過established baseline；只有429或只有QPS spike都不足。", "required_evidence_classes": ["rate_limit_storm", "target_service", "repeated_429", "quota_context", "request_spike"]},
+        "O6": {"text": "nominal MATCH expected，category=HTTP 429 / rate-limit / QPS-spike handling；Knowledge不得建立DDoS/bot/client bug/config defect。", "knowledge_expected": "MATCH", "no_match_legal": true},
+        "O7": {"text": "429 + target明確但QPS unavailable，只可MOST_SUPPORTED — throttling occurring; surge cause not fully established；只有QPS spike則request surge MOST_SUPPORTED或INCONCLUSIVE。", "required_evidence_classes": ["rate_limit_storm", "target_service", "repeated_429", "quota_context"], "allowed_conclusions": ["MOST_SUPPORTED", "INCONCLUSIVE"]},
+        "O8": {"text": "OOM、DB、external outage、credential abuse、只描述429未辨識rate-limit/request relationship、unsupported DDoS/bot/retry/config defect皆FAIL。", "unacceptable": ["wrong-causal-class", "429-without-causal-relationship", "unsupported-traffic-or-config-mechanism"]},
+        "O9": {"text": "更多相同429/QPS且causal interpretation不變時不產生version；traffic恢復後429消失、QPS回正常但429仍持續、meaningful contradiction或better-supported mechanism改變interpretation時refresh。", "refresh": "material-semantic-change-only"},
+        "O10": {"text": "Top hypothesis保留target service、request/QPS surge、quota/throttling及repeated 429 relationship；只命中429不足。", "top_hypothesis_required": true}
+      }
+    },
+    "cross_scenario_rules": [
+      "S1 credential abuse / brute-force authentication",
+      "S2 database latency → same request/service-chain timeout cascade",
+      "S3 memory exhaustion / OOM → service failure",
+      "S4 external dependency failure → affected request/transaction",
+      "S5 shared core-db connectivity → multiple independent services/requests fail",
+      "S6 request/QPS spike → quota throttling → repeated 429",
+      "S2 requires same trace/request propagation and latency; S5 requires multiple independent traces/services and ConnectionRefused; database problem cannot make both pass."
+    ]
+  }
+}

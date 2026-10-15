@@ -3,9 +3,12 @@
 import base64
 import json
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+import rca_evaluation.adjudication as protected_adjudication
 
 from incident_management.contracts import IncidentStatus
 from knowledge_index.contracts import (
@@ -24,8 +27,10 @@ from rca_shared.claim_types import ClaimCategory
 
 from rca_evaluation.adjudication import (
     AdmittedBlindPacket, BlindPacket, BlindReviewSubmission, FactDetermination,
-    ReviewedFactKind, ReviewerAuthority, ReviewIncomplete, Stage1ReviewedFact,
-    Stage2Submission, TwoStageAdjudicator, stage2_input_commitment,
+    ClaimAdjudicationSubmission, ReviewedFactKind, ReviewerAuthority,
+    ReviewIncomplete, Stage1ReviewedFact, Stage2Submission, TwoStageAdjudicator,
+    claim_adjudication_input_commitment, stage2_input_commitment,
+    verify_persisted_adjudication,
 )
 from rca_evaluation.authority import PM_AUTHORITY, TrustedApprovalRegistry, TrustedOracleApproval
 from rca_evaluation.calibration import ConclusionFacts, KnowledgeBoundaryInput
@@ -34,11 +39,11 @@ from rca_evaluation.claims import (
     GovernedClaimDecomposition, evaluate_unsupported_claims,
     production_claim_commitment,
 )
-from rca_evaluation.identity import commitment, identity
+from rca_evaluation.identity import canonical_bytes, commitment, identity
 from rca_evaluation.ledger import LedgerRecord
 from rca_evaluation.leakage_policy import TRUSTED_LEAKAGE_POLICY, TrustedLeakagePolicy
 from rca_evaluation.observation import CapturedInputBoundary, PublicObservationResolver
-from rca_evaluation.oracle import EvaluationPlan, OracleRevision
+from rca_evaluation.oracle import EvaluationPlan, load_official_oracle
 from rca_evaluation.scoring import (
     CausalClass, ExecutionScorability, OracleScenarioCriteria,
     OverclaimFinding, TopHypothesis, evaluate_root_cause,
@@ -47,46 +52,36 @@ from rca_evaluation.source_authority import S3SourceAuthority
 from rca_evaluation.sqlite_store import SqliteEvaluationStore
 
 
-RULES = {
-    "S1": (CausalClass.CREDENTIAL_ABUSE_BRUTE_FORCE, "credential-operation", ("brute_force_detected", "same_source", "same_user", "repeated_401"), "account_compromised"),
-    "S2": (CausalClass.DATABASE_LATENCY_CASCADE, "dependency-service-chain", ("cross_service_failure", "shared_trace", "core_db", "db_ap_gateway", "high_latency"), "specific_sql"),
-    "S3": (CausalClass.MEMORY_EXHAUSTION_SERVICE_FAILURE, "service-oom-failure", ("oom_crash_detected", "out_of_memory_error", "high_memory", "service_failure"), "memory_leak"),
-    "S4": (CausalClass.EXTERNAL_DEPENDENCY_FAILURE, "external-request-failure", ("external_dependency_failure", "external_service", "transaction_lineage", "failure_evidence"), "global_outage"),
-    "S5": (CausalClass.SHARED_DATABASE_CONNECTIVITY_CASCADE, "shared-connectivity-multiservice", ("downstream_cascade_failure", "multiple_services", "core_db", "connection_refused", "independent_traces"), "firewall_change"),
-    "S6": (CausalClass.REQUEST_SURGE_RATE_LIMIT, "service-surge-throttling", ("rate_limit_storm", "target_service", "repeated_429", "quota_context", "request_spike"), "ddos"),
-}
+ROOT = Path(__file__).resolve().parents[1]
+OFFICIAL_ORACLE = load_official_oracle(
+    ROOT / "configs/rca_evaluation/oracle/spec017_s1_s6_v1.json")
+
+
+def _official_rules():
+    semantics = json.loads(OFFICIAL_ORACLE.revision.semantic_json)
+    result = {}
+    for scenario_id, scenario in semantics["scenarios"].items():
+        result[scenario_id] = (
+            CausalClass(scenario["O1"]["causal_class"]),
+            scenario["O2"]["accepted_granularities"][0],
+            tuple(scenario["O5"]["required_evidence_classes"]),
+            scenario["O4"]["material_forbidden_overclaims"][0],
+        )
+    return result
+
+
+RULES = _official_rules()
+S1_ACCEPTED_ALTERNATIVE = json.loads(
+    OFFICIAL_ORACLE.revision.semantic_json
+)["scenarios"]["S1"]["O3"]["accepted_alternatives"][0]
 
 
 def oracle_semantics():
-    scenarios = {}
-    for scenario_id, (causal_class, granularity, evidence, forbidden) in RULES.items():
-        scenarios[scenario_id] = {
-            "O1": {"causal_class": causal_class.value},
-            "O2": {"accepted_granularities": [granularity]},
-            "O3": {"accepted_alternatives": [f"{scenario_id}-approved-alternative"]},
-            "O4": {"material_forbidden_overclaims": [forbidden]},
-            "O5": {"required_evidence_classes": list(evidence)},
-            "O6": {"knowledge_expected": "MATCH"},
-            "O7": {
-                "required_evidence_classes": list(evidence[:-1]),
-                "allowed_conclusions": ["MOST_SUPPORTED", "INCONCLUSIVE"],
-            },
-            "O8": {"unacceptable": ["wrong-causal-class"]},
-            "O9": {"refresh": "material-change-only"},
-            "O10": {"top_hypothesis_required": True},
-        }
-    return {
-        "scenarios": scenarios,
-        "cross_scenario_rules": ["S2 latency is distinct from S5 connectivity"],
-    }
+    return json.loads(OFFICIAL_ORACLE.revision.semantic_json)
 
 
 def approved_oracle():
-    return OracleRevision.approved(
-        oracle_set_id="PM-S1-S6", semantics=oracle_semantics(),
-        created_at="2026-10-02T00:00:00Z", approval_authority=PM_AUTHORITY,
-        approval_reference="PM-017-S3", approved_at="2026-10-02T01:00:00Z",
-    )
+    return OFFICIAL_ORACLE.revision
 
 
 def trusted(revision):
@@ -130,7 +125,8 @@ def test_noncompensating_root_cause_and_cross_scenario_rules():
     criteria = OracleScenarioCriteria.from_revision(revision, "S2")
     alternative = score(
         revision, "S2", top_hypothesis=TopHypothesis(
-            CausalClass.OTHER, RULES["S2"][1], "S2-approved-alternative",
+            CausalClass.OTHER, RULES["S2"][1],
+            criteria.accepted_alternatives[0],
         ),
     )
     assert alternative.root_cause_identification_success
@@ -518,6 +514,38 @@ def stage2_pair(context, criteria, stage1, top, derived):
     return item("R3"), item("R4")
 
 
+def protected_claim_result(context, criteria, stage1):
+    source = source_facts(context)
+    decomposition = []
+    assertions = []
+    findings = []
+    for claim in source.production_claims:
+        atom = commitment({"production_claim": production_claim_commitment(claim)})
+        decomposition.append(GovernedClaimDecomposition(
+            claim.claim_id, production_claim_commitment(claim), (atom,)))
+        if claim.category in {
+                ClaimCategory.OBSERVED_FACT, ClaimCategory.ANALYTICAL_INFERENCE}:
+            assertions.append(atom)
+            disposition = (ClaimDisposition.CONTRADICTED
+                           if claim.contradicting_evidence_ids else
+                           ClaimDisposition.SUPPORTED
+                           if claim.supporting_evidence_ids else
+                           ClaimDisposition.UNSUPPORTED)
+        else:
+            disposition = ClaimDisposition.NOT_APPLICABLE
+        findings.append(AtomicClaimFinding(claim.claim_id, atom, disposition))
+    bound = claim_adjudication_input_commitment(criteria, stage1, source)
+    def submission(reviewer):
+        return ClaimAdjudicationSubmission(
+            reviewer, bound, tuple(decomposition), tuple(assertions),
+            tuple(findings), "CLAIM_SUPPORT_REVIEW",
+            "Applied exact typed claim and evidence-reference facts",
+            "2026-10-02T02:30:00Z")
+    return context.adjudicator.adjudicate_claims(
+        context.execution.record_id, stage1,
+        (submission("CR1"), submission("CR2")))
+
+
 def persist_packet_without_admission(context, metadata, policy=TRUSTED_LEAKAGE_POLICY):
     source = source_facts(context)
     packet = BlindPacket(
@@ -558,7 +586,7 @@ def test_oracle_and_canary_leakage_rejected_but_production_answer_allowed(adjudi
     with pytest.raises(ValueError, match="Oracle provenance"):
         admit(context, audit_metadata=(("expected_causal_class", RULES["S1"][0].value),))
     with pytest.raises(ValueError, match="Oracle provenance"):
-        admit(context, audit_metadata=(("accepted_alternative", "S1-approved-alternative"),))
+        admit(context, audit_metadata=(("accepted_alternative", S1_ACCEPTED_ALTERNATIVE),))
     encoded = base64.b64encode(b"GT-CANARY-017").decode()
     with pytest.raises(ValueError, match="governed Oracle value or canary"):
         admit(context, audit_metadata=(("note", encoded),))
@@ -569,7 +597,7 @@ def test_oracle_and_canary_leakage_rejected_but_production_answer_allowed(adjudi
     "credential_abuse_brute_force",
     "CrEdEnTiAl_AbUsE_BrUtE_FoRcE",
     "ＣＲＥＤＥＮＴＩＡＬ＿ＡＢＵＳＥ＿ＢＲＵＴＥ＿ＦＯＲＣＥ",
-    "s1-APPROVED-alternative",
+    S1_ACCEPTED_ALTERNATIVE.swapcase(),
     base64.b64encode(CausalClass.CREDENTIAL_ABUSE_BRUTE_FORCE.value.encode()).decode(),
     base64.b64encode(b"credential_abuse_brute_force").decode(),
 ))
@@ -618,7 +646,7 @@ def test_exact_and_encoded_trusted_canaries_are_rejected(adjudication_context):
 @pytest.mark.parametrize("leaked", (
     CausalClass.CREDENTIAL_ABUSE_BRUTE_FORCE.value,
     "cReDeNtIaL_aBuSe_bRuTe_FoRcE",
-    "S1-approved-ALTERNATIVE",
+    S1_ACCEPTED_ALTERNATIVE.swapcase(),
     base64.b64encode(CausalClass.CREDENTIAL_ABUSE_BRUTE_FORCE.value.encode()).decode(),
 ))
 def test_durable_reload_revalidates_governed_leakage(adjudication_context, leaked):
@@ -728,9 +756,11 @@ def test_unsupported_leading_hypothesis_is_rejected(adjudication_context):
     derived = context.adjudicator.derive_root_cause_facts(stage1)
     assert not derived.conclusion.leading_hypothesis
     top = TopHypothesis(RULES["S1"][0], RULES["S1"][1])
+    claim_result = protected_claim_result(context, criteria, stage1)
     official = context.adjudicator.finalize_stage2(
         context.execution.record_id, criteria, stage1,
         stage2_pair(context, criteria, stage1, top, derived.facts_commitment),
+        claim_result_record_id=claim_result.record_id,
     )
     assert not official.evaluation.conclusion_calibration_valid
     assert not official.evaluation.root_cause_identification_success
@@ -817,9 +847,11 @@ def test_valid_authoritative_two_stage_flow_binds_official_judgment(adjudication
     criteria = context.adjudicator.resolve_authoritative_criteria(context.execution.record_id)
     derived = context.adjudicator.derive_root_cause_facts(stage1)
     top = TopHypothesis(RULES["S1"][0], RULES["S1"][1])
+    claim_result = protected_claim_result(context, criteria, stage1)
     official = context.adjudicator.finalize_stage2(
         context.execution.record_id, criteria, stage1,
         stage2_pair(context, criteria, stage1, top, derived.facts_commitment),
+        claim_result_record_id=claim_result.record_id,
     )
     assert official.evaluation.root_cause_identification_success
     payload = json.loads(official.judgment_record.semantic_json)
@@ -831,6 +863,137 @@ def test_valid_authoritative_two_stage_flow_binds_official_judgment(adjudication
     assert payload["oracle_scenario_commitment"] == criteria.scenario_commitment
     assert payload["derived_root_cause_facts_commitment"] == derived.facts_commitment
     assert payload["final_scoring_commitment"] == commitment(payload["root_cause_predicates"])
+    verification = verify_persisted_adjudication(
+        context.store.reader().read_run_snapshot(
+            context.store.get(context.execution.record_id).parent_id),
+        context.execution.record_id)
+    assert verification.complete and not verification.blockers
+
+
+def test_formal_judgment_and_ucr_generic_minting_is_rejected(adjudication_context):
+    context = adjudication_context
+    with pytest.raises(ValueError, match="ORIGINAL judgment is protected"):
+        context.store.append(LedgerRecord.create(
+            "judgment", [context.execution.record_id, "caller-original"],
+            {"kind": "ORIGINAL", "oracle_revision_id":
+             context.revision.oracle_revision_id}, context.execution.record_id))
+    with pytest.raises(ValueError, match="UNSUPPORTED_CLAIM_RESULT is protected"):
+        context.store.append(LedgerRecord.create(
+            "observation", [context.execution.record_id, "caller-ucr"],
+            {"kind": "UNSUPPORTED_CLAIM_RESULT", "numerator": 0,
+             "denominator": 1, "rate_fraction": [0, 1]},
+            context.execution.record_id))
+
+
+@pytest.mark.parametrize("corruption", (
+    "oracle", "execution", "missing-source", "wrong-source-commitment",
+    "cross-run-source",
+))
+def test_protected_claim_issuer_rejects_wrong_provenance(
+    adjudication_context, corruption,
+):
+    context = adjudication_context
+    _, stage1 = consensus(context)
+    criteria = context.adjudicator.resolve_authoritative_criteria(
+        context.execution.record_id)
+    issued = protected_claim_result(context, criteria, stage1)
+    payload = json.loads(issued.semantic_json)
+    if corruption == "oracle":
+        payload["oracle_revision_id"] = identity(
+            "oracle_revision", ["wrong-oracle"])
+    elif corruption == "execution":
+        payload["execution_id"] = identity("execution", ["wrong-execution"])
+    elif corruption == "missing-source":
+        payload["source_record_ids"][0] = identity(
+            "observation", ["missing-source"])
+    elif corruption == "wrong-source-commitment":
+        payload["source_record_commitments"][0] = commitment({"wrong": True})
+    else:
+        run = context.store.get(context.execution.record_id).parent_id
+        plan_id = context.store.get(run).parent_id
+        other_run = context.store.append(LedgerRecord.create(
+            "evaluation_run", [plan_id, "cross-run-negative"],
+            {"oracle_revision_id": context.revision.oracle_revision_id}, plan_id))
+        other_execution = context.store.append(LedgerRecord.create(
+            "execution", [other_run.record_id, "S1", 1],
+            {"scenario_id": "S1", "repetition": 1}, other_run.record_id))
+        cross = context.store.append(LedgerRecord.create(
+            "observation", [other_execution.record_id, "cross-source"],
+            {"kind": "PUBLIC_OBSERVATION"}, other_execution.record_id))
+        payload["source_record_ids"][0] = cross.record_id
+        payload["source_record_commitments"][0] = cross.semantic_commitment
+    forged = LedgerRecord.create(
+        "observation", [context.execution.record_id, "corrupt-claim", corruption],
+        payload, context.execution.record_id)
+    with pytest.raises(ValueError, match=(
+            "binding|source is missing|source lineage|mismatched")):
+        context.store._append_protected_adjudication(
+            forged,
+            authority=protected_adjudication._ADJUDICATION_ISSUANCE_AUTHORITY)
+
+
+def test_caller_cannot_invoke_protected_judgment_authority(adjudication_context):
+    context = adjudication_context
+    with pytest.raises(ValueError, match="authority is invalid"):
+        context.store._append_protected_adjudication(
+            LedgerRecord.create(
+                "judgment", [context.execution.record_id, "forged-authority"],
+                {"kind": "ORIGINAL"}, context.execution.record_id),
+            authority=object())
+
+
+@pytest.mark.parametrize("corruption", (
+    "missing_stage1", "stage1_lineage", "missing_stage2",
+    "consensus_commitment", "judgment_binding",
+))
+def test_persisted_adjudication_verifier_fails_closed_on_each_binding(
+    adjudication_context, corruption,
+):
+    context = adjudication_context
+    _, stage1 = consensus(context)
+    criteria = context.adjudicator.resolve_authoritative_criteria(
+        context.execution.record_id)
+    derived = context.adjudicator.derive_root_cause_facts(stage1)
+    claim_result = protected_claim_result(context, criteria, stage1)
+    official = context.adjudicator.finalize_stage2(
+        context.execution.record_id, criteria, stage1,
+        stage2_pair(context, criteria, stage1,
+                    TopHypothesis(RULES["S1"][0], RULES["S1"][1]),
+                    derived.facts_commitment),
+        claim_result_record_id=claim_result.record_id)
+    snapshot = context.store.reader().read_run_snapshot(
+        context.store.get(context.execution.record_id).parent_id)
+    if corruption == "missing_stage1":
+        snapshot = replace(snapshot, records=tuple(
+            record for record in snapshot.records
+            if record.record_id != stage1.consensus_record_id))
+    elif corruption == "missing_stage2":
+        snapshot = replace(snapshot, records=tuple(
+            record for record in snapshot.records
+            if record.record_id != official.stage2_review_ids[0]))
+    else:
+        target_id = {
+            "stage1_lineage": stage1.review_ids[0],
+            "consensus_commitment": stage1.consensus_record_id,
+            "judgment_binding": official.judgment_record.record_id,
+        }[corruption]
+        record = next(item for item in snapshot.records if item.record_id == target_id)
+        payload = json.loads(record.semantic_json)
+        if corruption == "stage1_lineage":
+            payload["blind_packet_record_id"] = identity("observation", ["wrong"])
+        elif corruption == "consensus_commitment":
+            payload["consensus_commitment"] = commitment({"wrong": True})
+        else:
+            payload["blind_packet_commitment"] = commitment({"wrong": True})
+        changed = replace(
+            record, semantic_json=canonical_bytes(payload).decode("utf-8"),
+            semantic_commitment=commitment(payload))
+        snapshot = replace(snapshot, records=tuple(
+            changed if item.record_id == target_id else item
+            for item in snapshot.records))
+    verification = verify_persisted_adjudication(
+        snapshot, context.execution.record_id)
+    assert not verification.complete and verification.blockers
 
 
 def test_stage2_rejects_derived_fact_drift_and_llm_review(adjudication_context):

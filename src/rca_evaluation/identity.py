@@ -10,6 +10,8 @@ from collections.abc import Mapping
 DOMAINS = frozenset({
     "oracle_revision", "evaluation_plan", "evaluation_run", "execution",
     "observation", "judgment", "review", "re_adjudication", "report",
+    "gate_authorization", "gate_execution_receipt", "docker_namespace",
+    "docker_cleanup", "gate_invocation_start", "gate_invocation_receipt",
 })
 
 

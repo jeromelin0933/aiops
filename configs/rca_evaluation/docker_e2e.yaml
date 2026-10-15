@@ -1,0 +1,26 @@
+version: "1.0"
+gate: DOCKER_RCA_E2E
+profile_identity: spec017-docker-rca-e2e-gate-v1
+default_enabled: false
+authorization:
+  opt_in_environment: RUN_SPEC017_DOCKER_RCA_E2E
+  authorization_environment: SPEC017_DOCKER_RCA_E2E_AUTHORIZED
+docker:
+  compose_file: docker-compose.yml
+  runtime_service: runtime
+  runtime_dockerfile: docker/runtime/Dockerfile
+  runtime_entrypoint: scripts/run_correlation_runtime.py
+  runtime_config: configs/runtime_orchestration.docker.yaml
+  compose_project_prefix: spec017eval
+  volume_namespace_prefix: spec017eval
+  required_volume_roles:
+    - runtime-events
+    - runtime-state
+    - runtime-knowledge
+  forbidden_shared_names:
+    - aiops
+    - default
+    - runtime-events
+    - runtime-state
+    - runtime-knowledge
+  cleanup_requires_exact_ownership: true

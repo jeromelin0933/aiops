@@ -10,7 +10,10 @@ from enum import Enum
 from rca_persistence.contracts import EvidenceCompleteness
 
 from .calibration import ConclusionFacts, KnowledgeBoundaryInput
-from .claims import ClaimEvaluationStatus
+from .claims import (
+    AtomicClaimFinding, ClaimEvaluationStatus, GovernedClaimDecomposition,
+    evaluate_unsupported_claims, production_claim_commitment,
+)
 from .identity import commitment, require_identity
 from .isolation import _decoded_variants
 from .ledger import LedgerRecord
@@ -21,12 +24,21 @@ from .scoring import (
     RootCauseEvaluation, TopHypothesis, evaluate_root_cause,
 )
 from .source_authority import AuthoritativeProductionFacts, S3SourceAuthority
-from .sqlite_store import SqliteEvaluationStore
+from .sqlite_store import EvaluationRunSnapshot, SqliteEvaluationStore
 
 
 class ReviewerAuthority(str, Enum):
     HUMAN = "HUMAN"
     LLM_EXPLORATORY = "LLM_EXPLORATORY"
+
+
+ADJUDICATION_EVALUATOR_IDENTITY = "SPEC-017-S3-GOVERNED-ADJUDICATOR-v1"
+ADJUDICATION_EVALUATOR_VERSION = "1"
+_ADJUDICATION_ISSUANCE_AUTHORITY = object()
+
+
+def is_adjudication_issuance_authority(authority: object) -> bool:
+    return authority is _ADJUDICATION_ISSUANCE_AUTHORITY
 
 
 class ReviewedFactKind(str, Enum):
@@ -46,6 +58,240 @@ class FactDetermination(str, Enum):
 
 class ReviewIncomplete(ValueError):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class AdjudicationVerification:
+    execution_id: str
+    judgment_id: str | None
+    complete: bool
+    blockers: tuple[str, ...]
+
+
+def verify_persisted_adjudication(
+    snapshot: EvaluationRunSnapshot, execution_id: str,
+) -> AdjudicationVerification:
+    """Verify persisted review facts using the adjudication contract itself."""
+    require_identity(execution_id, "execution")
+    records = tuple(record for record in snapshot.records
+                    if record.parent_id == execution_id)
+    payloads = {record.record_id: json.loads(record.semantic_json)
+                for record in records}
+    judgments = tuple(record for record in records if record.domain == "judgment")
+    judgment_id = judgments[0].record_id if len(judgments) == 1 else None
+    blockers: list[str] = []
+    try:
+        if len(judgments) != 1:
+            raise ReviewIncomplete("ORIGINAL_JUDGMENT_CARDINALITY")
+        judgment = payloads[judgment_id]
+        if (judgment.get("kind") != "ORIGINAL"
+                or judgment.get("oracle_revision_id") != snapshot.oracle_revision_id):
+            raise ReviewIncomplete("JUDGMENT_AUTHORITY_BINDING_INVALID")
+        source_ids = judgment.get("source_record_ids")
+        source_hashes = judgment.get("source_record_commitments")
+        claim_id = judgment.get("claim_result_record_id")
+        claim_record = next(
+            (item for item in records if item.record_id == claim_id), None)
+        claim_payload = payloads.get(claim_id)
+        judgment_material = dict(judgment)
+        judgment_seal = judgment_material.pop("judgment_commitment", None)
+        if (judgment.get("governed_adjudicator_identity")
+                != ADJUDICATION_EVALUATOR_IDENTITY
+                or judgment.get("adjudicator_version")
+                    != ADJUDICATION_EVALUATOR_VERSION
+                or judgment.get("evaluation_run_id")
+                    != snapshot.evaluation_run_id
+                or judgment.get("execution_id") != execution_id
+                or not isinstance(source_ids, list)
+                or not isinstance(source_hashes, list)
+                or len(source_ids) != len(source_hashes)
+                or len(source_ids) < 3
+                or judgment_seal != commitment(judgment_material)
+                or claim_record is None or claim_record.domain != "observation"
+                or claim_record.parent_id != execution_id
+                or claim_record.semantic_commitment
+                    != judgment.get("claim_result_record_commitment")
+                or claim_id not in source_ids
+                or not isinstance(claim_payload, dict)
+                or claim_payload.get("kind") != "UNSUPPORTED_CLAIM_RESULT"
+                or claim_payload.get("governed_adjudicator_identity")
+                    != ADJUDICATION_EVALUATOR_IDENTITY
+                or claim_payload.get("evaluation_run_id")
+                    != snapshot.evaluation_run_id
+                or claim_payload.get("execution_id") != execution_id
+                or judgment.get("unsupported_claim_result")
+                    != claim_payload.get("unsupported_claim_result")):
+            raise ReviewIncomplete("PROTECTED_JUDGMENT_AUTHORITY_INVALID")
+        for source_id, source_hash in zip(source_ids, source_hashes):
+            source_record = next(
+                (item for item in records if item.record_id == source_id), None)
+            if (source_record is None or source_record.parent_id != execution_id
+                    or source_record.semantic_commitment != source_hash):
+                raise ReviewIncomplete("JUDGMENT_SOURCE_LINEAGE_INVALID")
+        claim_findings = claim_payload.get("claim_adjudications")
+        ucr = claim_payload.get("unsupported_claim_result")
+        if not isinstance(claim_findings, list) or not isinstance(ucr, dict):
+            raise ReviewIncomplete("PROTECTED_UCR_AUTHORITY_INVALID")
+        numerator = sum(
+            isinstance(item, dict) and item.get("disposition") in {
+                "UNSUPPORTED", "CONTRADICTED"} for item in claim_findings)
+        contradicted = sum(
+            isinstance(item, dict) and item.get("disposition") == "CONTRADICTED"
+            for item in claim_findings)
+        denominator = len(claim_findings)
+        expected_ucr = {
+            "status": "SCORED" if denominator else "NO_ELIGIBLE_CLAIMS",
+            "numerator": numerator, "denominator": denominator,
+            "contradicted_count": contradicted,
+            "rate_fraction": None if not denominator else [numerator, denominator],
+        }
+        if ucr != expected_ucr:
+            raise ReviewIncomplete("PROTECTED_UCR_AUTHORITY_INVALID")
+        packets = tuple((record, payloads[record.record_id]) for record in records
+                        if record.domain == "observation"
+                        and payloads[record.record_id].get("kind") == "BLIND_PACKET")
+        if len(packets) != 1:
+            raise ReviewIncomplete("STAGE1_BLIND_PACKET_MISSING")
+        packet_record, packet_payload = packets[0]
+        packet = packet_payload.get("packet")
+        if (not isinstance(packet, dict)
+                or packet.get("schema") != "SPEC-017-S3-BLIND-PACKET-v2"
+                or not isinstance(packet.get("captured"), dict)
+                or packet["captured"].get("execution_id") != execution_id
+                or packet_payload.get("packet_commitment") != commitment(packet)
+                or not isinstance(packet.get("source"), dict)
+                or packet_payload.get("source_commitment") != commitment(packet["source"])
+                or packet_payload.get("isolation_policy_commitment") !=
+                    packet.get("isolation_policy_commitment")):
+            raise ReviewIncomplete("STAGE1_BLIND_PACKET_LINEAGE_INVALID")
+        source = packet["source"]
+
+        consensus_records = tuple(
+            (record, payloads[record.record_id]) for record in records
+            if record.domain == "review"
+            and payloads[record.record_id].get("stage") == "STAGE1_CONSENSUS")
+        if len(consensus_records) != 1:
+            raise ReviewIncomplete("STAGE1_CONSENSUS_MISSING")
+        consensus_record, consensus_payload = consensus_records[0]
+        review_ids = consensus_payload.get("review_ids")
+        if not isinstance(review_ids, list):
+            raise ReviewIncomplete("STAGE1_REVIEW_IDS_INVALID")
+        facts_by_review = []
+        reviewers = []
+        for review_id in review_ids:
+            review = payloads.get(review_id)
+            record = next((item for item in records if item.record_id == review_id), None)
+            if (record is None or record.domain != "review" or review is None
+                    or review.get("stage") != "STAGE1"
+                    or review.get("item_id") != consensus_payload.get("item_id")
+                    or review.get("input_commitment") !=
+                        packet_payload.get("packet_commitment")
+                    or review.get("blind_packet_record_id") != packet_record.record_id
+                    or review.get("source_commitment") !=
+                        packet_payload.get("source_commitment")):
+                raise ReviewIncomplete("STAGE1_REVIEW_LINEAGE_INVALID")
+            facts = tuple(Stage1ReviewedFact.from_material(item)
+                          for item in review.get("reviewed_facts", ()))
+            if review.get("reviewed_facts_commitment") != commitment(
+                    [item.material() for item in facts]):
+                raise ReviewIncomplete("STAGE1_FACT_COMMITMENT_INVALID")
+            _validate_reviewed_facts_material(source, facts)
+            BlindReviewSubmission(
+                review.get("reviewer_id"), review.get("item_id"),
+                review.get("input_commitment"), facts,
+                review.get("reason_code"), review.get("rationale"),
+                review.get("reviewed_at")).validate()
+            reviewers.append(review.get("reviewer_id")); facts_by_review.append(facts)
+        if len(reviewers) not in {2, 3} or len(set(reviewers)) != len(reviewers):
+            raise ReviewIncomplete("STAGE1_REVIEWER_SET_INVALID")
+        selected_facts = facts_by_review[0] if facts_by_review[0] == facts_by_review[1] else (
+            facts_by_review[2] if len(facts_by_review) == 3 else None)
+        if selected_facts is None or (facts_by_review[0] == facts_by_review[1]) != (
+                len(facts_by_review) == 2):
+            raise ReviewIncomplete("STAGE1_AGREEMENT_INVALID")
+        material = {
+            "execution_id": execution_id,
+            "item_id": consensus_payload.get("item_id"),
+            "blind_packet_record_id": packet_record.record_id,
+            "blind_packet_commitment": packet_payload.get("packet_commitment"),
+            "source_commitment": packet_payload.get("source_commitment"),
+            "reviewed_facts": [item.material() for item in selected_facts],
+            "consensus_facts_commitment": commitment(
+                [item.material() for item in selected_facts]),
+            "review_ids": review_ids,
+        }
+        if (consensus_payload != {"stage": "STAGE1_CONSENSUS", **material,
+                                  "consensus_commitment": commitment(material)}):
+            raise ReviewIncomplete("STAGE1_CONSENSUS_COMMITMENT_INVALID")
+
+        stage2_ids = judgment.get("stage2_review_ids")
+        if not isinstance(stage2_ids, list):
+            raise ReviewIncomplete("STAGE2_REVIEW_IDS_INVALID")
+        submissions = []
+        for review_id in stage2_ids:
+            review = payloads.get(review_id)
+            record = next((item for item in records if item.record_id == review_id), None)
+            top = review.get("top_hypothesis") if isinstance(review, dict) else None
+            if (record is None or record.domain != "review" or not isinstance(review, dict)
+                    or review.get("stage") != "STAGE2" or not isinstance(top, dict)):
+                raise ReviewIncomplete("STAGE2_REVIEW_LINEAGE_INVALID")
+            submission = Stage2Submission(
+                review.get("reviewer_id"), review.get("input_commitment"),
+                review.get("oracle_revision_id"),
+                review.get("derived_facts_commitment"),
+                TopHypothesis(CausalClass(top.get("causal_class")),
+                              top.get("granularity"),
+                              top.get("accepted_alternative_id")),
+                review.get("reason_code"), review.get("rationale"),
+                review.get("reviewed_at"))
+            submission.validate(); submissions.append(submission)
+            if (review.get("oracle_scenario_commitment") !=
+                    judgment.get("oracle_scenario_commitment")
+                    or review.get("production_output_commitment") !=
+                    source.get("production_output_commitment")
+                    or review.get("typed_claims_commitment") !=
+                    source.get("typed_claims_commitment")):
+                raise ReviewIncomplete("STAGE2_AUTHORITY_BINDING_INVALID")
+        selected = TwoStageAdjudicator._select_consensus(
+            tuple(submissions), stage="STAGE2")
+        expected_input = commitment({
+            "blind_packet_commitment": packet_payload.get("packet_commitment"),
+            "stage1_consensus_commitment": consensus_payload.get("consensus_commitment"),
+            "stage1_consensus_facts_commitment":
+                consensus_payload.get("consensus_facts_commitment"),
+            "derived_root_cause_facts_commitment":
+                judgment.get("derived_root_cause_facts_commitment"),
+            "oracle_revision_id": judgment.get("oracle_revision_id"),
+            "oracle_scenario_id": judgment.get("oracle_scenario_id"),
+            "oracle_scenario_commitment": judgment.get("oracle_scenario_commitment"),
+        })
+        scoring = judgment.get("root_cause_predicates")
+        if (any(item.input_commitment != expected_input for item in submissions)
+                or any(item.derived_facts_commitment !=
+                       judgment.get("derived_root_cause_facts_commitment")
+                       for item in submissions)
+                or judgment.get("blind_packet_commitment") !=
+                    packet_payload.get("packet_commitment")
+                or judgment.get("stage1_consensus_fact_commitment") !=
+                    consensus_payload.get("consensus_facts_commitment")
+                or judgment.get("stage1_consensus_commitment") !=
+                    consensus_payload.get("consensus_commitment")
+                or judgment.get("production_output_commitment") !=
+                    source.get("production_output_commitment")
+                or judgment.get("typed_claims_commitment") !=
+                    source.get("typed_claims_commitment")
+                or not isinstance(scoring, dict)
+                or judgment.get("final_scoring_commitment") != commitment(scoring)
+                or bool(scoring.get("root_cause_identification_success")) !=
+                    bool(payloads[stage2_ids[submissions.index(selected)]].get(
+                        "root_cause_success"))
+                or judgment.get("result") != (
+                    "PASS" if scoring.get("root_cause_identification_success") else "FAIL")):
+            raise ReviewIncomplete("JUDGMENT_EXACT_BINDING_INVALID")
+    except (KeyError, TypeError, ValueError, IndexError) as exc:
+        blockers.append(str(exc) or type(exc).__name__)
+    return AdjudicationVerification(
+        execution_id, judgment_id, not blockers, tuple(sorted(set(blockers))))
 
 
 def _text(value: str, field: str, maximum: int = 1000) -> str:
@@ -110,6 +356,45 @@ class Stage1ReviewedFact:
             FactDetermination(value["determination"]), value["source_identity"],
             value["source_commitment"],
         )
+
+
+def _validate_reviewed_facts_material(
+    source: dict[str, object], facts: tuple[Stage1ReviewedFact, ...],
+) -> None:
+    required = {
+        ReviewedFactKind.OPERATIONAL_CAUSE_GROUNDED,
+        ReviewedFactKind.COMPLETE_CAUSAL_CHAIN,
+        ReviewedFactKind.MATERIAL_CONTRADICTION,
+        ReviewedFactKind.COMPETING_ALTERNATIVE,
+        ReviewedFactKind.KNOWLEDGE_INCIDENT_TRUTH_DEPENDENCY,
+    }
+    by_kind = {kind: [item for item in facts if item.kind is kind] for kind in required}
+    if any(len(by_kind[kind]) != 1 or by_kind[kind][0].subject_id != "conclusion"
+           for kind in required):
+        raise ValueError("Stage 1 mandatory conclusion facts are incomplete")
+    allowed_sources = {
+        source.get("validated_result_id"): source.get("production_output_commitment"),
+        source.get("evidence_snapshot_id"): source.get("evidence_commitment"),
+        source.get("knowledge_snapshot_id"): source.get("knowledge_commitment"),
+    }
+    if None in allowed_sources:
+        raise ValueError("Stage 1 source authority material is incomplete")
+    for item in facts:
+        if allowed_sources.get(item.source_identity) != item.source_commitment:
+            raise ValueError("Stage 1 reviewed fact source lineage is invalid")
+    machine = source.get("machine_facts")
+    if not isinstance(machine, dict):
+        raise ValueError("Stage 1 machine facts are incomplete")
+    contradiction = machine.get("major_contradiction")
+    competing = machine.get("competing_alternatives")
+    if (isinstance(contradiction, dict) and contradiction.get("value") is True
+            and by_kind[ReviewedFactKind.MATERIAL_CONTRADICTION][0].determination
+                is FactDetermination.FALSE):
+        raise ValueError("Stage 1 contradiction fact contradicts production authority")
+    if (isinstance(competing, dict) and competing.get("value") is True
+            and by_kind[ReviewedFactKind.COMPETING_ALTERNATIVE][0].determination
+                is FactDetermination.FALSE):
+        raise ValueError("Stage 1 competing-alternative fact contradicts production authority")
 
 
 @dataclass(frozen=True, slots=True)
@@ -283,6 +568,49 @@ class Stage2Submission:
 
 
 @dataclass(frozen=True, slots=True)
+class ClaimAdjudicationSubmission:
+    reviewer_id: str
+    input_commitment: str
+    decomposition: tuple[GovernedClaimDecomposition, ...]
+    factual_assertion_commitments: tuple[str, ...]
+    findings: tuple[AtomicClaimFinding, ...]
+    reason_code: str
+    rationale: str
+    reviewed_at: str
+    authority: ReviewerAuthority = ReviewerAuthority.HUMAN
+
+    @property
+    def claim_facts_commitment(self) -> str:
+        return commitment({
+            "decomposition": [{
+                "production_claim_id": item.production_claim_id,
+                "production_claim_commitment": item.production_claim_commitment,
+                "atomic_commitments": list(item.atomic_commitments),
+            } for item in self.decomposition],
+            "factual_assertion_commitments": list(
+                self.factual_assertion_commitments),
+            "findings": [{
+                "production_claim_id": item.production_claim_id,
+                "atomic_commitment": item.atomic_commitment,
+                "disposition": item.disposition.value,
+            } for item in self.findings],
+        })
+
+    def validate(self) -> None:
+        for name in ("reviewer_id", "reason_code", "rationale", "reviewed_at"):
+            _text(getattr(self, name), name)
+        _sha256(self.input_commitment, "input_commitment")
+        if self.authority is not ReviewerAuthority.HUMAN:
+            raise ValueError("LLM judge cannot be an official claim reviewer")
+        if (not self.decomposition or not self.findings
+                or any(not isinstance(item, GovernedClaimDecomposition)
+                       for item in self.decomposition)
+                or any(not isinstance(item, AtomicClaimFinding)
+                       for item in self.findings)):
+            raise ValueError("claim adjudication requires typed complete facts")
+
+
+@dataclass(frozen=True, slots=True)
 class OfficialJudgment:
     judgment_record: LedgerRecord
     evaluation: RootCauseEvaluation
@@ -299,6 +627,22 @@ def stage2_input_commitment(criteria: OracleScenarioCriteria, stage1: Stage1Cons
         "oracle_revision_id": criteria.oracle_revision_id,
         "oracle_scenario_id": criteria.scenario_id,
         "oracle_scenario_commitment": criteria.scenario_commitment,
+    })
+
+
+def claim_adjudication_input_commitment(
+    criteria: OracleScenarioCriteria, stage1: Stage1Consensus,
+    source: AuthoritativeProductionFacts,
+) -> str:
+    return commitment({
+        "execution_id": stage1.execution_id,
+        "blind_packet_commitment": stage1.blind_packet_commitment,
+        "stage1_consensus_commitment": stage1.consensus_commitment,
+        "oracle_revision_id": criteria.oracle_revision_id,
+        "oracle_scenario_id": criteria.scenario_id,
+        "oracle_scenario_commitment": criteria.scenario_commitment,
+        "production_output_commitment": source.production_output_commitment,
+        "typed_claims_commitment": source.typed_claims_commitment,
     })
 
 
@@ -466,9 +810,123 @@ class TwoStageAdjudicator:
             conclusion, knowledge, ClaimEvaluationStatus.SCORED,
         )
 
+    def adjudicate_claims(
+        self, execution_id: str, stage1: Stage1Consensus,
+        submissions: tuple[ClaimAdjudicationSubmission, ...],
+    ) -> LedgerRecord:
+        """Issue the sole protected claim/UCR fact from exact public claims."""
+        criteria = self.resolve_authoritative_criteria(execution_id)
+        if stage1.execution_id != execution_id:
+            raise ValueError("Stage 1 consensus belongs to another execution")
+        packet = self._verify_stage1(stage1)
+        expected_input = claim_adjudication_input_commitment(
+            criteria, stage1, packet.source)
+        if len(submissions) not in {2, 3}:
+            raise ReviewIncomplete(
+                "CLAIM_ADJUDICATION requires two reviewers and a third on disagreement")
+        reviewers = []
+        evaluated = []
+        for submission in submissions:
+            submission.validate()
+            if submission.input_commitment != expected_input:
+                raise ValueError("claim reviewer did not receive the governed claim input")
+            result = evaluate_unsupported_claims(
+                packet.source.production_claims, submission.decomposition,
+                submission.factual_assertion_commitments, submission.findings)
+            if result.status is ClaimEvaluationStatus.INVALID_OUTPUT:
+                raise ValueError("claim adjudication facts are incomplete or contradictory")
+            reviewers.append(submission.reviewer_id)
+            evaluated.append(result)
+        if len(set(reviewers)) != len(reviewers):
+            raise ValueError("claim reviewers must be independent")
+        keys = [item.claim_facts_commitment for item in submissions]
+        if keys[0] == keys[1]:
+            if len(submissions) != 2:
+                raise ValueError("third claim reviewer is only authorized for disagreement")
+            selected_index = 0
+        else:
+            if len(submissions) != 3:
+                raise ReviewIncomplete(
+                    "CLAIM_ADJUDICATION reviewer disagreement requires a third reviewer")
+            if keys[2] not in {keys[0], keys[1]}:
+                raise ReviewIncomplete("CLAIM_ADJUDICATION lacks bounded consensus")
+            selected_index = 2
+        review_records = []
+        for submission, result in zip(submissions, evaluated):
+            material = {
+                "stage": "CLAIM_ADJUDICATION",
+                "reviewer_id": submission.reviewer_id,
+                "input_commitment": submission.input_commitment,
+                "claim_facts_commitment": submission.claim_facts_commitment,
+                "result_commitment": result.result_commitment,
+                "reason_code": submission.reason_code,
+                "rationale": submission.rationale,
+                "reviewed_at": submission.reviewed_at,
+            }
+            review_records.append(self._store.append(LedgerRecord.create(
+                "review", [execution_id, "CLAIM_ADJUDICATION",
+                           submission.reviewer_id], material, execution_id)))
+        selected_submission = submissions[selected_index]
+        selected = evaluated[selected_index]
+        adjudications = [{
+            "production_claim_id": item.production_claim_id,
+            "atomic_commitment": item.atomic_commitment,
+            "disposition": item.disposition.value,
+        } for item in selected.unique_findings]
+        ucr = {
+            "status": selected.status.value,
+            "numerator": selected.numerator,
+            "denominator": selected.denominator,
+            "contradicted_count": selected.contradicted_count,
+            "rate_fraction": (None if selected.rate is None else
+                              [selected.numerator, selected.denominator]),
+        }
+        source_records = (
+            self._store.get(stage1.blind_packet_record_id),
+            self._store.get(stage1.consensus_record_id),
+            *review_records,
+        )
+        if any(item is None for item in source_records):
+            raise ValueError("claim adjudication source record is missing")
+        plan, run, scenario_id = self._require_execution(execution_id)
+        result_material = {
+            "claim_adjudications": adjudications, "ucr": ucr,
+            "claim_facts_commitment": selected_submission.claim_facts_commitment,
+        }
+        payload = {
+            "kind": "UNSUPPORTED_CLAIM_RESULT",
+            "governed_adjudicator_identity": ADJUDICATION_EVALUATOR_IDENTITY,
+            "adjudicator_version": ADJUDICATION_EVALUATOR_VERSION,
+            "evaluation_run_id": run.record_id, "execution_id": execution_id,
+            "scenario_id": scenario_id,
+            "oracle_revision_id": plan.oracle_revision_id,
+            "oracle_scenario_commitment": criteria.scenario_commitment,
+            "input_commitment": expected_input,
+            "production_claim_identities": [
+                item.claim_id for item in packet.source.production_claims],
+            "production_claim_commitments": [
+                production_claim_commitment(item)
+                for item in packet.source.production_claims],
+            "claim_adjudications": adjudications,
+            "claim_review_ids": [item.record_id for item in review_records],
+            "source_record_ids": [item.record_id for item in source_records],
+            "source_record_commitments": [
+                item.semantic_commitment for item in source_records],
+            "claim_facts_commitment": selected_submission.claim_facts_commitment,
+            "unsupported_claim_result": ucr,
+            "governed_result_commitment": commitment(result_material),
+        }
+        record = LedgerRecord.create(
+            "observation", [execution_id, "UNSUPPORTED_CLAIM_RESULT",
+                            payload["governed_result_commitment"]],
+            payload, execution_id)
+        return self._store._append_protected_adjudication(
+            record, authority=_ADJUDICATION_ISSUANCE_AUTHORITY)
+
     def finalize_stage2(self, execution_id: str, expected_criteria: OracleScenarioCriteria,
                         stage1: Stage1Consensus,
-                        submissions: tuple[Stage2Submission, ...]) -> OfficialJudgment:
+                        submissions: tuple[Stage2Submission, ...], *,
+                        claim_result_record_id: str | None = None) -> OfficialJudgment:
         authoritative = self.resolve_authoritative_criteria(execution_id)
         if expected_criteria != authoritative:
             raise ValueError("caller criteria do not exactly match authoritative Oracle scenario")
@@ -484,6 +942,9 @@ class TwoStageAdjudicator:
             raise ValueError("Stage 2 reviewer used a different Oracle revision")
         if any(item.derived_facts_commitment != facts.facts_commitment for item in submissions):
             raise ValueError("Stage 2 facts contradict authoritative derivation")
+        claim_result = self._load_claim_result(
+            execution_id, authoritative, stage1, claim_result_record_id)
+        claim_payload = json.loads(claim_result.semantic_json)
         review_ids = []
         evaluations: dict[str, RootCauseEvaluation] = {}
         for submission in submissions:
@@ -530,6 +991,10 @@ class TwoStageAdjudicator:
         }
         payload = {
             "kind": "ORIGINAL", "oracle_revision_id": authoritative.oracle_revision_id,
+            "governed_adjudicator_identity": ADJUDICATION_EVALUATOR_IDENTITY,
+            "adjudicator_version": ADJUDICATION_EVALUATOR_VERSION,
+            "evaluation_run_id": self._store.get(execution_id).parent_id,
+            "execution_id": execution_id,
             "oracle_scenario_id": authoritative.scenario_id,
             "oracle_scenario_commitment": authoritative.scenario_commitment,
             "production_output_commitment": packet.source.production_output_commitment,
@@ -541,10 +1006,29 @@ class TwoStageAdjudicator:
             "final_scoring_commitment": commitment(scoring),
             "result": "PASS" if evaluation.root_cause_identification_success else "FAIL",
             "stage2_review_ids": review_ids, "root_cause_predicates": scoring,
+            "claim_result_record_id": claim_result.record_id,
+            "claim_result_record_commitment": claim_result.semantic_commitment,
+            "unsupported_claim_result": claim_payload["unsupported_claim_result"],
         }
-        judgment = self._store.append(LedgerRecord.create(
+        source_records = (
+            self._store.get(stage1.blind_packet_record_id),
+            self._store.get(stage1.consensus_record_id),
+            claim_result,
+            *(self._store.get(item) for item in review_ids),
+        )
+        if any(item is None for item in source_records):
+            raise ValueError("judgment source record is missing")
+        payload["source_record_ids"] = [item.record_id for item in source_records]
+        payload["source_record_commitments"] = [
+            item.semantic_commitment for item in source_records]
+        payload["predicate_scoring_basis_commitment"] = commitment({
+            "root_cause": scoring,
+            "unsupported_claim_result": payload["unsupported_claim_result"],
+        })
+        payload["judgment_commitment"] = commitment(payload)
+        judgment = self._store._append_protected_adjudication(LedgerRecord.create(
             "judgment", [execution_id, "original"], payload, execution_id,
-        ))
+        ), authority=_ADJUDICATION_ISSUANCE_AUTHORITY)
         return OfficialJudgment(judgment, evaluation, tuple(review_ids))
 
     def _validate_blind_metadata(self, metadata: tuple[tuple[str, str], ...],
@@ -572,31 +1056,7 @@ class TwoStageAdjudicator:
 
     def _validate_reviewed_facts(self, source: AuthoritativeProductionFacts,
                                  facts: tuple[Stage1ReviewedFact, ...]) -> None:
-        required = {
-            ReviewedFactKind.OPERATIONAL_CAUSE_GROUNDED,
-            ReviewedFactKind.COMPLETE_CAUSAL_CHAIN,
-            ReviewedFactKind.MATERIAL_CONTRADICTION,
-            ReviewedFactKind.COMPETING_ALTERNATIVE,
-            ReviewedFactKind.KNOWLEDGE_INCIDENT_TRUTH_DEPENDENCY,
-        }
-        by_kind = {kind: [item for item in facts if item.kind is kind] for kind in required}
-        if any(len(by_kind[kind]) != 1 or by_kind[kind][0].subject_id != "conclusion"
-               for kind in required):
-            raise ValueError("Stage 1 mandatory conclusion facts are incomplete")
-        allowed_sources = {
-            source.validated_result_id: source.production_output_commitment,
-            source.evidence_snapshot_id: source.evidence_commitment,
-            source.knowledge_snapshot_id: source.knowledge_commitment,
-        }
-        for item in facts:
-            if allowed_sources.get(item.source_identity) != item.source_commitment:
-                raise ValueError("Stage 1 reviewed fact source lineage is invalid")
-        contradiction = by_kind[ReviewedFactKind.MATERIAL_CONTRADICTION][0]
-        if source.machine_major_contradiction and contradiction.determination is FactDetermination.FALSE:
-            raise ValueError("Stage 1 contradiction fact contradicts production authority")
-        competing = by_kind[ReviewedFactKind.COMPETING_ALTERNATIVE][0]
-        if source.machine_competing_alternatives and competing.determination is FactDetermination.FALSE:
-            raise ValueError("Stage 1 competing-alternative fact contradicts production authority")
+        _validate_reviewed_facts_material(source.material(), facts)
 
     @staticmethod
     def _evaluate(criteria: OracleScenarioCriteria, top: TopHypothesis,
@@ -752,6 +1212,53 @@ class TwoStageAdjudicator:
                 or json.loads(record.semantic_json) != expected):
             raise ValueError("Stage 1 consensus record is unresolved or contradictory")
         return packet
+
+    def _load_claim_result(
+        self, execution_id: str, criteria: OracleScenarioCriteria,
+        stage1: Stage1Consensus, record_id: str | None,
+    ) -> LedgerRecord:
+        if record_id is None:
+            raise ValueError("protected claim adjudication result is required")
+        require_identity(record_id, "observation")
+        record = self._store.get(record_id)
+        if (record is None or record.domain != "observation"
+                or record.parent_id != execution_id):
+            raise ValueError("protected claim adjudication result is unresolved")
+        payload = json.loads(record.semantic_json)
+        packet = self._verify_stage1(stage1)
+        expected_input = claim_adjudication_input_commitment(
+            criteria, stage1, packet.source)
+        result = payload.get("unsupported_claim_result")
+        findings = payload.get("claim_adjudications")
+        if (payload.get("kind") != "UNSUPPORTED_CLAIM_RESULT"
+                or payload.get("governed_adjudicator_identity")
+                    != ADJUDICATION_EVALUATOR_IDENTITY
+                or payload.get("adjudicator_version")
+                    != ADJUDICATION_EVALUATOR_VERSION
+                or payload.get("execution_id") != execution_id
+                or payload.get("oracle_revision_id") != criteria.oracle_revision_id
+                or payload.get("oracle_scenario_commitment")
+                    != criteria.scenario_commitment
+                or payload.get("input_commitment") != expected_input
+                or not isinstance(result, dict)
+                or not isinstance(findings, list)):
+            raise ValueError("protected claim adjudication binding is invalid")
+        deterministic = {
+            "status": result.get("status"),
+            "numerator": sum(item.get("disposition") in {
+                "UNSUPPORTED", "CONTRADICTED"} for item in findings
+                              if isinstance(item, dict)),
+            "denominator": len(findings),
+            "contradicted_count": sum(
+                item.get("disposition") == "CONTRADICTED" for item in findings
+                if isinstance(item, dict)),
+            "rate_fraction": (None if not findings else [
+                sum(item.get("disposition") in {"UNSUPPORTED", "CONTRADICTED"}
+                    for item in findings if isinstance(item, dict)), len(findings)]),
+        }
+        if result != deterministic:
+            raise ValueError("protected UCR projection is not deterministic")
+        return record
 
     def _require_execution(self, execution_id: str):
         require_identity(execution_id, "execution")

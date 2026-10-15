@@ -360,7 +360,7 @@ def test_d_to_a_handoff_after_total_authority_reopen(tmp_path, crash_point):
     assert versions[0] == versions[1] == versions[2]
 
 
-def _s2_publication_setup(path, *, early_snapshot=False):
+def _s2_publication_setup(path, *, early_snapshot=False, source_markers=None):
     """Real S2 admission; only source, index and provider adapters are fake."""
     from dataclasses import replace
     from types import SimpleNamespace
@@ -376,6 +376,9 @@ def _s2_publication_setup(path, *, early_snapshot=False):
     services = _public_services(path, event_id="EVT-PUBLICATION", source_marker="publication",
                                incident_id="INC-PUBLICATION")
     incidents, events, b, capture, adapters, a, c_store, c, provider = services
+    if source_markers is not None:
+        for source, marker in source_markers.items():
+            adapters[source].marker = marker
     c_store.close()
     c_store, c, _ = _execution_knowledge(path)
     services = (incidents, events, b, capture, adapters, a, c_store, c, provider)

@@ -7,6 +7,14 @@ from dataclasses import dataclass
 from .identity import canonical_bytes, commitment, identity, require_identity
 
 
+LEDGER_DOMAINS = frozenset({
+    "evaluation_run", "execution", "observation", "judgment", "review",
+    "re_adjudication", "report", "gate_authorization",
+    "gate_execution_receipt", "docker_namespace", "docker_cleanup",
+    "gate_invocation_start", "gate_invocation_receipt",
+})
+
+
 class LedgerConflict(ValueError):
     """One identity was replayed with contradictory semantic content."""
 
@@ -23,8 +31,7 @@ class LedgerRecord:
     @classmethod
     def create(cls, domain: str, key: object, payload: dict,
                parent_id: str | None = None) -> "LedgerRecord":
-        if domain not in {"evaluation_run", "execution", "observation", "judgment",
-                          "review", "re_adjudication", "report"}:
+        if domain not in LEDGER_DOMAINS:
             raise ValueError("unsupported ledger domain")
         if type(payload) is not dict:
             raise ValueError("ledger payload must be a dictionary")
@@ -32,6 +39,8 @@ class LedgerRecord:
         return cls(domain, identity(domain, key), parent_id, canonical_bytes(key), frozen, commitment(payload))
 
     def validate(self) -> None:
+        if self.domain not in LEDGER_DOMAINS:
+            raise ValueError("unsupported ledger domain")
         require_identity(self.record_id, self.domain)
         if self.parent_id is not None and not self.parent_id.startswith("eval:"):
             raise ValueError("ledger parent must be an evaluation identity")
@@ -40,5 +49,7 @@ class LedgerRecord:
         if canonical_bytes(key) != self.identity_key_json or identity(self.domain, key) != self.record_id:
             raise ValueError("ledger identity key mismatch")
         payload = json.loads(self.semantic_json)
+        if type(payload) is not dict:
+            raise ValueError("ledger semantic payload must be a dictionary")
         if canonical_bytes(payload) != self.semantic_json or commitment(payload) != self.semantic_commitment:
             raise ValueError("ledger semantic commitment mismatch")

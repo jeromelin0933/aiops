@@ -1,0 +1,132 @@
+{
+  "schema_version": "spec017.r2s4-evaluation-controls.v2",
+  "fixture_set_identity": "spec017-r2s4-evaluation-controls",
+  "fixture_set_revision": "v2",
+  "classification": "EVALUATION ONLY",
+  "pm_approval_reference": "PM-SPEC017-R2S4-20261013",
+  "materiality_rule_version": "evidence-materiality-v1",
+  "refresh_cases": {
+    "material": {
+      "fixture_identity": "spec017:S2:material-refresh:v2",
+      "scenario_identity": "S2",
+      "variant": "material_refresh",
+      "incident_scope": "SPEC017-EVAL-S2-DATABASE-LATENCY",
+      "baseline_input_identity": "spec017:S2:evidence:baseline:v2",
+      "candidate_input_identity": "spec017:S2:evidence:post-context:v2",
+      "baseline_source": {
+        "loki_marker": "database request latency elevated",
+        "prometheus_value": "0.35",
+        "collection_boundary_seconds": 60
+      },
+      "candidate_source": {
+        "loki_marker": "database connection pool exhausted causing api latency cascade",
+        "prometheus_value": "8.75",
+        "collection_boundary_seconds": 120
+      },
+      "expected_public_observation_class": "MATERIAL_STALE_REFRESH",
+      "oracle_scenario_reference": "spec017-s1-s6-v1:S2",
+      "isolation_canary_commitment": "sha256:9292929292929292929292929292929292929292929292929292929292929292"
+    },
+    "material_failure": {
+      "fixture_identity": "spec017:S2:material-refresh-failure:v2",
+      "scenario_identity": "S2",
+      "variant": "refresh_failure",
+      "incident_scope": "SPEC017-EVAL-S2-DATABASE-LATENCY-REFRESH-FAILURE",
+      "baseline_input_identity": "spec017:S2:failure:baseline:v2",
+      "candidate_input_identity": "spec017:S2:failure:post-context:v2",
+      "baseline_source": {
+        "loki_marker": "database request latency elevated",
+        "prometheus_value": "0.35",
+        "collection_boundary_seconds": 60
+      },
+      "candidate_source": {
+        "loki_marker": "database connection pool exhausted causing api latency cascade",
+        "prometheus_value": "8.75",
+        "collection_boundary_seconds": 120
+      },
+      "expected_public_observation_class": "MATERIAL_REFRESH_FAILURE_RETAINS_CURRENT",
+      "oracle_scenario_reference": "spec017-s1-s6-v1:S2",
+      "isolation_canary_commitment": "sha256:9494949494949494949494949494949494949494949494949494949494949494"
+    },
+    "non_material": {
+      "fixture_identity": "spec017:S2:non-material:v2",
+      "scenario_identity": "S2",
+      "variant": "non_material",
+      "incident_scope": "SPEC017-EVAL-S2-DATABASE-LATENCY-NON-MATERIAL",
+      "baseline_input_identity": "spec017:S2:non-material:baseline:v2",
+      "candidate_input_identity": "spec017:S2:non-material:post-context:v2",
+      "baseline_source": {
+        "loki_marker": "database latency evidence unchanged",
+        "prometheus_value": "0.35",
+        "observed_candidate_count": 1,
+        "omitted_candidate_count": 0
+      },
+      "candidate_source": {
+        "loki_marker": "database latency evidence unchanged",
+        "prometheus_value": "0.35",
+        "observed_candidate_count": 2,
+        "omitted_candidate_count": 1
+      },
+      "expected_public_observation_class": "NON_MATERIAL_NO_VERSION",
+      "oracle_scenario_reference": "spec017-s1-s6-v1:S2",
+      "isolation_canary_commitment": "sha256:9393939393939393939393939393939393939393939393939393939393939393"
+    }
+  },
+  "restart_controls": {
+    "EVIDENCE": {
+      "fixture_identity": "spec017:S5:restart-evidence:v2",
+      "control_reference": "incident_evidence.capture_service.EvidenceCaptureService.capture_evidence",
+      "exact_control_hook_identity": "candidate-f:after-evidence-commit-before-return:v2",
+      "crash_point": "after Candidate-B atomic Snapshot/Revision commit and before caller receipt",
+      "restart_reopen_method": "reopen SqliteEvidenceStore and replay the frozen CaptureCommand",
+      "pre_crash_required_facts": ["capture command identity frozen", "authoritative Snapshot and Revision durable"],
+      "pre_crash_forbidden_facts": ["second Snapshot semantic effect"],
+      "expected_terminal_public_facts": ["same Snapshot identity", "same Revision identity", "one authoritative capture outcome"],
+      "no_duplicate_assertions": ["one capture operation", "one Snapshot identity", "one Revision identity"]
+    },
+    "KNOWLEDGE": {
+      "fixture_identity": "spec017:S5:restart-knowledge:v2",
+      "control_reference": "knowledge_index.service.KnowledgeSnapshotService.resolve",
+      "exact_control_hook_identity": "candidate-f:after-knowledge-snapshot-commit-before-return:v2",
+      "crash_point": "after durable request/retrieval/snapshot provenance and before caller receipt",
+      "restart_reopen_method": "reopen SqliteKnowledgeStore and replay the frozen retrieval request",
+      "pre_crash_required_facts": ["retrieval request identity frozen", "Knowledge Snapshot provenance durable"],
+      "pre_crash_forbidden_facts": ["wrapper-declared Knowledge success"],
+      "expected_terminal_public_facts": ["same request identity", "same Snapshot key", "same retrieval provenance"],
+      "no_duplicate_assertions": ["one semantic Snapshot", "one request outcome"]
+    },
+    "GENERATION": {
+      "fixture_identity": "spec017:S5:restart-generation:v2",
+      "control_reference": "runtime_orchestration.rca_execution.RcaAttemptExecutor.execute",
+      "exact_control_hook_identity": "candidate-f:after-candidate-d-terminal-before-try-receipt:v2",
+      "crash_point": "after Candidate-D validated result or typed failure and before Runtime completion receipt",
+      "restart_reopen_method": "reopen Candidate-D/A/D2 stores and resume SPEC-011 same Attempt/Try",
+      "pre_crash_required_facts": ["Attempt identity frozen", "Try ordinal frozen", "Candidate-D terminal result durable"],
+      "pre_crash_forbidden_facts": ["second Attempt", "fabricated provider exactly-once claim"],
+      "expected_terminal_public_facts": ["same Attempt", "same Try", "validated output or typed failure"],
+      "no_duplicate_assertions": ["one Try outcome identity", "one durable business effect"]
+    },
+    "ARTIFACT_COMMIT": {
+      "fixture_identity": "spec017:S5:restart-artifact-commit:v2",
+      "control_reference": "rca_persistence.sqlite_store.SqliteRcaStore.commit_validated_artifact",
+      "exact_control_hook_identity": "candidate-f:after-artifact-version-commit-before-return:v2",
+      "crash_point": "after immutable Artifact/Version allocation and before caller receipt",
+      "restart_reopen_method": "reopen SqliteRcaStore and replay the same logical artifact commit operation",
+      "pre_crash_required_facts": ["Attempt/Try linkage durable", "immutable Artifact and Version durable"],
+      "pre_crash_forbidden_facts": ["second Version allocation"],
+      "expected_terminal_public_facts": ["same Artifact", "same Version", "same Attempt/Try linkage"],
+      "no_duplicate_assertions": ["one Version identity", "one publication target identity"]
+    },
+    "PUBLICATION": {
+      "fixture_identity": "spec017:S5:restart-publication:v2",
+      "control_reference": "rca_integration.publication.RcaPublicationCoordinator.reconcile",
+      "exact_control_hook_identity": "candidate-f:after-spec008-receipt-before-candidate-a-completion:v2",
+      "crash_point": "after SPEC-008 Incident receipt and before Candidate-A Current completion",
+      "restart_reopen_method": "reopen Incident/A stores and run existing publication reconciliation for the same operation",
+      "pre_crash_required_facts": ["publication operation identity frozen", "Incident publication receipt durable"],
+      "pre_crash_forbidden_facts": ["second publication coordinator", "duplicate Incident publication effect"],
+      "expected_terminal_public_facts": ["RCA Current coherent", "Incident relationship coherent", "same publication receipt"],
+      "no_duplicate_assertions": ["one publication operation", "one Incident relationship transition"]
+    }
+  }
+}

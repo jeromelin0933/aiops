@@ -4,17 +4,45 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 
 from .authority import TrustedApprovalRegistry
-from .identity import canonical_bytes, require_identity
+from .identity import canonical_bytes, commitment, identity, require_identity
 from .ledger import LedgerConflict, LedgerRecord
 from .oracle import EvaluationPlan, OracleRevision
 
 
 APP_ID = 0x017E0A17
 SCHEMA_VERSION = 1
+RUN_SNAPSHOT_SCHEMA = "SPEC-017-RUN-LEDGER-SNAPSHOT-v1"
+RUN_SNAPSHOT_ORDERING = "DEPTH_DOMAIN_RECORD_ID-v1"
+REPORT_SOURCE_CUT_POLICY = "EXCLUDE_REPORT_PROJECTIONS-v1"
+DEFAULT_RUN_SNAPSHOT_MAX_RECORDS = 10_000
+DEFAULT_RUN_SNAPSHOT_MAX_CANONICAL_BYTES = 16 * 1024 * 1024
+_DOMAIN_ORDER = (
+    "evaluation_run", "execution", "observation", "review", "judgment",
+    "re_adjudication", "gate_authorization", "gate_execution_receipt",
+    "gate_invocation_start", "gate_invocation_receipt", "docker_namespace",
+    "docker_cleanup", "report",
+)
+_PROTECTED_R3_DOMAINS = frozenset({
+    "gate_invocation_start", "gate_invocation_receipt",
+})
+_ACTUAL_GATES = frozenset({"REAL_LLM", "REAL_RAG", "DOCKER_RCA_E2E"})
+_ACTUAL_TERMINAL_STATUSES = frozenset({
+    "EXECUTED_PASS", "EXECUTED_FAIL", "INVALID_EXECUTION",
+})
+_ACTUAL_PROVENANCE_KINDS = {
+    "REAL_LLM": "LIVE_GEMINI_INVOCATION",
+    "REAL_RAG": "GOVERNED_REAL_RAG_INVOCATION",
+    "DOCKER_RCA_E2E": "ISOLATED_DOCKER_INVOCATION",
+}
+_ACTUAL_INVOCATION_BINDING_FIELDS = (
+    "evaluation_run_id", "execution_id", "gate", "profile_identity",
+    "profile_commitment",
+)
 _SCHEMA_SQL = """
     CREATE TABLE oracle_revisions (
         revision_id TEXT PRIMARY KEY, content BLOB NOT NULL);
@@ -52,6 +80,58 @@ class EvaluationStoreIntegrityError(RuntimeError):
     """Existing evaluation state cannot be trusted."""
 
 
+class EvaluationRunSnapshotError(RuntimeError):
+    """A complete, bounded, authoritative run snapshot cannot be returned."""
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluationRunSnapshot:
+    """Immutable coherent cut issued by the Candidate-F ledger authority."""
+
+    schema_version: str
+    ordering_policy: str
+    report_source_cut_policy: str
+    evaluation_run_id: str
+    evaluation_plan_id: str
+    oracle_revision_id: str
+    records: tuple[LedgerRecord, ...]
+    report_source_record_count: int
+    report_source_cut_commitment: str
+    canonical_size_bytes: int
+    integrity_status: str
+
+
+_READER_SEAL = object()
+
+
+class EvaluationLedgerReader:
+    """Narrow read/reference access for normal evaluation execution paths."""
+
+    __slots__ = ("__store",)
+
+    def __init__(self, store: "SqliteEvaluationStore", *, _seal: object) -> None:
+        if _seal is not _READER_SEAL:
+            raise TypeError("evaluation ledger reader is store-issued")
+        self.__store = store
+
+    def get(self, record_id: str) -> LedgerRecord | None:
+        return self.__store.get(record_id)
+
+    def readiness_check(self) -> None:
+        self.__store.readiness_check()
+
+    def read_run_snapshot(
+        self, evaluation_run_id: str, *,
+        max_records: int = DEFAULT_RUN_SNAPSHOT_MAX_RECORDS,
+        max_canonical_bytes: int = DEFAULT_RUN_SNAPSHOT_MAX_CANONICAL_BYTES,
+    ) -> EvaluationRunSnapshot:
+        """Read one complete run cut without exposing storage or mutation access."""
+        return self.__store._read_run_snapshot(
+            evaluation_run_id, max_records=max_records,
+            max_canonical_bytes=max_canonical_bytes,
+        )
+
+
 class SqliteEvaluationStore:
     def __init__(self, database_path: str | Path, *, approvals: TrustedApprovalRegistry | None = None) -> None:
         path = Path(database_path).resolve()
@@ -80,6 +160,137 @@ class SqliteEvaluationStore:
 
     def __exit__(self, *_: object) -> None:
         self.close()
+
+    def reader(self) -> EvaluationLedgerReader:
+        """Return a read-only capability without append/admission methods."""
+        self.readiness_check()
+        return EvaluationLedgerReader(self, _seal=_READER_SEAL)
+
+    def _read_run_snapshot(
+        self, evaluation_run_id: str, *, max_records: int,
+        max_canonical_bytes: int,
+    ) -> EvaluationRunSnapshot:
+        """Build a validated transitive run cut in one SQLite read transaction."""
+        require_identity(evaluation_run_id, "evaluation_run")
+        for value, label in (
+            (max_records, "max_records"),
+            (max_canonical_bytes, "max_canonical_bytes"),
+        ):
+            if type(value) is not int or value < 1:
+                raise ValueError(f"{label} must be a positive integer")
+        if self._db.in_transaction:
+            raise EvaluationRunSnapshotError(
+                "run snapshot requires an authority-owned read transaction")
+
+        self._db.execute("BEGIN")
+        try:
+            # Integrity and enumeration share this transaction, so a concurrent
+            # append can be observed only wholly before or wholly after this cut.
+            self.readiness_check()
+            root = self.get(evaluation_run_id)
+            if root is None:
+                raise EvaluationRunSnapshotError("evaluation run does not exist")
+            if root.domain != "evaluation_run":
+                raise EvaluationRunSnapshotError(
+                    "snapshot root is not an evaluation run")
+            root_payload = json.loads(root.semantic_json)
+            evaluation_plan_id = require_identity(
+                root.parent_id, "evaluation_plan")
+            oracle_revision_id = require_identity(
+                root_payload.get("oracle_revision_id"), "oracle_revision")
+
+            domain_rank = "CASE tree.domain " + " ".join(
+                f"WHEN '{domain}' THEN {rank}"
+                for rank, domain in enumerate(_DOMAIN_ORDER)
+            ) + f" ELSE {len(_DOMAIN_ORDER)} END"
+            cursor = self._db.execute(f"""
+                WITH RECURSIVE tree(
+                    record_id, domain, parent_id, identity_key_json,
+                    semantic_json, semantic_commitment, depth
+                ) AS (
+                    SELECT record_id, domain, parent_id, identity_key_json,
+                           semantic_json, semantic_commitment, 0
+                    FROM ledger WHERE record_id=?
+                    UNION ALL
+                    SELECT child.record_id, child.domain, child.parent_id,
+                           child.identity_key_json, child.semantic_json,
+                           child.semantic_commitment, tree.depth + 1
+                    FROM ledger AS child
+                    JOIN tree ON child.parent_id=tree.record_id
+                )
+                SELECT domain, record_id, parent_id, identity_key_json,
+                       semantic_json, semantic_commitment, depth
+                FROM tree
+                ORDER BY depth, {domain_rank}, record_id
+            """, (evaluation_run_id,))
+            rows = cursor.fetchmany(max_records + 1)
+            if len(rows) > max_records:
+                raise EvaluationRunSnapshotError(
+                    "run snapshot record bound exceeded")
+
+            records: list[LedgerRecord] = []
+            serialized_records: list[dict[str, object]] = []
+            source_records: list[dict[str, object]] = []
+            for domain, record_id, parent_id, key_json, semantic_json, semantic_hash, depth in rows:
+                record = LedgerRecord(
+                    domain, record_id, parent_id, key_json, semantic_json,
+                    semantic_hash,
+                )
+                try:
+                    record.validate()
+                    self._validate_links(record)
+                except (ValueError, TypeError) as exc:
+                    raise EvaluationStoreIntegrityError(
+                        "run snapshot contains an invalid ledger record") from exc
+                records.append(record)
+                serialized_records.append({
+                    "depth": depth, "domain": domain, "record_id": record_id,
+                    "parent_id": parent_id,
+                    "identity_key": json.loads(key_json),
+                    "semantic": json.loads(semantic_json),
+                    "semantic_commitment": semantic_hash,
+                })
+                if domain != "report":
+                    source_records.append({
+                        "domain": domain, "record_id": record_id,
+                        "parent_id": parent_id,
+                        "semantic_commitment": semantic_hash,
+                    })
+
+            snapshot_material = {
+                "schema_version": RUN_SNAPSHOT_SCHEMA,
+                "ordering_policy": RUN_SNAPSHOT_ORDERING,
+                "report_source_cut_policy": REPORT_SOURCE_CUT_POLICY,
+                "evaluation_run_id": evaluation_run_id,
+                "evaluation_plan_id": evaluation_plan_id,
+                "oracle_revision_id": oracle_revision_id,
+                "records": serialized_records,
+            }
+            canonical_size = len(canonical_bytes(snapshot_material))
+            if canonical_size > max_canonical_bytes:
+                raise EvaluationRunSnapshotError(
+                    "run snapshot canonical byte bound exceeded")
+            source_cut = commitment({
+                "schema_version": RUN_SNAPSHOT_SCHEMA,
+                "ordering_policy": RUN_SNAPSHOT_ORDERING,
+                "source_cut_policy": REPORT_SOURCE_CUT_POLICY,
+                "evaluation_run_id": evaluation_run_id,
+                "evaluation_plan_id": evaluation_plan_id,
+                "oracle_revision_id": oracle_revision_id,
+                "records": source_records,
+            })
+            snapshot = EvaluationRunSnapshot(
+                RUN_SNAPSHOT_SCHEMA, RUN_SNAPSHOT_ORDERING,
+                REPORT_SOURCE_CUT_POLICY, evaluation_run_id,
+                evaluation_plan_id, oracle_revision_id, tuple(records),
+                len(source_records), source_cut, canonical_size, "READY",
+            )
+            self._db.execute("COMMIT")
+            return snapshot
+        except BaseException:
+            if self._db.in_transaction:
+                self._db.execute("ROLLBACK")
+            raise
 
     def _initialize(self) -> None:
         app_id = self._db.execute("PRAGMA application_id").fetchone()[0]
@@ -160,6 +371,277 @@ class SqliteEvaluationStore:
 
     def append(self, record: LedgerRecord) -> LedgerRecord:
         """Append an evaluation fact; callers never receive production write access."""
+        if record.domain == "judgment":
+            raise ValueError(
+                "formal ORIGINAL judgment is protected; the governed adjudicator must issue it"
+            )
+        if record.domain in _PROTECTED_R3_DOMAINS:
+            raise ValueError(
+                f"{record.domain} is protected; actual invocation evidence "
+                "must be issued by the governed harness"
+            )
+        if record.domain == "observation":
+            from .recovery_records import PROTECTED_RECOVERY_KINDS
+            try:
+                kind = json.loads(record.semantic_json).get("kind")
+            except (AttributeError, TypeError, ValueError) as exc:
+                raise ValueError("observation payload is invalid") from exc
+            if kind in PROTECTED_RECOVERY_KINDS:
+                raise ValueError(
+                    f"{kind} is protected; a governed typed evaluator must issue it"
+                )
+            if kind == "UNSUPPORTED_CLAIM_RESULT":
+                raise ValueError(
+                    "UNSUPPORTED_CLAIM_RESULT is protected; the governed adjudicator must issue it"
+                )
+        return self._append_validated(record)
+
+    def _append_protected_adjudication(
+        self, record: LedgerRecord, *, authority: object,
+    ) -> LedgerRecord:
+        """Append S3 formal truth only after store-level provenance validation."""
+        from .adjudication import (
+            ADJUDICATION_EVALUATOR_IDENTITY, ADJUDICATION_EVALUATOR_VERSION,
+            is_adjudication_issuance_authority,
+        )
+        if not is_adjudication_issuance_authority(authority):
+            raise ValueError("protected adjudication authority is invalid")
+        payload = json.loads(record.semantic_json)
+        if record.domain == "observation":
+            if payload.get("kind") != "UNSUPPORTED_CLAIM_RESULT":
+                raise ValueError("protected claim result kind is invalid")
+        elif record.domain == "judgment":
+            if payload.get("kind") != "ORIGINAL":
+                raise ValueError("protected judgment kind is invalid")
+        else:
+            raise ValueError("protected adjudication record domain is invalid")
+        run = self._run_for(record.parent_id)
+        plan = self.get_plan(run.parent_id)
+        execution = self.get(record.parent_id)
+        execution_payload = json.loads(execution.semantic_json)
+        if (payload.get("governed_adjudicator_identity")
+                != ADJUDICATION_EVALUATOR_IDENTITY
+                or payload.get("adjudicator_version")
+                    != ADJUDICATION_EVALUATOR_VERSION
+                or payload.get("evaluation_run_id") != run.record_id
+                or payload.get("execution_id") != record.parent_id
+                or payload.get("scenario_id", payload.get("oracle_scenario_id"))
+                    != execution_payload.get("scenario_id")
+                or payload.get("oracle_revision_id") != plan.oracle_revision_id):
+            raise ValueError("protected adjudication run/execution/Oracle binding is invalid")
+        ids = payload.get("source_record_ids")
+        hashes = payload.get("source_record_commitments")
+        if (not isinstance(ids, list) or not isinstance(hashes, list)
+                or len(ids) != len(hashes) or len(ids) < 3
+                or len(set(ids)) != len(ids)):
+            raise ValueError("protected adjudication source lineage is incomplete")
+        sources = []
+        for source_id, source_hash in zip(ids, hashes):
+            source = self.get(source_id)
+            if (source is None or source.parent_id != record.parent_id
+                    or source.semantic_commitment != source_hash):
+                raise ValueError("protected adjudication source is missing or mismatched")
+            sources.append(source)
+        if record.domain == "observation":
+            findings = payload.get("claim_adjudications")
+            result = payload.get("unsupported_claim_result")
+            claim_ids = payload.get("production_claim_identities")
+            claim_hashes = payload.get("production_claim_commitments")
+            review_ids = payload.get("claim_review_ids")
+            if (not isinstance(findings, list) or not isinstance(result, dict)
+                    or not isinstance(claim_ids, list)
+                    or not isinstance(claim_hashes, list)
+                    or len(claim_ids) != len(claim_hashes)
+                    or len(set(claim_ids)) != len(claim_ids)
+                    or not isinstance(review_ids, list) or len(review_ids) not in {2, 3}
+                    or not set(review_ids).issubset(ids)):
+                raise ValueError("protected claim adjudication projection is invalid")
+            pairs = []
+            for item in findings:
+                if (not isinstance(item, dict)
+                        or item.get("production_claim_id") not in claim_ids
+                        or not isinstance(item.get("atomic_commitment"), str)
+                        or item.get("disposition") not in {
+                            "SUPPORTED", "UNSUPPORTED", "CONTRADICTED"}):
+                    raise ValueError("protected claim disposition is invalid")
+                pairs.append((item["production_claim_id"], item["atomic_commitment"]))
+            if len(set(pairs)) != len(pairs):
+                raise ValueError("protected claim dispositions are duplicated")
+            numerator = sum(item["disposition"] in {
+                "UNSUPPORTED", "CONTRADICTED"} for item in findings)
+            denominator = len(findings)
+            contradicted = sum(item["disposition"] == "CONTRADICTED"
+                               for item in findings)
+            expected_result = {
+                "status": ("SCORED" if denominator else "NO_ELIGIBLE_CLAIMS"),
+                "numerator": numerator, "denominator": denominator,
+                "contradicted_count": contradicted,
+                "rate_fraction": (None if not denominator else
+                                  [numerator, denominator]),
+            }
+            if result != expected_result:
+                raise ValueError("protected UCR numerator/denominator is not deterministic")
+            for review_id in review_ids:
+                review = self.get(review_id)
+                review_payload = json.loads(review.semantic_json) if review else {}
+                if (review is None or review.domain != "review"
+                        or review_payload.get("stage") != "CLAIM_ADJUDICATION"
+                        or review_payload.get("input_commitment")
+                            != payload.get("input_commitment")):
+                    raise ValueError("protected claim review lineage is invalid")
+            review_payloads = [json.loads(self.get(item).semantic_json)
+                               for item in review_ids]
+            consensus_keys = [item.get("claim_facts_commitment")
+                              for item in review_payloads]
+            if (len(consensus_keys) == 2 and consensus_keys[0] == consensus_keys[1]):
+                selected_review = review_payloads[0]
+            elif (len(consensus_keys) == 3 and consensus_keys[0] != consensus_keys[1]
+                    and consensus_keys[2] in set(consensus_keys[:2])):
+                selected_review = review_payloads[2]
+            else:
+                raise ValueError("protected claim reviewer consensus is invalid")
+            evaluated_commitment = commitment({
+                "status": result["status"], "numerator": numerator,
+                "denominator": denominator,
+                "contradicted_count": contradicted,
+                "rate_fraction": result["rate_fraction"],
+                "findings": findings, "integrity_errors": [],
+            })
+            if (selected_review.get("claim_facts_commitment")
+                    != payload.get("claim_facts_commitment")
+                    or selected_review.get("result_commitment")
+                    != evaluated_commitment):
+                raise ValueError("protected claim evaluator result lacks reviewer consensus")
+            result_material = {
+                "claim_adjudications": findings, "ucr": result,
+                "claim_facts_commitment": payload.get("claim_facts_commitment"),
+            }
+            if payload.get("governed_result_commitment") != commitment(result_material):
+                raise ValueError("protected claim/UCR result commitment is invalid")
+        else:
+            scoring = payload.get("root_cause_predicates")
+            claim = self.get(payload.get("claim_result_record_id", ""))
+            claim_payload = json.loads(claim.semantic_json) if claim else {}
+            stage2_ids = payload.get("stage2_review_ids")
+            if (not isinstance(stage2_ids, list) or len(stage2_ids) not in {2, 3}
+                    or not set(stage2_ids).issubset(ids)):
+                raise ValueError("protected judgment reviewer lineage is invalid")
+            stage2_payloads = []
+            for review_id in stage2_ids:
+                review = self.get(review_id)
+                review_payload = json.loads(review.semantic_json) if review else {}
+                if (review is None or review.domain != "review"
+                        or review_payload.get("stage") != "STAGE2"
+                        or review_payload.get("oracle_revision_id")
+                            != payload.get("oracle_revision_id")
+                        or review_payload.get("oracle_scenario_id")
+                            != payload.get("oracle_scenario_id")
+                        or review_payload.get("oracle_scenario_commitment")
+                            != payload.get("oracle_scenario_commitment")):
+                    raise ValueError("protected judgment Stage 2 source is invalid")
+                stage2_payloads.append(review_payload)
+            consensus_keys = [commitment(item.get("top_hypothesis"))
+                              for item in stage2_payloads]
+            if (len(consensus_keys) == 2 and consensus_keys[0] == consensus_keys[1]):
+                selected_stage2 = stage2_payloads[0]
+            elif (len(consensus_keys) == 3 and consensus_keys[0] != consensus_keys[1]
+                    and consensus_keys[2] in set(consensus_keys[:2])):
+                selected_stage2 = stage2_payloads[2]
+            else:
+                raise ValueError("protected judgment reviewer consensus is invalid")
+            if (not isinstance(scoring, dict)
+                    or payload.get("final_scoring_commitment") != commitment(scoring)
+                    or claim is None or claim.parent_id != record.parent_id
+                    or claim.record_id not in ids
+                    or claim.semantic_commitment
+                        != payload.get("claim_result_record_commitment")
+                    or claim_payload.get("kind") != "UNSUPPORTED_CLAIM_RESULT"
+                    or payload.get("unsupported_claim_result")
+                        != claim_payload.get("unsupported_claim_result")
+                    or payload.get("predicate_scoring_basis_commitment")
+                        != commitment({
+                            "root_cause": scoring,
+                            "unsupported_claim_result":
+                                payload.get("unsupported_claim_result"),
+                        })
+                    or bool(selected_stage2.get("root_cause_success"))
+                        != bool(scoring.get("root_cause_identification_success"))
+                    or payload.get("result") != (
+                        "PASS" if scoring.get("root_cause_identification_success")
+                        else "FAIL")):
+                raise ValueError("protected judgment scoring/claim binding is invalid")
+            material = dict(payload)
+            sealed = material.pop("judgment_commitment", None)
+            if sealed != commitment(material):
+                raise ValueError("protected judgment commitment is invalid")
+        return self._append_validated(record)
+
+    def _append_protected_recovery(
+        self, record: LedgerRecord, *, authority: object,
+    ) -> LedgerRecord:
+        """Append through the sole R2/S4 evaluator-owned issuance capability."""
+        from .recovery_records import (
+            PROTECTED_RECOVERY_KINDS, is_recovery_issuance_authority,
+        )
+        if not is_recovery_issuance_authority(authority):
+            raise ValueError("protected recovery issuance authority is invalid")
+        if record.domain != "observation":
+            raise ValueError("protected recovery fact must be an observation")
+        payload = json.loads(record.semantic_json)
+        kind = payload.get("kind")
+        if kind not in PROTECTED_RECOVERY_KINDS:
+            raise ValueError("protected recovery fact is not evaluator-issued")
+        run = self._run_for(record.parent_id)
+        if kind == "RECOVERY_SOURCE_OBSERVATION":
+            projection = payload.get("observation_projection")
+            if (payload.get("evaluation_run_id") != run.record_id
+                    or payload.get("execution_id") != record.parent_id
+                    or not isinstance(payload.get("case_id"), str)
+                    or type(payload.get("source_ordinal")) is not int
+                    or payload.get("source_observation_commitment")
+                        != commitment(projection)):
+                raise ValueError("protected source observation binding is invalid")
+        elif kind == "RECOVERY_EVALUATOR_EXECUTION":
+            ids = payload.get("source_observation_record_ids")
+            hashes = payload.get("source_observation_record_commitments")
+            if (payload.get("evaluator_identity")
+                    != "SPEC-017-R2S4-GOVERNED-EVALUATOR-v3"
+                    or payload.get("execution_id") != record.parent_id
+                    or not isinstance(ids, list) or not isinstance(hashes, list)
+                    or len(ids) != len(hashes) or not 2 <= len(ids) <= 8
+                    or payload.get("result_commitment")
+                        != commitment(payload.get("result_payload"))):
+                raise ValueError("protected evaluator execution binding is invalid")
+            for source_id, source_hash in zip(ids, hashes):
+                source = self.get(source_id)
+                if (source is None or source.parent_id != record.parent_id
+                        or source.semantic_commitment != source_hash):
+                    raise ValueError("protected evaluator source is missing")
+                source_payload = json.loads(source.semantic_json)
+                if (source_payload.get("kind") != "RECOVERY_SOURCE_OBSERVATION"
+                        or source_payload.get("case_id") != payload.get("case_id")):
+                    raise ValueError("protected evaluator source lineage is invalid")
+        elif kind in {"REFRESH_VERSION_RESULT", "RESTART_RECOVERY_RESULT"}:
+            evaluator = self.get(payload.get("evaluator_execution_record_id", ""))
+            if (payload.get("governed_evaluator_identity")
+                    != "SPEC-017-R2S4-GOVERNED-EVALUATOR-v3"
+                    or evaluator is None or evaluator.parent_id != record.parent_id
+                    or evaluator.semantic_commitment
+                        != payload.get("evaluator_execution_commitment")
+                    or not payload.get("typed_result_commitment")):
+                raise ValueError("protected recovery result provenance is invalid")
+        elif kind == "DEVIATION_RESULT":
+            source = self.get(payload.get("source_evaluation_fact_id", ""))
+            if (payload.get("governed_evaluator_identity")
+                    != "SPEC-017-R2S4-DEVIATION-EVALUATOR-v3"
+                    or source is None or source.parent_id != record.parent_id
+                    or source.semantic_commitment
+                        != payload.get("source_evaluation_fact_commitment")
+                    or not payload.get("typed_result_commitment")):
+                raise ValueError("protected deviation provenance is invalid")
+        return self._append_validated(record)
+
+    def _append_validated(self, record: LedgerRecord) -> LedgerRecord:
         record.validate()
         self._validate_links(record)
         self._db.execute("BEGIN IMMEDIATE")
@@ -172,6 +654,33 @@ class SqliteEvaluationStore:
                 ).fetchone()
                 if existing_original is not None and existing_original[0] != record.record_id:
                     raise LedgerConflict("execution already has an ORIGINAL judgment")
+            if record.domain == "gate_invocation_start":
+                payload = json.loads(record.semantic_json)
+                invocation_id = payload["invocation_id"]
+                binding = tuple(payload[field] for field in
+                                _ACTUAL_INVOCATION_BINDING_FIELDS)
+                existing_starts = self._db.execute(
+                    "SELECT record_id,semantic_json FROM ledger "
+                    "WHERE domain='gate_invocation_start' "
+                    "AND json_extract(semantic_json, '$.invocation_id')=?",
+                    (invocation_id,),
+                ).fetchall()
+                for existing_id, existing_json in existing_starts:
+                    existing_payload = json.loads(existing_json)
+                    existing_binding = tuple(
+                        existing_payload.get(field)
+                        for field in _ACTUAL_INVOCATION_BINDING_FIELDS
+                    )
+                    if existing_binding != binding:
+                        raise LedgerConflict(
+                            "actual invocation identity is already bound to a "
+                            "different run/execution/gate/profile"
+                        )
+                    if (existing_id != record.record_id
+                            or existing_json != record.semantic_json):
+                        raise LedgerConflict(
+                            f"contradictory replay for invocation {invocation_id}"
+                        )
             row = self._db.execute("SELECT domain,parent_id,identity_key_json,semantic_json,semantic_commitment FROM ledger WHERE record_id=?",
                                    (record.record_id,)).fetchone()
             expected = (record.domain, record.parent_id, record.identity_key_json, record.semantic_json, record.semantic_commitment)
@@ -185,6 +694,130 @@ class SqliteEvaluationStore:
             raise
         return record
 
+    def _record_actual_execution_start(
+        self, *, evaluation_run_id: str, execution_id: str, gate: str,
+        profile_identity: str, profile_commitment: str, invocation_id: str,
+        started_at: str, invocation_pins: dict[str, object],
+    ) -> LedgerRecord:
+        """Issue a governed actual-execution start from verified harness facts."""
+        if gate not in _ACTUAL_GATES:
+            raise ValueError("actual invocation start has unsupported gate")
+        for value, label in (
+            (profile_identity, "profile identity"),
+            (invocation_id, "invocation identity"),
+        ):
+            if not isinstance(value, str) or not value or value != value.strip():
+                raise ValueError(f"{label} must be non-empty trimmed text")
+        self._require_sha256(profile_commitment, "profile commitment")
+        self._parse_timestamp(started_at, "started_at")
+        if type(invocation_pins) is not dict:
+            raise ValueError("invocation pins must be a dictionary")
+
+        execution = self.get(execution_id)
+        if (execution is None or execution.domain != "execution"
+                or execution.parent_id != evaluation_run_id):
+            raise ValueError("actual invocation start requires its exact execution run")
+        authorization_id = identity(
+            "gate_authorization",
+            [evaluation_run_id, gate, profile_identity, profile_commitment],
+        )
+        authorization = self.get(authorization_id)
+        if authorization is None or authorization.domain != "gate_authorization":
+            raise ValueError("actual invocation start requires exact gate authorization")
+
+        payload = {
+            "evaluation_run_id": evaluation_run_id,
+            "execution_id": execution_id,
+            "gate": gate,
+            "profile_identity": profile_identity,
+            "profile_commitment": profile_commitment,
+            "invocation_id": invocation_id,
+            "started_at": started_at,
+            "invocation_pins": invocation_pins,
+        }
+        return self._append_validated(LedgerRecord.create(
+            "gate_invocation_start",
+            [execution_id, gate, profile_commitment, invocation_id],
+            payload, execution_id,
+        ))
+
+    def _record_actual_execution_terminal(
+        self, *, start_id: str, status: str, ended_at: str,
+        provenance_kind: str, upstream_result_reference: str,
+        upstream_result_commitment: str, authoritative_typed_outcome: str,
+        sanitized_provenance: dict[str, object],
+    ) -> LedgerRecord:
+        """Issue the sole terminal transition for a durable governed start."""
+        require_identity(start_id, "gate_invocation_start")
+        start = self.get(start_id)
+        if start is None or start.domain != "gate_invocation_start":
+            raise ValueError("actual invocation terminal requires a matching start")
+        start_payload = json.loads(start.semantic_json)
+        gate = start_payload.get("gate")
+        if status not in _ACTUAL_TERMINAL_STATUSES:
+            raise ValueError("actual invocation terminal has invalid lifecycle status")
+        if provenance_kind != _ACTUAL_PROVENANCE_KINDS.get(gate):
+            raise ValueError("actual invocation terminal has wrong gate provenance")
+        ended = self._parse_timestamp(ended_at, "ended_at")
+        if ended < self._parse_timestamp(start_payload.get("started_at"), "started_at"):
+            raise ValueError("actual invocation end precedes its durable start")
+        for value, label in (
+            (upstream_result_reference, "upstream result reference"),
+            (authoritative_typed_outcome, "authoritative typed outcome"),
+        ):
+            if not isinstance(value, str) or not value or value != value.strip():
+                raise ValueError(f"{label} must be non-empty trimmed text")
+        self._require_sha256(upstream_result_commitment,
+                             "upstream result commitment")
+        if type(sanitized_provenance) is not dict:
+            raise ValueError("sanitized provenance must be a dictionary")
+
+        payload = {
+            "start_id": start_id,
+            "evaluation_run_id": start_payload["evaluation_run_id"],
+            "execution_id": start_payload["execution_id"],
+            "gate": start_payload["gate"],
+            "profile_identity": start_payload["profile_identity"],
+            "profile_commitment": start_payload["profile_commitment"],
+            "invocation_id": start_payload["invocation_id"],
+            "started_at": start_payload["started_at"],
+            "ended_at": ended_at,
+            "status": status,
+            "provenance_kind": provenance_kind,
+            "invocation_pins": start_payload["invocation_pins"],
+            "upstream_result_reference": upstream_result_reference,
+            "upstream_result_commitment": upstream_result_commitment,
+            "authoritative_typed_outcome": authoritative_typed_outcome,
+            "sanitized_provenance": sanitized_provenance,
+        }
+        return self._append_validated(LedgerRecord.create(
+            "gate_invocation_receipt", [start_id, "terminal"], payload,
+            start_id,
+        ))
+
+    @staticmethod
+    def _parse_timestamp(value: object, label: str) -> datetime:
+        if not isinstance(value, str) or not value or value != value.strip():
+            raise ValueError(f"{label} must be non-empty timestamp text")
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError(f"{label} must be ISO-8601") from exc
+        if parsed.tzinfo is None:
+            raise ValueError(f"{label} must include a timezone")
+        return parsed
+
+    @staticmethod
+    def _require_sha256(value: object, label: str) -> str:
+        if (not isinstance(value, str) or not value.startswith("sha256:")
+                or len(value) != 71):
+            raise ValueError(f"{label} must be a SHA-256 commitment")
+        try:
+            int(value[7:], 16)
+        except ValueError as exc:
+            raise ValueError(f"{label} must be a SHA-256 commitment") from exc
+        return value
+
     def _validate_links(self, record: LedgerRecord) -> None:
         payload = json.loads(record.semantic_json)
         key = json.loads(record.identity_key_json)
@@ -194,6 +827,12 @@ class SqliteEvaluationStore:
             "evaluation_run": "evaluation_plan", "execution": "evaluation_run",
             "observation": "execution", "judgment": "execution", "review": "execution",
             "re_adjudication": "judgment", "report": "evaluation_run",
+            "gate_authorization": "evaluation_run",
+            "gate_execution_receipt": "execution",
+            "docker_namespace": "execution",
+            "docker_cleanup": "docker_namespace",
+            "gate_invocation_start": "execution",
+            "gate_invocation_receipt": "gate_invocation_start",
         }[record.domain]
         require_identity(record.parent_id, required_parent)
         if required_parent == "evaluation_plan":
@@ -208,10 +847,120 @@ class SqliteEvaluationStore:
         if record.domain == "execution":
             run = self.get(record.parent_id)
             plan = self.get_plan(run.parent_id)
-            if len(key) != 3 or key[1] not in {f"S{i}" for i in range(1, 7)} or type(key[2]) is not int or not 1 <= key[2] <= plan.repetitions:
+            original_shape = len(key) == 3
+            replacement_shape = (
+                len(key) == 5 and key[3] == "replacement"
+                and isinstance(key[4], str)
+            )
+            if (not (original_shape or replacement_shape)
+                    or key[1] not in {f"S{i}" for i in range(1, 7)}
+                    or type(key[2]) is not int or not 1 <= key[2] <= plan.repetitions):
                 raise ValueError("execution identity must bind scenario and admitted repetition")
             if payload.get("scenario_id") != key[1] or payload.get("repetition") != key[2]:
                 raise ValueError("execution payload does not match identity")
+            if replacement_shape:
+                original_id = require_identity(key[4], "execution")
+                original = self.get(original_id)
+                if (original is None or original.domain != "execution"
+                        or original.parent_id != record.parent_id):
+                    raise ValueError("replacement must reference an existing execution in the run")
+                original_key = json.loads(original.identity_key_json)
+                if (len(original_key) != 3
+                        or original_key[1:3] != key[1:3]
+                        or payload.get("replacement_for_execution_id") != original_id
+                        or payload.get("planned_slot_execution_id") != original_id):
+                    raise ValueError("replacement lineage does not match the original planned slot")
+            elif payload.get("replacement_for_execution_id") is not None:
+                raise ValueError("original execution cannot claim replacement lineage")
+        if record.domain == "gate_authorization":
+            if (len(key) != 4
+                    or key != [record.parent_id, payload.get("gate"),
+                               payload.get("profile_identity"),
+                               payload.get("profile_commitment")]
+                    or payload.get("evaluation_run_id") != record.parent_id):
+                raise ValueError("gate authorization does not bind exact run/gate/profile")
+        if record.domain == "gate_execution_receipt":
+            execution = self.get(record.parent_id)
+            if (len(key) != 3
+                    or key != [record.parent_id, payload.get("gate"),
+                               payload.get("profile_commitment")]
+                    or payload.get("execution_id") != record.parent_id
+                    or payload.get("evaluation_run_id") != execution.parent_id):
+                raise ValueError("gate receipt does not bind exact run/execution/gate/profile")
+        if record.domain == "gate_invocation_start":
+            execution = self.get(record.parent_id)
+            if (len(key) != 4
+                    or key != [record.parent_id, payload.get("gate"),
+                               payload.get("profile_commitment"),
+                               payload.get("invocation_id")]
+                    or payload.get("execution_id") != record.parent_id
+                    or payload.get("evaluation_run_id") != execution.parent_id):
+                raise ValueError("gate invocation does not bind exact run/execution/gate/profile")
+        if record.domain == "gate_invocation_receipt":
+            start = self.get(record.parent_id)
+            start_payload = json.loads(start.semantic_json)
+            if (len(key) != 2 or key != [record.parent_id, "terminal"]
+                    or payload.get("start_id") != record.parent_id
+                    or payload.get("invocation_id") != start_payload.get("invocation_id")
+                    or payload.get("evaluation_run_id") != start_payload.get("evaluation_run_id")
+                    or payload.get("execution_id") != start_payload.get("execution_id")
+                    or payload.get("gate") != start_payload.get("gate")
+                    or payload.get("profile_identity") != start_payload.get("profile_identity")
+                    or payload.get("profile_commitment") != start_payload.get("profile_commitment")
+                    or payload.get("started_at") != start_payload.get("started_at")
+                    or payload.get("invocation_pins") != start_payload.get("invocation_pins")):
+                raise ValueError("terminal invocation receipt contradicts its durable start")
+        if record.domain == "docker_namespace":
+            execution = self.get(record.parent_id)
+            if (len(key) != 2
+                    or key != [record.parent_id, payload.get("profile_commitment")]
+                    or payload.get("execution_id") != record.parent_id
+                    or payload.get("evaluation_run_id") != execution.parent_id):
+                raise ValueError("Docker namespace does not bind exact run/execution/profile")
+        if record.domain == "docker_cleanup":
+            namespace = self.get(record.parent_id)
+            namespace_payload = json.loads(namespace.semantic_json)
+            if (len(key) != 2 or key != [record.parent_id, "cleanup"]
+                    or payload.get("namespace_id") != record.parent_id
+                    or payload.get("project_name") !=
+                        namespace_payload.get("project_name")
+                    or payload.get("volume_identities") !=
+                        namespace_payload.get("volume_identities")
+                    or payload.get("workspace_root") !=
+                        namespace_payload.get("workspace_root")):
+                raise ValueError("Docker cleanup does not bind exact namespace target")
+            invocation_fields = (
+                payload.get("invocation_start_id"),
+                payload.get("invocation_id"),
+                payload.get("invocation_started_at"),
+            )
+            if any(value is not None for value in invocation_fields):
+                if any(value is None for value in invocation_fields):
+                    raise ValueError("Docker cleanup invocation binding is incomplete")
+                start = self.get(payload["invocation_start_id"])
+                if start is None or start.domain != "gate_invocation_start":
+                    raise ValueError("Docker cleanup invocation start is missing")
+                start_payload = json.loads(start.semantic_json)
+                if (start_payload.get("gate") != "DOCKER_RCA_E2E"
+                        or start_payload.get("evaluation_run_id") !=
+                            namespace_payload.get("evaluation_run_id")
+                        or start_payload.get("execution_id") !=
+                            namespace_payload.get("execution_id")
+                        or start_payload.get("profile_identity") !=
+                            namespace_payload.get("profile_identity")
+                        or start_payload.get("profile_commitment") !=
+                            namespace_payload.get("profile_commitment")
+                        or start_payload.get("invocation_id") !=
+                            payload.get("invocation_id")
+                        or start_payload.get("started_at") !=
+                            payload.get("invocation_started_at")
+                        or self._parse_timestamp(
+                            payload.get("completed_at"), "completed_at") <
+                            self._parse_timestamp(
+                                payload.get("invocation_started_at"),
+                                "invocation_started_at")):
+                    raise ValueError(
+                        "Docker cleanup does not bind exact invocation context")
         if record.domain == "judgment":
             if payload.get("kind") != "ORIGINAL":
                 raise ValueError("original judgment kind required")
@@ -264,7 +1013,10 @@ class SqliteEvaluationStore:
         result = LedgerRecord(row[0], record_id, row[1], row[2], row[3], row[4])
         try:
             result.validate()
-        except ValueError as exc:
+            self._validate_links(result)
+        except EvaluationStoreIntegrityError:
+            raise
+        except (ValueError, TypeError, KeyError, AttributeError) as exc:
             raise EvaluationStoreIntegrityError("invalid ledger record") from exc
         return result
 
@@ -284,8 +1036,21 @@ class SqliteEvaluationStore:
                 if canonical_bytes(json.loads(raw)) != raw:
                     raise EvaluationStoreIntegrityError("noncanonical plan row")
                 self.get_plan(plan_id)
+            invocation_bindings: dict[str, tuple[object, ...]] = {}
             for (record_id,) in self._db.execute("SELECT record_id FROM ledger"):
                 record = self.get(record_id)
-                self._validate_links(record)
+                if record.domain == "gate_invocation_start":
+                    payload = json.loads(record.semantic_json)
+                    invocation_id = payload["invocation_id"]
+                    binding = tuple(
+                        payload.get(field)
+                        for field in _ACTUAL_INVOCATION_BINDING_FIELDS
+                    )
+                    existing = invocation_bindings.setdefault(
+                        invocation_id, binding)
+                    if existing != binding:
+                        raise EvaluationStoreIntegrityError(
+                            "actual invocation identity has conflicting bindings"
+                        )
         except (sqlite3.Error, ValueError, TypeError) as exc:
             raise EvaluationStoreIntegrityError("evaluation store readiness failed") from exc

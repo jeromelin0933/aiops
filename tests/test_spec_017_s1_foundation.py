@@ -6,6 +6,11 @@ import sqlite3
 
 import pytest
 
+import rca_evaluation.adjudication as protected_adjudication
+from rca_evaluation.adjudication import (
+    ADJUDICATION_EVALUATOR_IDENTITY, ADJUDICATION_EVALUATOR_VERSION,
+)
+
 from rca_evaluation.authority import (
     PM_AUTHORITY, TrustedAmendmentAuthorization, TrustedApprovalRegistry,
     TrustedOracleApproval,
@@ -46,6 +51,94 @@ def plan(revision):
         model="model-a", prompt="prompt-hash", schema="schema-hash",
         corpus_index="index-hash", configuration="config-hash", repetitions=5,
     )
+
+
+def protected_original(store, p, execution, *, result="PASS", label="original"):
+    source = store.append(LedgerRecord.create(
+        "observation", [execution.record_id, "judgment-source", label],
+        {"kind": "PUBLIC_OBSERVATION"}, execution.record_id))
+    input_hash = commitment({"execution": execution.record_id, "label": label})
+    findings = [{"production_claim_id": "claim-1",
+                 "atomic_commitment": commitment({"claim": "claim-1"}),
+                 "disposition": "SUPPORTED"}]
+    ucr = {"status": "SCORED", "numerator": 0, "denominator": 1,
+           "contradicted_count": 0, "rate_fraction": [0, 1]}
+    claim_facts = commitment(findings)
+    evaluated = commitment({
+        **ucr, "findings": findings, "integrity_errors": []})
+    reviews = tuple(store.append(LedgerRecord.create(
+        "review", [execution.record_id, "CLAIM_ADJUDICATION", label, reviewer], {
+            "stage": "CLAIM_ADJUDICATION", "reviewer_id": reviewer,
+            "input_commitment": input_hash,
+            "claim_facts_commitment": claim_facts,
+            "result_commitment": evaluated,
+        }, execution.record_id)) for reviewer in ("reviewer-a", "reviewer-b"))
+    claim_sources = (source, *reviews)
+    claim_payload = {
+        "kind": "UNSUPPORTED_CLAIM_RESULT",
+        "governed_adjudicator_identity": ADJUDICATION_EVALUATOR_IDENTITY,
+        "adjudicator_version": ADJUDICATION_EVALUATOR_VERSION,
+        "evaluation_run_id": execution.parent_id,
+        "execution_id": execution.record_id,
+        "scenario_id": json.loads(execution.semantic_json)["scenario_id"],
+        "oracle_revision_id": p.oracle_revision_id,
+        "oracle_scenario_commitment": commitment({"scenario": "S1"}),
+        "input_commitment": input_hash,
+        "production_claim_identities": ["claim-1"],
+        "production_claim_commitments": [commitment({"claim": "claim-1"})],
+        "claim_adjudications": findings,
+        "claim_review_ids": [item.record_id for item in reviews],
+        "source_record_ids": [item.record_id for item in claim_sources],
+        "source_record_commitments": [
+            item.semantic_commitment for item in claim_sources],
+        "claim_facts_commitment": claim_facts,
+        "unsupported_claim_result": ucr,
+    }
+    claim_payload["governed_result_commitment"] = commitment({
+        "claim_adjudications": findings, "ucr": ucr,
+        "claim_facts_commitment": claim_payload["claim_facts_commitment"]})
+    claim = store._append_protected_adjudication(LedgerRecord.create(
+        "observation", [execution.record_id, "UNSUPPORTED_CLAIM_RESULT", label],
+        claim_payload, execution.record_id),
+        authority=protected_adjudication._ADJUDICATION_ISSUANCE_AUTHORITY)
+    scoring = {"root_cause_identification_success": result in {"MATCH", "PASS"}}
+    stage2 = tuple(store.append(LedgerRecord.create(
+        "review", [execution.record_id, "STAGE2", label, reviewer], {
+            "stage": "STAGE2", "reviewer_id": reviewer,
+            "oracle_revision_id": p.oracle_revision_id,
+            "oracle_scenario_id": json.loads(execution.semantic_json)["scenario_id"],
+            "oracle_scenario_commitment": commitment({"scenario": "S1"}),
+            "top_hypothesis": {"causal_class": "OTHER",
+                               "granularity": "operational",
+                               "accepted_alternative_id": None},
+            "root_cause_success": scoring["root_cause_identification_success"],
+        }, execution.record_id)) for reviewer in ("stage2-a", "stage2-b"))
+    sources = (source, claim, *reviews, *stage2)
+    payload = {
+        "kind": "ORIGINAL",
+        "governed_adjudicator_identity": ADJUDICATION_EVALUATOR_IDENTITY,
+        "adjudicator_version": ADJUDICATION_EVALUATOR_VERSION,
+        "evaluation_run_id": execution.parent_id,
+        "execution_id": execution.record_id,
+        "oracle_revision_id": p.oracle_revision_id,
+        "oracle_scenario_id": json.loads(execution.semantic_json)["scenario_id"],
+        "oracle_scenario_commitment": commitment({"scenario": "S1"}),
+        "result": result, "root_cause_predicates": scoring,
+        "stage2_review_ids": [item.record_id for item in stage2],
+        "final_scoring_commitment": commitment(scoring),
+        "claim_result_record_id": claim.record_id,
+        "claim_result_record_commitment": claim.semantic_commitment,
+        "unsupported_claim_result": ucr,
+        "source_record_ids": [item.record_id for item in sources],
+        "source_record_commitments": [item.semantic_commitment for item in sources],
+        "predicate_scoring_basis_commitment": commitment({
+            "root_cause": scoring, "unsupported_claim_result": ucr}),
+    }
+    payload["judgment_commitment"] = commitment(payload)
+    return store._append_protected_adjudication(LedgerRecord.create(
+        "judgment", [execution.record_id, "original"], payload,
+        execution.record_id),
+        authority=protected_adjudication._ADJUDICATION_ISSUANCE_AUTHORITY)
 
 
 def test_canonicalization_commitment_and_immutable_revision():
@@ -137,9 +230,7 @@ def test_re_adjudication_preserves_original_judgment(tmp_path):
                                                 {"oracle_revision_id": first.oracle_revision_id}, p.evaluation_plan_id))
         execution = store.append(LedgerRecord.create("execution", [run.record_id, "S1", 1],
                                                       {"scenario_id": "S1", "repetition": 1}, run.record_id))
-        original = store.append(LedgerRecord.create("judgment", [execution.record_id, "original"],
-                                                     {"kind": "ORIGINAL", "oracle_revision_id": first.oracle_revision_id,
-                                                      "result": "MATCH"}, execution.record_id))
+        original = protected_original(store, p, execution)
         payload = {"run_id": run.record_id, "original_judgment_id": original.record_id,
                    "original_oracle_revision_id": first.oracle_revision_id,
                    "new_oracle_revision_id": later.oracle_revision_id, "reason": "approved correction",
@@ -149,7 +240,7 @@ def test_re_adjudication_preserves_original_judgment(tmp_path):
                                               {**payload, "authorization_reference": ""}, original.record_id))
         new = store.append(LedgerRecord.create("re_adjudication", [original.record_id, "later"],
                                                 payload, original.record_id))
-        assert json.loads(store.get(original.record_id).semantic_json)["result"] == "MATCH"
+        assert json.loads(store.get(original.record_id).semantic_json)["result"] == "PASS"
         assert json.loads(store.get(new.record_id).semantic_json)["result"] == "NO_MATCH"
         assert store.get_plan(p.evaluation_plan_id).oracle_revision_id == first.oracle_revision_id
 
@@ -235,14 +326,11 @@ def test_authorized_re_adjudication_exact_scope_and_lineage(tmp_path):
                                                 {"oracle_revision_id": first.oracle_revision_id}, p.evaluation_plan_id))
         execution = store.append(LedgerRecord.create("execution", [run.record_id, "S1", 1],
                                                       {"scenario_id": "S1", "repetition": 1}, run.record_id))
-        original = store.append(LedgerRecord.create("judgment", [execution.record_id, "original"],
-                                                     {"kind": "ORIGINAL", "oracle_revision_id": first.oracle_revision_id,
-                                                      "result": "MATCH"}, execution.record_id))
+        original = protected_original(store, p, execution)
         second_execution = store.append(LedgerRecord.create("execution", [run.record_id, "S1", 2],
                                                              {"scenario_id": "S1", "repetition": 2}, run.record_id))
-        second_original = store.append(LedgerRecord.create("judgment", [second_execution.record_id, "original"],
-                                                            {"kind": "ORIGINAL", "oracle_revision_id": first.oracle_revision_id,
-                                                             "result": "MATCH"}, second_execution.record_id))
+        second_original = protected_original(
+            store, p, second_execution, label="second-original")
         base = {"run_id": run.record_id, "original_judgment_id": original.record_id,
                 "original_oracle_revision_id": first.oracle_revision_id,
                 "new_oracle_revision_id": target.oracle_revision_id,
@@ -264,7 +352,7 @@ def test_authorized_re_adjudication_exact_scope_and_lineage(tmp_path):
             attempt(original.record_id, {**base, "new_oracle_revision_id": unrelated.oracle_revision_id}, "unrelated")
         later = attempt(original.record_id, base, "authorized")
         assert attempt(original.record_id, base, "authorized") == later
-        assert json.loads(store.get(original.record_id).semantic_json)["result"] == "MATCH"
+        assert json.loads(store.get(original.record_id).semantic_json)["result"] == "PASS"
         assert json.loads(store.get(later.record_id).semantic_json)["result"] == "NO_MATCH"
 
 
@@ -279,19 +367,17 @@ def test_one_original_judgment_per_execution_domain_and_sqlite(tmp_path):
                                                 {"oracle_revision_id": revision.oracle_revision_id}, p.evaluation_plan_id))
         execution = store.append(LedgerRecord.create("execution", [run.record_id, "S1", 1],
                                                       {"scenario_id": "S1", "repetition": 1}, run.record_id))
-        first = LedgerRecord.create("judgment", [execution.record_id, "original"],
-                                    {"kind": "ORIGINAL", "oracle_revision_id": revision.oracle_revision_id,
-                                     "result": "MATCH"}, execution.record_id)
-        store.append(first)
-        assert store.append(first) == first
-        with pytest.raises(LedgerConflict):
+        first = protected_original(store, p, execution)
+        with pytest.raises(ValueError, match="protected"):
+            store.append(first)
+        with pytest.raises(ValueError, match="protected"):
             store.append(LedgerRecord.create("judgment", [execution.record_id, "original"],
                                               {"kind": "ORIGINAL", "oracle_revision_id": revision.oracle_revision_id,
                                                "result": "NO_MATCH"}, execution.record_id))
         different_id = LedgerRecord.create("judgment", [execution.record_id, "another-original"],
                                            {"kind": "ORIGINAL", "oracle_revision_id": revision.oracle_revision_id,
                                             "result": "MATCH"}, execution.record_id)
-        with pytest.raises(LedgerConflict):
+        with pytest.raises(ValueError, match="protected"):
             store.append(different_id)
         with pytest.raises(sqlite3.IntegrityError):
             store._db.execute("INSERT INTO ledger VALUES (?,?,?,?,?,?)", (

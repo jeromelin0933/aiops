@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from pathlib import Path
 
 from .identity import canonical_bytes, commitment, identity, require_identity
 from .authority import PM_AUTHORITY
@@ -12,6 +13,10 @@ from .authority import PM_AUTHORITY
 SCENARIOS = tuple(f"S{i}" for i in range(1, 7))
 ORACLE_FIELDS = tuple(f"O{i}" for i in range(1, 11))
 SCHEMA_VERSION = "1"
+OFFICIAL_ORACLE_ARTIFACT_SCHEMA = "spec017.oracle-artifact.v1"
+APPROVED_SPEC_COMMIT = "7996d39242d9aeabbfc481532a89afa530a12088"
+APPROVED_SPEC_DOCUMENT = "docs/spec/SPEC-017_RCA_Evaluation_E2E_Validation.md"
+APPROVED_SPEC_SECTION = "§7"
 
 
 def _reference(value: str, name: str) -> str:
@@ -90,6 +95,62 @@ class OracleRevision:
         if digest != self.semantic_content_commitment or self.oracle_revision_id != identity(
                 "oracle_revision", [self.oracle_set_id, self.schema_version, digest]):
             raise ValueError("Oracle content commitment mismatch")
+
+
+@dataclass(frozen=True, slots=True)
+class OfficialOracleArtifact:
+    """Versioned evaluation-only materialization of Approved SPEC-017 §7."""
+
+    artifact_schema: str
+    artifact_revision: str
+    source_document: str
+    source_section: str
+    approved_commit: str
+    artifact_commitment: str
+    revision: OracleRevision
+
+
+def load_official_oracle(path: str | Path) -> OfficialOracleArtifact:
+    """Load the official sidecar and derive the existing S1 OracleRevision.
+
+    The JSON file is data, never a production import.  Its commitment covers
+    metadata and semantics; Oracle admission remains owned by the existing
+    ``SqliteEvaluationStore`` flow.
+    """
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    required = {
+        "artifact_schema", "artifact_revision", "oracle_set_id", "source",
+        "approval", "semantics",
+    }
+    if not isinstance(raw, dict) or set(raw) != required:
+        raise ValueError("official Oracle artifact schema is invalid")
+    source = raw["source"]
+    approval = raw["approval"]
+    if source != {
+        "document": APPROVED_SPEC_DOCUMENT,
+        "section": APPROVED_SPEC_SECTION,
+        "approved_commit": APPROVED_SPEC_COMMIT,
+    }:
+        raise ValueError("official Oracle source does not identify Approved SPEC-017 §7")
+    if raw["artifact_schema"] != OFFICIAL_ORACLE_ARTIFACT_SCHEMA:
+        raise ValueError("unsupported official Oracle artifact schema")
+    if raw["artifact_revision"] != "spec017-s1-s6-v1":
+        raise ValueError("unsupported official Oracle artifact revision")
+    if not isinstance(approval, dict) or set(approval) != {
+        "authority", "reference", "approved_at", "created_at",
+    }:
+        raise ValueError("official Oracle approval metadata is invalid")
+    revision = OracleRevision.approved(
+        oracle_set_id=raw["oracle_set_id"], semantics=raw["semantics"],
+        created_at=approval["created_at"],
+        approval_authority=approval["authority"],
+        approval_reference=approval["reference"],
+        approved_at=approval["approved_at"],
+    )
+    return OfficialOracleArtifact(
+        raw["artifact_schema"], raw["artifact_revision"], source["document"],
+        source["section"], source["approved_commit"], commitment(raw), revision,
+    )
 
 
 @dataclass(frozen=True, slots=True)
