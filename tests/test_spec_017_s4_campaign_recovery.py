@@ -17,8 +17,11 @@ from rca_evaluation.campaign import (
     ExecutionDisposition, ExecutionResult, FailureCase, KnowledgeDisposition,
     PlannedExecution, UpstreamOutcome,
 )
-from rca_evaluation.identity import commitment, identity
-from rca_evaluation.fixtures import FixtureAdmissionRequest, load_fixture_manifest
+from rca_evaluation.identity import canonical_text_bytes, commitment, identity
+from rca_evaluation.fixtures import (
+    OFFICIAL_FIXTURE_MANIFEST_COMMITMENT, FixtureAdmissionRequest,
+    load_fixture_manifest,
+)
 from rca_evaluation.latency import ExternalObservation
 from incident_evidence.contracts import MaterialityJudgement
 from rca_persistence.contracts import (
@@ -45,6 +48,22 @@ OFFICIAL_FIXTURES = load_fixture_manifest(
     oracle=OFFICIAL_ORACLE,
     repository_root=ROOT,
 )
+
+
+def _portable_fixture_repository(root, *, crlf=False, mutate_scenarios=False):
+    scenario = canonical_text_bytes((ROOT / "configs/scenarios.yaml").read_bytes())
+    controls = canonical_text_bytes((
+        ROOT / "configs/rca_evaluation/fixtures/spec017_r2s4_evaluation_controls_v2.json"
+    ).read_bytes())
+    if mutate_scenarios:
+        scenario = scenario.replace(b"random_seed: 42", b"random_seed: 43")
+    if crlf:
+        scenario = scenario.replace(b"\n", b"\r\n")
+        controls = controls.replace(b"\n", b"\r\n")
+    (root / "configs/rca_evaluation/fixtures").mkdir(parents=True, exist_ok=True)
+    (root / "configs/scenarios.yaml").write_bytes(scenario)
+    (root / "configs/rca_evaluation/fixtures/spec017_r2s4_evaluation_controls_v2.json").write_bytes(
+        controls)
 
 
 def _oracle():
@@ -871,3 +890,47 @@ def test_required_fixture_admission_and_campaign_coverage_fail_closed():
         replace(campaign, recovery_cases=tuple(
             item for item in campaign.recovery_cases
             if item.kind == "REFRESH")).required_restart_case_ids
+
+
+@pytest.mark.parametrize("crlf", (False, True))
+def test_official_fixture_sources_are_portable_across_controlled_eol(tmp_path, crlf):
+    _portable_fixture_repository(tmp_path, crlf=crlf)
+    loaded = load_fixture_manifest(
+        ROOT / "configs/rca_evaluation/fixtures/spec017_s1_s6_fixture_manifest_v1.json",
+        oracle=OFFICIAL_ORACLE, repository_root=tmp_path)
+    assert loaded.manifest_commitment == OFFICIAL_FIXTURE_MANIFEST_COMMITMENT
+
+
+def test_fixture_source_content_change_and_old_crlf_commitment_fail_closed(tmp_path):
+    _portable_fixture_repository(tmp_path, mutate_scenarios=True)
+    with pytest.raises(ValueError, match="source commitment mismatch"):
+        load_fixture_manifest(
+            ROOT / "configs/rca_evaluation/fixtures/spec017_s1_s6_fixture_manifest_v1.json",
+            oracle=OFFICIAL_ORACLE, repository_root=tmp_path)
+
+    _portable_fixture_repository(tmp_path)
+    raw = json.loads((
+        ROOT / "configs/rca_evaluation/fixtures/spec017_s1_s6_fixture_manifest_v1.json"
+    ).read_bytes())
+    for entry in raw["entries"]:
+        if entry["source_reference"] and entry["source_reference"].startswith(
+            "configs/scenarios.yaml#"
+        ):
+            entry["source_commitment"] = (
+                "sha256:baa97bce3afe413049c08b726e2d75794019755db358a700ea3990aaa6d97f8e"
+            )
+    altered = tmp_path / "old-crlf-manifest.json"
+    altered.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(ValueError, match="source commitment mismatch"):
+        load_fixture_manifest(
+            altered, oracle=OFFICIAL_ORACLE, repository_root=tmp_path)
+
+
+def test_official_fixture_manifest_reconciles_canonical_source_commitment():
+    path = ROOT / "configs/rca_evaluation/fixtures/spec017_s1_s6_fixture_manifest_v1.json"
+    raw = json.loads(path.read_bytes())
+    assert commitment(raw) == OFFICIAL_FIXTURE_MANIFEST_COMMITMENT
+    nominal = [item for item in raw["entries"] if item["variant"] == "nominal"]
+    assert {item["source_commitment"] for item in nominal} == {
+        "sha256:48bbb51aa2595972707101b95ae13b1e9707140ebc56ea0b8da6a9e331826494"
+    }

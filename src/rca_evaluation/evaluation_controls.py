@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import hashlib
 import json
 from pathlib import Path
 
-from .identity import commitment
+from .identity import canonical_text_bytes, canonical_text_commitment, commitment
 
 
 APPROVAL_REFERENCE = "PM-SPEC017-R2S4-20261013"
@@ -95,10 +94,10 @@ def load_evaluation_control_artifact(
 ) -> EvaluationControlArtifact:
     artifact_path = Path(path)
     raw_bytes = artifact_path.read_bytes()
-    actual = "sha256:" + hashlib.sha256(raw_bytes).hexdigest()
+    actual = canonical_text_commitment(raw_bytes)
     if actual != CONTROL_ARTIFACT_COMMITMENT:
         raise ValueError("evaluation control artifact commitment mismatch")
-    raw = json.loads(raw_bytes)
+    raw = json.loads(canonical_text_bytes(raw_bytes))
     if (raw.get("schema_version") != CONTROL_SCHEMA
             or raw.get("classification") != "EVALUATION ONLY"
             or raw.get("pm_approval_reference") != APPROVAL_REFERENCE

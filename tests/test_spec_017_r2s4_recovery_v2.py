@@ -36,7 +36,7 @@ from rca_evaluation.evaluation_controls import (
     ControlledEvaluationInterruption, GovernedCheckpointAdapter, arm_failpoint,
     load_evaluation_control_artifact,
 )
-from rca_evaluation.identity import commitment
+from rca_evaluation.identity import canonical_text_bytes, commitment
 from rca_evaluation.ledger import LedgerRecord
 from rca_evaluation.recovery_records import (
     ValidatedDeviationResult, ValidatedRecoveryResult,
@@ -76,6 +76,30 @@ from rca_evaluation.runner import (
 ARTIFACT_PATH = Path(
     "configs/rca_evaluation/fixtures/spec017_r2s4_evaluation_controls_v2.json"
 )
+
+
+@pytest.mark.parametrize("crlf", (False, True))
+def test_evaluation_control_artifact_is_portable_across_controlled_eol(
+    tmp_path, crlf,
+):
+    content = canonical_text_bytes(ARTIFACT_PATH.read_bytes())
+    if crlf:
+        content = content.replace(b"\n", b"\r\n")
+    candidate = tmp_path / "controls.json"
+    candidate.write_bytes(content)
+    artifact = load_evaluation_control_artifact(candidate)
+    assert artifact.pm_approval_reference == "PM-SPEC017-R2S4-20261013"
+
+
+def test_evaluation_control_artifact_content_mutation_fails_closed(tmp_path):
+    content = canonical_text_bytes(ARTIFACT_PATH.read_bytes()).replace(
+        b'"fixture_set_revision": "v2"',
+        b'"fixture_set_revision": "v3"',
+    )
+    candidate = tmp_path / "controls.json"
+    candidate.write_bytes(content)
+    with pytest.raises(ValueError, match="commitment mismatch"):
+        load_evaluation_control_artifact(candidate)
 
 
 class _OmissionAdapter(FakeAdapter):

@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import ast
-import hashlib
 import json
 import re
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-from .identity import commitment
+from .identity import canonical_text_bytes, canonical_text_commitment, commitment
 from .isolation import IsolationViolation, _FORBIDDEN_NAMES, _normalized
 
 
@@ -66,9 +65,9 @@ _MANIFEST_PATH = Path(__file__).with_name("production_sensitive_inventory.json")
 def _load_manifest() -> tuple[dict, tuple[SensitiveInventoryEntry, ...]]:
     try:
         raw = _MANIFEST_PATH.read_bytes()
-        if hashlib.sha256(raw).hexdigest() != _MANIFEST_SHA256:
+        if canonical_text_commitment(raw) != "sha256:" + _MANIFEST_SHA256:
             raise IsolationViolation("production-sensitive classification manifest commitment changed")
-        data = json.loads(raw)
+        data = json.loads(canonical_text_bytes(raw))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise IsolationViolation("production-sensitive classification manifest is unavailable") from exc
     if data.get("schema_version") != 1 or tuple(data.get("governed_roots", ())) != _GOVERNED_ROOTS:
@@ -170,7 +169,8 @@ def validate_production_sensitive_inventory(
         if root not in path.parents or not path.is_file():
             raise IsolationViolation(f"inventory path is unresolved: {entry.relative_path}")
         try:
-            source = path.read_text(encoding="utf-8").replace("\r\n", "\n")
+            source_bytes = canonical_text_bytes(path.read_bytes())
+            source = source_bytes.decode("utf-8")
             tree = ast.parse(source, filename=str(path))
         except (OSError, UnicodeError, SyntaxError) as exc:
             raise IsolationViolation(f"inventory source cannot be parsed: {entry.relative_path}") from exc
@@ -200,7 +200,7 @@ def validate_production_sensitive_inventory(
                 modules = tuple(alias.name for alias in node.names)
             if any(module == "rca_evaluation" or module.startswith("rca_evaluation.") for module in modules):
                 raise IsolationViolation(f"production source imports evaluation code: {entry.relative_path}")
-        if hashlib.sha256(source.encode("utf-8")).hexdigest() != entry.source_commitment:
+        if canonical_text_commitment(source_bytes) != "sha256:" + entry.source_commitment:
             label = "reviewed exclusion" if entry.classification is SourceClassification.REVIEWED_EXCLUSION else "approved source"
             raise IsolationViolation(f"{label} commitment changed: {entry.relative_path}")
 

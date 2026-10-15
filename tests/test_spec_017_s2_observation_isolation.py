@@ -17,8 +17,9 @@ from llm_generation.contracts import LocalReadStatus
 from rca_persistence.contracts import LogicalTryIdentity, LogicalTryResultKind
 
 import rca_evaluation.observation as observation_module
+import rca_evaluation.inventory as inventory_module
 from rca_evaluation.authority import PM_AUTHORITY, TrustedApprovalRegistry, TrustedOracleApproval
-from rca_evaluation.identity import commitment, identity
+from rca_evaluation.identity import canonical_text_bytes, commitment, identity
 from rca_evaluation.isolation import (
     ActualOutboundPins,
     AuthoritativeOutboundResolver,
@@ -558,6 +559,21 @@ def test_actual_repository_sensitive_inventory_is_complete_and_scanned():
         for entry in PRODUCTION_SENSITIVE_INVENTORY
     )
     assert audit.inventory_commitment.startswith("sha256:")
+
+
+def test_inventory_manifest_commitment_accepts_lf_and_crlf_only(monkeypatch, tmp_path):
+    canonical = canonical_text_bytes(
+        inventory_module._MANIFEST_PATH.read_bytes())
+    candidate = tmp_path / "production_sensitive_inventory.json"
+    monkeypatch.setattr(inventory_module, "_MANIFEST_PATH", candidate)
+
+    candidate.write_bytes(canonical)
+    assert inventory_module._load_manifest()[0]["schema_version"] == 1
+    candidate.write_bytes(canonical.replace(b"\n", b"\r\n"))
+    assert inventory_module._load_manifest()[0]["schema_version"] == 1
+    candidate.write_bytes(canonical.replace(b'"schema_version": 1', b'"schema_version": 2'))
+    with pytest.raises(IsolationViolation, match="commitment changed"):
+        inventory_module._load_manifest()
 
 
 def test_inventory_omission_and_unresolved_repository_fail_closed(tmp_path):
