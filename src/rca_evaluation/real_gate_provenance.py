@@ -257,6 +257,7 @@ def _receipt(record_id: str, record_commitment: str,
             "manifest_commitment", "release_reference", "embedding_provider",
             "embedding_model", "embedding_profile_identity",
             "retrieval_profile_identity", "index_engine", "index_schema_identity",
+            "distance_metric",
             "chroma_reference", "retrieval_operation_identity",
             "expected_build_context",
         }
@@ -530,6 +531,7 @@ def _real_rag_actual_build_context(
         "embedding_dimension": public.embedding_dimension,
         "index_engine": public.index_engine,
         "index_schema_identity": public.index_schema_identity,
+        "distance_metric": public.distance_metric,
         "artifact_commitment": public.artifact_commitment,
         "lineage_commitment": public.lineage_commitment,
         "staged_commitment": public.staged_commitment,
@@ -573,7 +575,8 @@ def _validate_real_rag_binding(
 ) -> dict[str, object]:
     _validate_real_rag_frozen_binding(expected, frozen, request)
     if (public.retrieval_operation_identity != request.operation_key
-            or public.frozen_build_identity != frozen.frozen_build_identity):
+            or public.frozen_build_identity != frozen.frozen_build_identity
+            or public.distance_metric != expected.distance_metric):
         raise ValueError(
             "Candidate-C public retrieval identity/build does not match invocation"
         )
@@ -602,6 +605,7 @@ def _real_rag_invocation_pins(
         "retrieval_profile_identity": retrieval.profile_identity,
         "index_engine": retrieval.index_engine,
         "index_schema_identity": retrieval.index_schema_identity,
+        "distance_metric": expected.distance_metric,
         "chroma_reference": str(Path(chroma_path).resolve()),
         "retrieval_operation_identity": request.operation_key.value,
         "expected_build_context": expected.pins(),
@@ -635,6 +639,7 @@ def execute_real_rag_invocation(
             or rp.embedding_profile_identity != values["embedding_profile_identity"]
             or rp.index_engine != values["index_engine"]
             or rp.index_schema_identity != values["index_schema_identity"]
+            or index.distance_metric != values["distance_metric"]
             or rp.profile_identity != values["retrieval_profile_identity"]
             or not isolated):
         raise ValueError("REAL_RAG request/adapters do not match the admitted profile")

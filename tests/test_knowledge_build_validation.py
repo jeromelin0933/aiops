@@ -76,6 +76,8 @@ def test_chunk_commitment_binds_frozen_knowledge_type_and_guidance_authority(tmp
         ("duplicate", BuildFailureCode.DUPLICATE_CHUNK),
         ("metadata", BuildFailureCode.METADATA_INVALID),
         ("dimension", BuildFailureCode.EMBEDDING_MISMATCH),
+        ("distance_metric", BuildFailureCode.EMBEDDING_MISMATCH),
+        ("unknown_metric", BuildFailureCode.EMBEDDING_MISMATCH),
         ("integrity", BuildFailureCode.INDEX_INTEGRITY_FAILED),
         ("test_only", BuildFailureCode.ACTIVATION_INELIGIBLE),
     ],
@@ -83,7 +85,15 @@ def test_chunk_commitment_binds_frozen_knowledge_type_and_guidance_authority(tmp
 def test_validator_rejects_incomplete_or_incompatible_index(tmp_path, mutation, expected) -> None:
     store, index, _service, staged = _stage(tmp_path)
     try:
+        if mutation in {"distance_metric", "unknown_metric"}:
+            staged = replace(
+                staged,
+                build_input=replace(staged.build_input, distance_metric="l2"),
+                artifact=replace(staged.artifact, distance_metric="l2"),
+            )
         artifact = index.artifacts[staged.build_identity]
+        if mutation in {"distance_metric", "unknown_metric"}:
+            artifact = staged.artifact
         entry = artifact.entries[0]
         if mutation == "missing":
             artifact = replace(artifact, entries=())
@@ -96,6 +106,10 @@ def test_validator_rejects_incomplete_or_incompatible_index(tmp_path, mutation, 
             artifact = replace(artifact, entries=(replace(entry, metadata_commitment=digest("wrong")),))
         elif mutation == "dimension":
             artifact = replace(artifact, entries=(replace(entry, embedding_dimension=4),))
+        elif mutation == "distance_metric":
+            artifact = replace(artifact, distance_metric="cosine")
+        elif mutation == "unknown_metric":
+            artifact = replace(artifact, distance_metric="historical-unknown")
         elif mutation == "integrity":
             artifact = replace(artifact, integrity_ok=False)
         else:

@@ -37,10 +37,13 @@ def test_fake_provider_team_local_workflow_closes_all_candidate_c_steps(tmp_path
         config.capability.embedding_profile_identity, 768, config.normalization_semantics,
         "chromadb", config.index_schema_identity, "spec014-knowledge-metadata-v1",
         "spec014-build-contract-v2",
+        config.distance_metric,
     )
     raw = json.loads((ROOT / config.manifest_path).read_text(encoding="utf-8"))
     provider = GoogleEmbeddingAdapter(SimpleNamespace(models=FakeModels()), config.capability)
-    index = ChromaIndexAdapter(tmp_path / "chroma", index_schema_identity=config.index_schema_identity)
+    index = ChromaIndexAdapter(
+        tmp_path / "chroma", index_schema_identity=config.index_schema_identity,
+        distance_metric=config.distance_metric)
     with SqliteKnowledgeStore(tmp_path / "knowledge.sqlite3") as store:
         builds = KnowledgeBuildService(store, provider, index)
         staged = builds.stage(

@@ -403,7 +403,7 @@ class GenerationReads:
 
 
 @pytest.fixture
-def adjudication_context(tmp_path, request):
+def adjudication_context(tmp_path, request, monkeypatch):
     result = getattr(request, "param", None) or generation_result()
     revision = approved_oracle()
     store = SqliteEvaluationStore(
@@ -416,9 +416,30 @@ def adjudication_context(tmp_path, request):
         corpus_index="index-a", configuration="config-a", repetitions=2,
     )
     store.admit_plan(plan)
+    # These tests exercise S3 scoring semantics in an explicitly non-official
+    # unit harness.  Production code retains the FORMAL provenance guard; its
+    # fail-closed behavior is covered by the R1 formal-admission suite.
+    monkeypatch.setattr(
+        store, "require_formal_run", lambda run_id: store.get(run_id))
+    reviewer_protocol = {
+        "stage1": {"reviewer_ids": ["R1", "R2"], "reviewer_kind": "HUMAN",
+                   "blind_diagnostic_only": True,
+                   "official_verdict_allowed": False,
+                   "disagreement": "THIRD_HUMAN_TIEBREAK",
+                   "tiebreak_reviewer_id": "R6",
+                   "tiebreak_reviewer_kind": "HUMAN"},
+        "stage2": {"reviewer_ids": ["R3", "R4"], "reviewer_kind": "HUMAN",
+                   "independent": True,
+                   "disagreement": "THIRD_HUMAN_TIEBREAK",
+                   "tiebreak_reviewer_id": "R5",
+                   "tiebreak_reviewer_kind": "HUMAN"},
+        "machine_hard_failure_override_allowed": False,
+        "records_append_only": True,
+    }
     run = store.append(LedgerRecord.create(
         "evaluation_run", [plan.evaluation_plan_id, "run"],
-        {"oracle_revision_id": revision.oracle_revision_id}, plan.evaluation_plan_id,
+        {"oracle_revision_id": revision.oracle_revision_id,
+         "reviewer_protocol": reviewer_protocol}, plan.evaluation_plan_id,
     ))
     execution = store.append(LedgerRecord.create(
         "execution", [run.record_id, "S1", 1],
@@ -435,6 +456,7 @@ def adjudication_context(tmp_path, request):
     adjudicator = TwoStageAdjudicator(
         store, authority, TRUSTED_LEAKAGE_POLICY,
         expected_policy_commitment=TRUSTED_LEAKAGE_POLICY.policy_commitment,
+        reviewer_protocol=reviewer_protocol,
     )
     try:
         yield SimpleNamespace(
@@ -447,6 +469,15 @@ def adjudication_context(tmp_path, request):
 
 def source_facts(context):
     return context.authority.resolve(context.captured)
+
+
+def test_unadmitted_run_cannot_accept_official_review(
+    adjudication_context, monkeypatch,
+):
+    context = adjudication_context
+    monkeypatch.undo()
+    with pytest.raises(ValueError, match="FORMAL admission provenance"):
+        admit(context)
 
 
 def admit(context, **overrides):
@@ -543,7 +574,7 @@ def protected_claim_result(context, criteria, stage1):
             "2026-10-02T02:30:00Z")
     return context.adjudicator.adjudicate_claims(
         context.execution.record_id, stage1,
-        (submission("CR1"), submission("CR2")))
+        (submission("R1"), submission("R2")))
 
 
 def persist_packet_without_admission(context, metadata, policy=TRUSTED_LEAKAGE_POLICY):
@@ -714,7 +745,7 @@ def test_stage1_rejects_omitted_competing_alternative_fact(adjudication_context)
     with pytest.raises(ValueError, match="mandatory conclusion facts"):
         context.adjudicator.record_stage1(
             context.execution.record_id, admitted,
-            (blind("R3", admitted, incomplete), blind("R4", admitted, incomplete)),
+            (blind("R1", admitted, incomplete), blind("R2", admitted, incomplete)),
         )
 
 
@@ -868,6 +899,63 @@ def test_valid_authoritative_two_stage_flow_binds_official_judgment(adjudication
             context.store.get(context.execution.record_id).parent_id),
         context.execution.record_id)
     assert verification.complete and not verification.blockers
+
+
+def test_stage2_reviewer_roster_is_exact_and_tiebreak_is_preregistered(
+    adjudication_context,
+):
+    context = adjudication_context
+    _, stage1 = consensus(context)
+    criteria = context.adjudicator.resolve_authoritative_criteria(
+        context.execution.record_id)
+    derived = context.adjudicator.derive_root_cause_facts(stage1)
+    top = TopHypothesis(RULES["S1"][0], RULES["S1"][1])
+    pair = stage2_pair(
+        context, criteria, stage1, top, derived.facts_commitment)
+    with pytest.raises(ValueError, match="unknown or missing"):
+        context.adjudicator.finalize_stage2(
+            context.execution.record_id, criteria, stage1,
+            (replace(pair[0], reviewer_id="UNKNOWN"), pair[1]))
+    with pytest.raises(ValueError, match="independent"):
+        context.adjudicator.finalize_stage2(
+            context.execution.record_id, criteria, stage1,
+            (pair[0], replace(pair[1], reviewer_id="R3")))
+    with pytest.raises(ReviewIncomplete, match="requires two reviewers"):
+        context.adjudicator.finalize_stage2(
+            context.execution.record_id, criteria, stage1, (pair[0],))
+    disagreement = replace(
+        pair[1], top_hypothesis=TopHypothesis(CausalClass.OTHER, "service"))
+    with pytest.raises(ValueError, match="tie-break"):
+        context.adjudicator.finalize_stage2(
+            context.execution.record_id, criteria, stage1,
+            (pair[0], disagreement,
+             replace(pair[0], reviewer_id="UNKNOWN-TIE")))
+    claim_result = protected_claim_result(context, criteria, stage1)
+    official = context.adjudicator.finalize_stage2(
+        context.execution.record_id, criteria, stage1,
+        (pair[0], disagreement, replace(pair[0], reviewer_id="R5")),
+        claim_result_record_id=claim_result.record_id)
+    assert official.evaluation.root_cause_identification_success
+
+
+def test_machine_hard_failure_cannot_be_human_overridden(adjudication_context):
+    context = adjudication_context
+    _, stage1 = consensus(context)
+    criteria = context.adjudicator.resolve_authoritative_criteria(
+        context.execution.record_id)
+    derived = context.adjudicator.derive_root_cause_facts(stage1)
+    top = TopHypothesis(RULES["S1"][0], RULES["S1"][1])
+    pair = stage2_pair(
+        context, criteria, stage1, top, derived.facts_commitment)
+    claim_result = protected_claim_result(context, criteria, stage1)
+    context.store.append(LedgerRecord.create(
+        "observation", [context.execution.record_id, "final"],
+        {"disposition": "TERMINAL_PRODUCTION_FAILURE",
+         "machine_hard_failure": True}, context.execution.record_id))
+    with pytest.raises(ValueError, match="machine hard failure"):
+        context.adjudicator.finalize_stage2(
+            context.execution.record_id, criteria, stage1, pair,
+            claim_result_record_id=claim_result.record_id)
 
 
 def test_formal_judgment_and_ucr_generic_minting_is_rejected(adjudication_context):
@@ -1040,3 +1128,46 @@ def test_two_reviewer_disagreement_requires_third(adjudication_context):
             context.execution.record_id, admitted,
             (blind("R1", admitted, first), blind("R2", admitted, second)),
         )
+
+
+def test_stage1_primary_order_is_set_semantic(adjudication_context):
+    context = adjudication_context
+    admitted = admit(context)
+    source = source_facts(context)
+    first = reviewed_facts(source)
+    swapped = context.adjudicator.record_stage1(
+        context.execution.record_id, admitted,
+        (blind("R2", admitted, first), blind("R1", admitted, first)))
+    assert swapped.reviewed_facts == first
+
+
+def test_stage1_agreement_rejects_submitted_tiebreak(adjudication_context):
+    context = adjudication_context
+    admitted = admit(context)
+    first = reviewed_facts(source_facts(context))
+    with pytest.raises(ValueError, match="only authorized for disagreement"):
+        context.adjudicator.record_stage1(
+            context.execution.record_id, admitted,
+            (blind("R1", admitted, first), blind("R2", admitted, first),
+             blind("R6", admitted, first)))
+
+
+def test_stage1_registered_tiebreak_resolves_disagreement(adjudication_context):
+    context = adjudication_context
+    admitted = admit(context)
+    source = source_facts(context)
+    first = reviewed_facts(source)
+    second = tuple(
+        replace(item, determination=FactDetermination.FALSE)
+        if item.kind is ReviewedFactKind.OPERATIONAL_CAUSE_GROUNDED else item
+        for item in first)
+    with pytest.raises(ValueError, match="tie-break"):
+        context.adjudicator.record_stage1(
+            context.execution.record_id, admitted,
+            (blind("R1", admitted, first), blind("R2", admitted, second),
+             blind("UNKNOWN", admitted, first)))
+    resolved = context.adjudicator.record_stage1(
+        context.execution.record_id, admitted,
+        (blind("R1", admitted, first), blind("R2", admitted, second),
+         blind("R6", admitted, first)))
+    assert resolved.reviewed_facts == first

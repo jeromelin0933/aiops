@@ -723,6 +723,7 @@ class KnowledgeSnapshotService:
                 frozen.request.query.filters,
                 tuple(public_chunks),
                 snapshot.failures,
+                build_input.distance_metric,
             )
             return KnowledgeReadResult(KnowledgeReadStatus.FOUND, projection)
         except (TypeError, ValueError) as exc:

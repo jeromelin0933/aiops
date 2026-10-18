@@ -74,6 +74,32 @@ class PublicObservation:
 
 
 @dataclass(frozen=True, slots=True)
+class PublicIncidentObservation:
+    """Exact Event-to-Incident public endpoint, without implying RCA success."""
+
+    execution_id: str
+    event_id: str
+    incident_id: str
+    incident_status: str
+    membership_commitment: str
+
+
+@dataclass(frozen=True, slots=True)
+class IncidentObservationResolution:
+    outcome: ObservationOutcome
+    detail: ObservationDetail
+    reason: str
+    observation: PublicIncidentObservation | None = None
+
+    def __post_init__(self) -> None:
+        if self.outcome is ObservationOutcome.RESOLVED:
+            if self.detail is not ObservationDetail.COMPLETE or self.observation is None:
+                raise ValueError("resolved Incident requires complete public lineage")
+        elif self.observation is not None or self.detail is ObservationDetail.COMPLETE:
+            raise ValueError("failed Incident observation cannot carry an endpoint")
+
+
+@dataclass(frozen=True, slots=True)
 class ObservationResolution:
     outcome: ObservationOutcome
     detail: ObservationDetail
@@ -150,12 +176,54 @@ class PublicObservationResolver:
                 f"public read failed closed: {type(exc).__name__}",
             )
 
-    def _resolve(self, captured: CapturedInputBoundary) -> PublicObservation:
+    def resolve_incident(
+        self, captured: CapturedInputBoundary,
+    ) -> IncidentObservationResolution:
+        """Resolve only the usable public Incident endpoint for polling."""
+        if not isinstance(captured, CapturedInputBoundary):
+            raise TypeError("captured must be a CapturedInputBoundary")
+        try:
+            incident = self._resolve_incident(captured)
+            return IncidentObservationResolution(
+                ObservationOutcome.RESOLVED, ObservationDetail.COMPLETE,
+                "authoritative public Incident lineage resolved", incident)
+        except _Missing as exc:
+            return IncidentObservationResolution(
+                ObservationOutcome.INVALID_OBSERVATION,
+                ObservationDetail.MISSING, str(exc))
+        except _Contradictory as exc:
+            return IncidentObservationResolution(
+                ObservationOutcome.INVALID_OBSERVATION,
+                ObservationDetail.CONTRADICTORY, str(exc))
+        except _Corrupt as exc:
+            return IncidentObservationResolution(
+                ObservationOutcome.INVALID_OBSERVATION,
+                ObservationDetail.CORRUPT, str(exc))
+        except (ConnectionError, TimeoutError, OSError) as exc:
+            return IncidentObservationResolution(
+                ObservationOutcome.SYSTEM_FAILURE,
+                ObservationDetail.UNAVAILABLE,
+                f"public read unavailable: {type(exc).__name__}")
+        except Exception as exc:
+            disposition = getattr(
+                getattr(exc, "retry_disposition", None), "value", None)
+            if disposition == "RETRYABLE":
+                return IncidentObservationResolution(
+                    ObservationOutcome.SYSTEM_FAILURE,
+                    ObservationDetail.UNAVAILABLE,
+                    f"public read unavailable: {type(exc).__name__}")
+            return IncidentObservationResolution(
+                ObservationOutcome.INVALID_OBSERVATION,
+                ObservationDetail.CORRUPT,
+                f"public read failed closed: {type(exc).__name__}")
+
+    def _resolve_incident(
+        self, captured: CapturedInputBoundary,
+    ) -> PublicIncidentObservation:
         event_id = captured.event_id
         has_owner = self._incidents.event_has_incident_owner(event_id)
         if type(has_owner) is not bool:
             raise _Corrupt("Event ownership read returned an invalid type")
-
         matches = []
         for status in IncidentStatus:
             records = self._incidents.list_incidents_by_workflow_status(status)
@@ -165,20 +233,45 @@ class PublicObservationResolver:
                 if not hasattr(record, "event_ids") or not hasattr(record, "incident_id"):
                     raise _Corrupt("Incident list contains an invalid public record")
                 if event_id in record.event_ids:
-                    matches.append(record)
+                    matches.append((record, status))
         if not has_owner:
             if matches:
-                raise _Contradictory("Event ownership absence contradicts Incident public records")
+                raise _Contradictory(
+                    "Event ownership absence contradicts Incident public records")
             raise _Missing("Event has no authoritative Incident owner")
         if len(matches) != 1:
-            raise _Contradictory("Event must resolve to exactly one authoritative Incident")
-
-        incident_id = matches[0].incident_id
+            raise _Contradictory(
+                "Event must resolve to exactly one authoritative Incident")
+        matched, enumerated_status = matches[0]
+        incident_id = matched.incident_id
         incident = self._incidents.get_incident(incident_id)
         if incident is None:
-            raise _Contradictory("Incident enumeration contradicts point read")
+            raise _Contradictory(
+                "Incident enumeration contradicts point read")
         if incident.incident_id != incident_id or event_id not in incident.event_ids:
-            raise _Contradictory("Incident point read contradicts Event ownership")
+            raise _Contradictory(
+                "Incident point read contradicts Event ownership")
+        status = getattr(incident, "status", None)
+        if not isinstance(status, IncidentStatus):
+            # Some established public test projections omit the redundant
+            # status field.  The enumerating status is still authoritative.
+            status = enumerated_status
+        elif status is not enumerated_status:
+            raise _Contradictory(
+                "Incident point status contradicts its public enumeration")
+        facts = {
+            "event_id": event_id, "incident_id": incident_id,
+            "incident_status": status.value,
+            "event_membership": list(incident.event_ids),
+        }
+        return PublicIncidentObservation(
+            captured.execution_id, event_id, incident_id, status.value,
+            commitment(facts))
+
+    def _resolve(self, captured: CapturedInputBoundary) -> PublicObservation:
+        event_id = captured.event_id
+        incident_endpoint = self._resolve_incident(captured)
+        incident_id = incident_endpoint.incident_id
         relationship = self._incidents.get_rca_relationship(incident_id)
         if relationship is None:
             raise _Contradictory("Incident RCA relationship is unavailable for an existing Incident")

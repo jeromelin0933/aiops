@@ -2,12 +2,33 @@
 
 from __future__ import annotations
 
+from collections import Counter
+from enum import Enum
 import json
 
+from .ledger import LedgerRecord
 from .report_schema import (
     EVIDENCE_INDEX_SCHEMA_VERSION, EvidenceEntry, EvidenceIndex,
 )
-from .sqlite_store import EvaluationRunSnapshot
+from .sqlite_store import (
+    EvaluationLedgerReader, EvaluationRunSnapshot, SqliteEvaluationStore,
+)
+
+
+class EvidenceCategory(str, Enum):
+    PREREGISTRATION = "PREREGISTRATION"
+    INPUT = "INPUT"
+    DOCKER_ENVIRONMENT = "DOCKER_ENVIRONMENT"
+    SIGNAL = "SIGNAL"
+    EVENT_BINDING = "EVENT_BINDING"
+    INCIDENT_OBSERVATION = "INCIDENT_OBSERVATION"
+    RCA_OBSERVATION = "RCA_OBSERVATION"
+    LATENCY = "LATENCY"
+    RESTART = "RESTART"
+    GATE = "GATE"
+    REVIEW = "REVIEW"
+    SCORING = "SCORING"
+    REPORT = "REPORT"
 
 
 _SAFE_REFERENCE_FIELDS = frozenset({
@@ -19,6 +40,7 @@ _SAFE_REFERENCE_FIELDS = frozenset({
     "knowledge_build_commitment", "index_commitment", "namespace_id",
     "invocation_start_id", "final_scoring_commitment",
     "typed_claims_commitment", "blind_packet_commitment",
+    "gate_contract_version", "evaluation_run_id", "lineage_commitment",
 })
 _SAFE_INVOCATION_PIN_FIELDS = frozenset({
     "provider", "model", "credential_profile_identity", "prompt_identity",
@@ -61,6 +83,43 @@ def _safe_invocation_pins(value: object, prefix: str = "invocation_pins") -> tup
     return tuple(result)
 
 
+def _category(domain: str, payload: dict[str, object]) -> EvidenceCategory:
+    kind = str(payload.get("kind") or "").upper()
+    if domain == "evaluation_run":
+        return EvidenceCategory.PREREGISTRATION
+    if domain in {"execution", "rag_child_allocation"}:
+        return EvidenceCategory.INPUT
+    if domain in {"docker_namespace", "docker_cleanup"}:
+        return (EvidenceCategory.RESTART if domain == "docker_cleanup"
+                else EvidenceCategory.DOCKER_ENVIRONMENT)
+    if domain.startswith("gate_"):
+        return EvidenceCategory.GATE
+    if domain == "review":
+        return EvidenceCategory.REVIEW
+    if domain in {"judgment", "re_adjudication"}:
+        return EvidenceCategory.SCORING
+    if domain == "report" and kind == "FORMAL_GATE_RECEIPT":
+        return EvidenceCategory.GATE
+    if domain == "report":
+        return EvidenceCategory.REPORT
+    if kind == "SIGNAL_STARTED":
+        return EvidenceCategory.SIGNAL
+    if "EVENT_BINDING" in kind:
+        return EvidenceCategory.EVENT_BINDING
+    if "INCIDENT" in kind:
+        return EvidenceCategory.INCIDENT_OBSERVATION
+    if "RCA" in kind or kind in {"FORMAL_OBSERVATION", "FINAL"}:
+        return EvidenceCategory.RCA_OBSERVATION
+    if "LATENCY" in kind or payload.get("latency_kind") is not None:
+        return EvidenceCategory.LATENCY
+    if "RESTART" in kind or "RECOVERY" in kind or "REFRESH" in kind:
+        return EvidenceCategory.RESTART
+    if ("SCORE" in kind or "CLAIM" in kind or "DEVIATION" in kind
+            or "ISOLATION" in kind):
+        return EvidenceCategory.SCORING
+    return EvidenceCategory.RCA_OBSERVATION
+
+
 def build_evidence_index(snapshot: EvaluationRunSnapshot) -> EvidenceIndex:
     """Index source records without copying arbitrary or secret-bearing payloads."""
     if not isinstance(snapshot, EvaluationRunSnapshot):
@@ -68,9 +127,10 @@ def build_evidence_index(snapshot: EvaluationRunSnapshot) -> EvidenceIndex:
     root_payload: dict[str, object] = {}
     entries = []
     for record in snapshot.records:
-        if record.domain == "report":
-            continue
         payload = json.loads(record.semantic_json)
+        if (record.domain == "report"
+                and payload.get("kind") != "FORMAL_GATE_RECEIPT"):
+            continue
         if record.domain == "evaluation_run":
             root_payload = payload
         references = []
@@ -83,6 +143,7 @@ def build_evidence_index(snapshot: EvaluationRunSnapshot) -> EvidenceIndex:
             record.domain, record.record_id, record.parent_id,
             record.semantic_commitment,
             str(payload.get("kind") or record.domain).upper(),
+            _category(record.domain, payload).value,
             tuple(references),
         ))
     return EvidenceIndex(
@@ -96,4 +157,60 @@ def build_evidence_index(snapshot: EvaluationRunSnapshot) -> EvidenceIndex:
         _safe_text(root_payload.get("manifest_commitment")),
         snapshot.report_source_cut_commitment,
         tuple(entries),
+    )
+
+
+def append_evidence_index_commitment(
+    store: SqliteEvaluationStore, index: EvidenceIndex,
+) -> LedgerRecord:
+    """Durably commit one immutable index cut in the sole Candidate-F ledger."""
+    if type(store) is not SqliteEvaluationStore or type(index) is not EvidenceIndex:
+        raise TypeError("Candidate-F store and EvidenceIndex required")
+    store.require_formal_run(index.evaluation_run_id)
+    current = build_evidence_index(
+        store.reader().read_run_snapshot(index.evaluation_run_id))
+    if current != index:
+        raise ValueError("evidence index is not the current authoritative cut")
+    counts = Counter(item.category for item in index.entries)
+    payload = {
+        "kind": "EVIDENCE_INDEX_COMMITMENT",
+        "schema_version": index.schema_version,
+        "evaluation_run_id": index.evaluation_run_id,
+        "source_cut_commitment": index.source_cut_commitment,
+        "evidence_index_commitment": index.evidence_index_commitment,
+        "entry_count": len(index.entries),
+        "category_counts": dict(sorted(counts.items())),
+        "provenance": "Candidate-F authoritative run snapshot",
+    }
+    return store.append(LedgerRecord.create(
+        "report", [index.evaluation_run_id, "EVIDENCE_INDEX",
+                   index.source_cut_commitment], payload,
+        index.evaluation_run_id,
+    ))
+
+
+def evidence_index_commitment_is_current(
+    reader: EvaluationLedgerReader, receipt_id: str,
+) -> bool:
+    """Fresh-read verification; a report projection is never its own authority."""
+    if type(reader) is not EvaluationLedgerReader:
+        raise TypeError("store-issued EvaluationLedgerReader required")
+    receipt = reader.get(receipt_id)
+    if receipt is None or receipt.domain != "report":
+        return False
+    payload = json.loads(receipt.semantic_json)
+    if payload.get("kind") != "EVIDENCE_INDEX_COMMITMENT":
+        return False
+    run_id = payload.get("evaluation_run_id")
+    if not isinstance(run_id, str):
+        return False
+    current = build_evidence_index(reader.read_run_snapshot(run_id))
+    return (
+        payload.get("schema_version") == current.schema_version
+        and payload.get("source_cut_commitment") == current.source_cut_commitment
+        and payload.get("evidence_index_commitment") ==
+            current.evidence_index_commitment
+        and payload.get("entry_count") == len(current.entries)
+        and payload.get("category_counts") == dict(sorted(Counter(
+            item.category for item in current.entries).items()))
     )

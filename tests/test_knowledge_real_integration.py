@@ -31,6 +31,7 @@ def test_real_google_embedding_and_chroma_reopen(tmp_path: Path) -> None:
         "1.0", "google", "text-embedding-004", config.capability.embedding_profile_identity,
         768, config.normalization_semantics, "chromadb", config.index_schema_identity,
         "spec014-knowledge-metadata-v1", "spec014-build-contract-v1",
+        config.distance_metric,
     )
     build_id = build_identity(identity_input)
     request = ProviderEmbeddingRequest(build_id, config.capability, chunks, config.limits)
@@ -39,7 +40,11 @@ def test_real_google_embedding_and_chroma_reopen(tmp_path: Path) -> None:
     )
     result = provider.embed(request)
     assert result.failure is None
-    adapter = ChromaIndexAdapter(tmp_path / "chroma", index_schema_identity=config.index_schema_identity)
+    adapter = ChromaIndexAdapter(
+        tmp_path / "chroma", index_schema_identity=config.index_schema_identity,
+        distance_metric=config.distance_metric)
     artifact = adapter.stage(build_id, request, result)
-    reopened = ChromaIndexAdapter(tmp_path / "chroma", index_schema_identity=config.index_schema_identity)
+    reopened = ChromaIndexAdapter(
+        tmp_path / "chroma", index_schema_identity=config.index_schema_identity,
+        distance_metric=config.distance_metric)
     assert reopened.inspect(build_id) == artifact

@@ -7,6 +7,8 @@ No approval can be created by reading production output or the evaluation DB.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+from pathlib import Path
 from types import MappingProxyType
 
 from .identity import require_identity
@@ -84,3 +86,32 @@ class TrustedApprovalRegistry:
                                   PM_AUTHORITY, original_judgment_id,
                                   original_oracle_revision_id, target_oracle_revision_id):
             raise ValueError("amendment authorization is unknown or out of scope")
+
+
+TRUSTED_ORACLE_APPROVAL_SCHEMA = "spec017.trusted-oracle-approval.v1"
+
+
+def load_trusted_oracle_approvals(path: str | Path) -> TrustedApprovalRegistry:
+    """Load a trust snapshot which is intentionally separate from Oracle content.
+
+    The strict schema contains only approval bindings.  It cannot carry Oracle
+    semantics and therefore cannot turn the Oracle artifact into a self-issued
+    approval source.
+    """
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(raw, dict) or set(raw) != {"schema", "approvals"}:
+        raise ValueError("trusted Oracle approval input schema is invalid")
+    if raw["schema"] != TRUSTED_ORACLE_APPROVAL_SCHEMA:
+        raise ValueError("unsupported trusted Oracle approval input")
+    if not isinstance(raw["approvals"], list) or not raw["approvals"]:
+        raise ValueError("trusted Oracle approval input must not be empty")
+    required = {
+        "reference", "authority", "oracle_revision_id",
+        "semantic_content_commitment", "approved_at", "parent_revision_id",
+    }
+    records = []
+    for item in raw["approvals"]:
+        if not isinstance(item, dict) or set(item) != required:
+            raise ValueError("trusted Oracle approval record schema is invalid")
+        records.append(TrustedOracleApproval(**item))
+    return TrustedApprovalRegistry(tuple(records))

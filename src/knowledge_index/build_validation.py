@@ -98,10 +98,24 @@ def derive_staged_build_commitment(
     artifact: IndexArtifactFacts,
     identity_input: BuildIdentityInput,
 ) -> str:
+    artifact_value: object = artifact
+    identity_value: object = identity_input
+    if (artifact.distance_metric == "historical-unknown"
+            and identity_input.distance_metric == "historical-unknown"):
+        artifact_value = {
+            name: getattr(artifact, name)
+            for name in artifact.__dataclass_fields__
+            if name != "distance_metric"
+        }
+        identity_value = {
+            name: getattr(identity_input, name)
+            for name in identity_input.__dataclass_fields__
+            if name != "distance_metric"
+        }
     return _commitment("KNOWLEDGE_STAGED_BUILD", {
         "lineage_commitment": lineage_commitment,
-        "artifact": artifact,
-        "identity_input": identity_input,
+        "artifact": artifact_value,
+        "identity_input": identity_value,
     })
 
 
@@ -213,6 +227,7 @@ def validate_staged_build(
             and artifact.embedding_dimension == build_input.embedding_dimension
             and artifact.index_engine == build_input.index_engine
             and artifact.index_schema_identity == build_input.index_schema_identity
+            and artifact.distance_metric == build_input.distance_metric
         )
         if not compatibility:
             findings.append(_finding(

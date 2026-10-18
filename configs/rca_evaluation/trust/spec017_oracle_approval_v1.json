@@ -1,0 +1,13 @@
+{
+  "schema": "spec017.trusted-oracle-approval.v1",
+  "approvals": [
+    {
+      "reference": "SPEC-017-v1.0-\u00a77@7996d39242d9aeabbfc481532a89afa530a12088",
+      "authority": "\u6797\u5b50\u8c6a\uff08PM\uff09",
+      "oracle_revision_id": "eval:oracle_revision:700ae27c270189b75361125bbdc1ea3bfd79661c87ae86b7759faedcaf706d22",
+      "semantic_content_commitment": "sha256:fc00dfbde43a1b18d9929d00db5b3f9f72f8ca4425b8dd2072bd7fa7d6fc9ea4",
+      "approved_at": "2026-10-02T00:00:00Z",
+      "parent_revision_id": null
+    }
+  ]
+}

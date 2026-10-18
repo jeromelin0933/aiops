@@ -17,7 +17,8 @@ knowledge:
   embedding_profile_reference: spec014-google-embedding-profile-v1
   embedding_profile_identity: spec014-google-document-query-v1
   index_engine: chromadb
-  index_schema_identity: spec014-chroma-cosine-v1
+  index_schema_identity: spec014-chroma-l2-v2
+  distance_metric: l2
   retrieval_profile_identity: spec014-retrieval-v1
   active_or_lkg_required: true
   public_retrieval_required: true

@@ -206,6 +206,7 @@ def _build_rca_host(
     owned_resources.append(chroma_client)
     index = ChromaIndexAdapter(
         chroma_path, index_schema_identity=knowledge_config.index_schema_identity,
+        distance_metric=knowledge_config.distance_metric,
         client=chroma_client,
     )
     embedding_client = _LazyProviderClient(lambda: create_google_client(

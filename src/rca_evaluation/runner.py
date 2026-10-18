@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict
 import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Protocol
 
 from .campaign import (
@@ -387,9 +388,182 @@ class CampaignRunner:
         manifest: ReproducibilityManifest,
         warmup: Callable[[], None] = lambda: None,
     ) -> tuple[ExecutionResult, ...]:
+        """Run a generic/internal campaign; this can never be relabelled FORMAL."""
         campaign.validate(admitted_plan)
         manifest.validate_admission(admitted_plan, campaign)
+        return self._run_admitted(
+            admitted_plan=admitted_plan, campaign=campaign, manifest=manifest,
+            warmup=warmup)
 
+    def validate_formal_execution(
+        self, *, admission_report: object,
+        admitted_plan: EvaluationPlan, campaign: CampaignPlan,
+        manifest: ReproducibilityManifest, execution_root: str | Path,
+        execution_workspace: str | Path, repository_root: str | Path,
+    ) -> None:
+        """Side-effect-free validation shared by the sole formal entrypoint."""
+        from .formal_admission import FormalAdmissionReport, inspect_repository
+
+        if type(admission_report) is not FormalAdmissionReport:
+            raise TypeError("Formal execution requires FormalAdmissionReport")
+        if type(self._ledger) is not SqliteEvaluationStore:
+            raise TypeError("Formal execution requires the Candidate-F durable store")
+        admission_report.validate()
+        if (admitted_plan != admission_report.plan
+                or campaign != admission_report.campaign
+                or manifest != admission_report.manifest):
+            raise ValueError("formal plan/run/campaign/manifest admission mismatch")
+        execution = Path(execution_root).resolve()
+        workspace = Path(execution_workspace).resolve()
+        repository = Path(repository_root).resolve()
+        expected_root = Path(admission_report.evaluation_root)
+        if execution != expected_root:
+            raise ValueError("admitted evaluation root does not match execution root")
+        if workspace != expected_root:
+            raise ValueError("admitted workspace does not match execution workspace")
+        if repository != Path(admission_report.repository_root):
+            raise ValueError("admitted repository root does not match execution root")
+        if self._ledger.path != Path(admission_report.database_path):
+            raise ValueError("admitted DB does not match execution store")
+        if self._ledger.path.parent != execution:
+            raise ValueError("execution store is outside the admitted evaluation root")
+        allowed = {self._ledger.path.name,
+                   self._ledger.path.name + "-journal",
+                   self._ledger.path.name + "-shm",
+                   self._ledger.path.name + "-wal", "real_rag"}
+        if (not execution.is_dir()
+                or any(item.name not in allowed for item in execution.iterdir())):
+            raise ValueError("formal fresh DB/workspace collision detected")
+        if admission_report.preparation_id is None:
+            raise ValueError("PREPARED is not executable; durable ADMITTED state required")
+        self._ledger.require_admitted_preparation(
+            admission_report.preparation_id,
+            admission_report.admission_commitment)
+        if not self._ledger.has_no_formal_execution_facts():
+            existing = self._ledger.get(campaign.run_id)
+            if existing is None:
+                raise ValueError("foreign Formal execution facts already exist")
+            self._ledger.require_formal_run(campaign.run_id)
+            existing_payload = json.loads(existing.semantic_json)
+            if (existing_payload.get("formal_admission_commitment") !=
+                    admission_report.admission_commitment
+                    or existing_payload.get("manifest_commitment") !=
+                        manifest.manifest_commitment):
+                raise ValueError("existing Formal execution contradicts admission")
+        manifest.validate_formal_executable(
+            admitted_plan, campaign,
+            admission_report.reviewer_protocol.sealed_payload)
+        state = inspect_repository(repository)
+        expected_branch = manifest.approved_spec_commitments["repository_branch"]
+        if (state.dirty or state.commit != manifest.repository_commit
+                or state.branch != expected_branch):
+            raise ValueError("formal execution repository baseline is not exact and pristine")
+
+    def run_formal(
+        self, *, admission_report: object,
+        admitted_plan: EvaluationPlan, campaign: CampaignPlan,
+        manifest: ReproducibilityManifest, execution_root: str | Path,
+        execution_workspace: str | Path, repository_root: str | Path,
+        preregistration_path: str | Path,
+        candidate_c_authority: object | None = None,
+        runtime_authority: object | None = None,
+        docker_state_inspector: object | None = None,
+        warmup: Callable[[], None] = lambda: None,
+    ) -> tuple[ExecutionResult, ...]:
+        """The sole official Formal Evaluation execution entrypoint."""
+        from .formal_evidence import authorize_formal_execution
+
+        # Fresh resolution happens inside the supported entrypoint immediately
+        # before any Oracle, plan, run, denominator, signal, or provider fact.
+        authorize_formal_execution(
+            admission_report=admission_report,
+            evaluation_store=self._ledger,
+            preregistration_path=preregistration_path,
+            repository_root=repository_root,
+            execution_root=execution_root,
+            execution_workspace=execution_workspace,
+            candidate_c_authority=candidate_c_authority,
+            runtime_authority=runtime_authority,
+            docker_state_inspector=docker_state_inspector,
+        )
+        self.validate_formal_execution(
+            admission_report=admission_report,
+            admitted_plan=admitted_plan, campaign=campaign, manifest=manifest,
+            execution_root=execution_root,
+            execution_workspace=execution_workspace,
+            repository_root=repository_root)
+        # Validation above is complete before the first durable formal fact.
+        self._ledger.admit_oracle(admission_report.oracle_revision)
+        self._ledger.admit_plan(admitted_plan)
+        run_record = self._create_run_record(
+            admitted_plan=admitted_plan, campaign=campaign, manifest=manifest,
+            execution_mode="FORMAL",
+            formal_admission_commitment=admission_report.admission_commitment,
+            formal_admission_payload=admission_report.admission_payload(),
+        )
+        self._ledger._append_formal_run(run_record)
+        return self._run_admitted(
+            admitted_plan=admitted_plan, campaign=campaign, manifest=manifest,
+            warmup=warmup, run_already_admitted=True)
+
+    def _run_admitted(
+        self, *, admitted_plan: EvaluationPlan, campaign: CampaignPlan,
+        manifest: ReproducibilityManifest, warmup: Callable[[], None],
+        run_already_admitted: bool = False,
+    ) -> tuple[ExecutionResult, ...]:
+        """Execute admitted slots; the resume flag relies on existing ledger truth."""
+        campaign.validate(admitted_plan)
+        manifest.validate_admission(admitted_plan, campaign)
+        if not run_already_admitted:
+            run_record = self._create_run_record(
+                admitted_plan=admitted_plan, campaign=campaign,
+                manifest=manifest, execution_mode="GENERIC")
+            self._ledger.append(run_record)
+        else:
+            run_record = self._ledger.get(campaign.run_id)
+            if run_record is None:
+                raise ValueError("validated formal run root was not issued")
+            self._ledger.require_formal_run(campaign.run_id)
+            payload = json.loads(run_record.semantic_json)
+            if (run_record.parent_id != admitted_plan.evaluation_plan_id
+                    or payload.get("campaign_key") != campaign.campaign_key
+                    or payload.get("manifest_commitment")
+                        != manifest.manifest_commitment
+                    or payload.get("execution_order")
+                        != [item.execution_id for item in campaign.executions]
+                    or payload.get("fixed_n") != campaign.repetitions):
+                raise ValueError("existing formal run conflicts with the admitted plan")
+        # Admit the complete denominator before any signal is sent.
+        for item in campaign.executions:
+            self._ledger.append(LedgerRecord.create(
+                "execution", [campaign.run_id, item.scenario_id, item.repetition],
+                {
+                    "scenario_id": item.scenario_id,
+                    "repetition": item.repetition,
+                    "input_identity": item.input_identity,
+                    "input_commitment": item.input_commitment,
+                    "case": item.case.value,
+                    "manifest_commitment": manifest.manifest_commitment,
+                    "planned_slot_execution_id": item.planned_slot_execution_id,
+                }, campaign.run_id,
+            ))
+        warmup()
+        # There is deliberately no result-dependent break or extension here.
+        return tuple(self._execute(item, manifest) for item in campaign.executions)
+
+    @staticmethod
+    def _create_run_record(
+        *, admitted_plan: EvaluationPlan, campaign: CampaignPlan,
+        manifest: ReproducibilityManifest, execution_mode: str,
+        formal_admission_commitment: str | None = None,
+        formal_admission_payload: dict[str, object] | None = None,
+    ) -> LedgerRecord:
+        if execution_mode not in {"GENERIC", "FORMAL"}:
+            raise ValueError("execution mode is invalid")
+        if ((execution_mode == "FORMAL")
+                != (formal_admission_commitment is not None
+                    and formal_admission_payload is not None)):
+            raise ValueError("formal run construction requires exact admission provenance")
         run_record = LedgerRecord.create(
             "evaluation_run", [admitted_plan.evaluation_plan_id, campaign.campaign_key],
             {
@@ -414,6 +588,14 @@ class CampaignRunner:
                 "clock_source": manifest.clock_source,
                 "aggregation_policy_version":
                     manifest.aggregation_policy_version,
+                "campaign_key": manifest.campaign_key,
+                "execution_order_strategy": manifest.execution_order_strategy,
+                "early_stop_allowed": manifest.early_stop_allowed,
+                "replacement_policy": manifest.replacement_policy,
+                "reviewer_protocol": manifest.reviewer_protocol,
+                "execution_mode": execution_mode,
+                "formal_admission_commitment": formal_admission_commitment,
+                "formal_admission": formal_admission_payload,
                 "random_seed_or_order_commitment": (
                     manifest.random_seed if manifest.random_seed is not None
                     else manifest.deterministic_order_commitment),
@@ -429,24 +611,7 @@ class CampaignRunner:
         )
         if run_record.record_id != campaign.run_id:
             raise ValueError("campaign run identity is inconsistent")
-        self._ledger.append(run_record)
-        # Admit the complete denominator before any signal is sent.
-        for item in campaign.executions:
-            self._ledger.append(LedgerRecord.create(
-                "execution", [campaign.run_id, item.scenario_id, item.repetition],
-                {
-                    "scenario_id": item.scenario_id,
-                    "repetition": item.repetition,
-                    "input_identity": item.input_identity,
-                    "input_commitment": item.input_commitment,
-                    "case": item.case.value,
-                    "manifest_commitment": manifest.manifest_commitment,
-                    "planned_slot_execution_id": item.planned_slot_execution_id,
-                }, campaign.run_id,
-            ))
-        warmup()
-        # There is deliberately no result-dependent break or extension here.
-        return tuple(self._execute(item, manifest) for item in campaign.executions)
+        return run_record
 
     def run_replacement(
         self,

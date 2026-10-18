@@ -12,6 +12,7 @@ LEDGER_DOMAINS = frozenset({
     "re_adjudication", "report", "gate_authorization",
     "gate_execution_receipt", "docker_namespace", "docker_cleanup",
     "gate_invocation_start", "gate_invocation_receipt",
+    "rag_child_allocation",
 })
 
 

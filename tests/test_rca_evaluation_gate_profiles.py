@@ -51,6 +51,10 @@ from rca_evaluation.identity import commitment, identity
 from rca_evaluation.ledger import LedgerConflict, LedgerRecord
 from rca_evaluation.oracle import EvaluationPlan, OracleRevision
 from rca_evaluation.sqlite_store import SqliteEvaluationStore
+from rca_evaluation.readiness import (
+    RagChildAllocation, ReadinessFactState, allocate_real_rag_child,
+    resolve_environment_credential,
+)
 from rca_evaluation.real_gate_provenance import (
     ActualInvocationReceipt, DockerProbeEvidence, actual_invocation_status,
     execute_docker_invocation,
@@ -106,6 +110,7 @@ _EXECUTION = LedgerRecord.create(
      "replacement_for_execution_id": None}, parent_id=RUN_ID)
 EXECUTION_ID = _EXECUTION.record_id
 _RAG_AUTHORITIES = {}
+_RAG_CHILDREN = {}
 
 
 class _ExactCandidateCAuthority:
@@ -116,7 +121,7 @@ class _ExactCandidateCAuthority:
         manifest = BuildManifestProvenance(
             "spec017-test-manifest", "spec014-manifest-schema",
             "1.0", "1.0", values["manifest_commitment"],
-            "spec017-test-corpus", "1.0",
+            "spec014-production-knowledge", "1.0",
         )
         build_input = replace(
             staged.build_input,
@@ -127,6 +132,7 @@ class _ExactCandidateCAuthority:
             embedding_dimension=config.capability.embedding_dimension,
             index_engine=values["index_engine"],
             index_schema_identity=values["index_schema_identity"],
+            distance_metric=values["distance_metric"],
         )
         artifact = replace(
             staged.artifact,
@@ -136,6 +142,7 @@ class _ExactCandidateCAuthority:
             embedding_dimension=config.capability.embedding_dimension,
             index_engine=values["index_engine"],
             index_schema_identity=values["index_schema_identity"],
+            distance_metric=values["distance_metric"],
         )
         documents = tuple(replace(
             item,
@@ -198,8 +205,18 @@ def authority(tmp_path):
     candidate_root.mkdir()
     candidate_c, staged, _, _, _ = knowledge_environment(candidate_root)
     _RAG_AUTHORITIES[store] = _ExactCandidateCAuthority(candidate_c, staged)
+    _RAG_CHILDREN[store] = allocate_real_rag_child(
+        store, repository_root=ROOT,
+        isolated_root="var/rca_evaluation/real_rag",
+        production_root="var/knowledge_index/chroma",
+        evaluation_run_id=RUN_ID, execution_id=EXECUTION_ID,
+        environment_identity="pytest",
+        profile_identity="spec017-real-rag-gate-v1")
     yield store, path
     try:
+        child = _RAG_CHILDREN.pop(store, None)
+        if child is not None:
+            shutil.rmtree(ROOT / child.relative_path)
         store.close()
         candidate_c.close()
         _RAG_AUTHORITIES.pop(store, None)
@@ -230,16 +247,34 @@ def _request(record=None, *, credential=True):
         record.authorization_id if record is not None else None, credential)
 
 
-def _rag_facts(authorization, **overrides):
+def _credential(profile):
+    return resolve_environment_credential(
+        credential_environment=profile.authorization.credential_environment,
+        required_profile_identity=profile.profile_identity,
+        profile_identity=profile.profile_identity,
+        validated_at=NOW, environment_identity="pytest",
+        environment={profile.authorization.credential_environment: "test-only-value"})
+
+
+def _rag_facts(authorization, *, profile=None, **overrides):
+    profile = profile or _profile(GateKind.REAL_RAG)
+    relative = "var/rca_evaluation/real_rag/run-1/chroma"
+    child = RagChildAllocation(
+        identity("observation", [EXECUTION_ID, "rag-child"]), RUN_ID,
+        EXECUTION_ID, "pytest", profile.profile_identity, "run-1/chroma",
+        relative, commitment({"test": "owned-child"}),
+        ReadinessFactState.RESOLVED)
     values = dict(
         authorization=authorization, authority_state="ACTIVE",
         active_build_identity="kbld_" + "1" * 64,
         chroma_index_available=True, public_retrieval_available=True,
         actual_manifest_commitment="kmf_1f98f62afda12b1c49dda11c67be0249bec9bf3c788e00f22fbe61f50cfb41ee",
         actual_embedding_profile_identity="spec014-google-document-query-v1",
-        actual_index_schema_identity="spec014-chroma-cosine-v1",
-        chroma_path="var/rca_evaluation/real_rag/run-1/chroma",
-        real_embedding_and_index=True)
+        actual_index_schema_identity="spec014-chroma-l2-v2",
+        actual_distance_metric="l2",
+        chroma_path=relative, real_embedding_and_index=True,
+        credential_readiness=_credential(profile), isolated_child=child,
+        repository_identity=REPO_COMMIT)
     values.update(overrides)
     return RealRagFacts(**values)
 
@@ -250,7 +285,8 @@ def _ready_llm(store, *, run_id=RUN_ID, execution_id=EXECUTION_ID,
     authorization = _issue(
         store, profile, GateKind.REAL_LLM, run_id=run_id)
     return evaluate_real_llm(
-        profile, RealLlmFacts(_request(authorization), True),
+        profile, RealLlmFacts(_request(authorization), True,
+                              _credential(profile), REPO_COMMIT),
         repository_root=ROOT, authority=store.reader(),
         evaluation_run_id=run_id, execution_id=execution_id)
 
@@ -262,11 +298,13 @@ def _ready_rag(store, *, overrides=None, profile=None, root=ROOT):
     merged = {
         "candidate_c_authority": candidate_c,
         "active_build_identity": candidate_c.activation.active_build_identity,
+        "isolated_child": _RAG_CHILDREN[store],
+        "chroma_path": _RAG_CHILDREN[store].relative_path,
     }
     merged.update(overrides or {})
     return evaluate_real_rag(
-        profile, _rag_facts(_request(authorization), **merged),
-        repository_root=root, authority=store.reader(),
+        profile, _rag_facts(_request(authorization), profile=profile, **merged),
+        repository_root=root, evaluation_store=store,
         evaluation_run_id=RUN_ID, execution_id=EXECUTION_ID)
 
 
@@ -565,6 +603,7 @@ def _rag_binding_case(tmp_path, resolution=RetrievalResolution.MATCH):
         public.embedding_dimension, public.index_engine,
         public.index_schema_identity, public.artifact_commitment,
         public.lineage_commitment, public.staged_commitment,
+        public.distance_metric,
     )
     store.close()
     return expected, frozen, public, request
@@ -592,6 +631,7 @@ def _rag_projection(snapshot, staged, frozen):
         staged.build_input.index_schema_identity,
         snapshot.query_commitment, frozen.request.query.filters, (),
         snapshot.failures,
+        staged.build_input.distance_metric,
     )
 
 
@@ -647,6 +687,20 @@ def test_default_off_and_missing_authorization_remains_not_authorized(authority)
     assert result.status is GateExecutionStatus.NOT_AUTHORIZED
 
 
+def test_real_rag_profile_pins_truthful_l2_identity_and_commitment() -> None:
+    profile = _profile(GateKind.REAL_RAG)
+    values = profile.values()
+    assert values["index_schema_identity"] == "spec014-chroma-l2-v2"
+    assert values["distance_metric"] == "l2"
+    assert profile.profile_commitment == (
+        "sha256:69c73c3ec1f574ad1070f0391c43043983ab958972fc442f35eaa85be1be52e3")
+    prereg = json.loads((PROFILES / "formal_preregistration_v1.json").read_text(
+        encoding="utf-8"))
+    assert prereg["manifest_inputs"]["rag_profile_references"] == [
+        profile.profile_identity]
+    assert "spec014-chroma-cosine-v1" not in json.dumps(prereg, sort_keys=True)
+
+
 def test_authorization_is_single_ledger_record_and_reloads(authority):
     store, path = authority
     profile = _profile(GateKind.REAL_LLM)
@@ -669,7 +723,7 @@ def test_authorization_cross_gate_profile_run_and_commitment_rejected(authority)
     authorization = _issue(store, llm, GateKind.REAL_LLM)
     request = _request(authorization)
     assert evaluate_real_rag(
-        rag, _rag_facts(request), repository_root=ROOT, authority=store.reader(),
+        rag, _rag_facts(request), repository_root=ROOT, evaluation_store=store,
         evaluation_run_id=RUN_ID,
         execution_id=EXECUTION_ID).status is GateExecutionStatus.NOT_AUTHORIZED
     altered = replace(llm, profile_commitment="sha256:" + "0" * 64)
@@ -999,6 +1053,7 @@ def test_real_rag_wrong_but_valid_build_b2_rejected(tmp_path):
         staged_b1.build_input.index_schema_identity,
         staged_b1.artifact.artifact_commitment,
         staged_b1.lineage_commitment, staged_b1.staged_commitment,
+        staged_b1.build_input.distance_metric,
     )
     try:
         with pytest.raises(ValueError, match="readiness build"):
@@ -1095,6 +1150,7 @@ def test_real_rag_harness_rejects_fake_clients_behind_real_adapter_types(authori
     object.__setattr__(index, "_client", object())
     object.__setattr__(index, "storage_path",
                       ROOT / "var" / "rca_evaluation" / "real_rag" / "run-1")
+    object.__setattr__(index, "distance_metric", "l2")
     config = load_knowledge_config(ROOT / "configs" / "knowledge_index.yaml")
     request = replace(
         knowledge_request(), retrieval_profile=config.retrieval_profile,
@@ -1691,6 +1747,8 @@ def test_docker_readiness_uses_exact_durable_namespace(authority):
     {"authority_state": None, "active_build_identity": None},
     {"chroma_index_available": False},
     {"actual_embedding_profile_identity": "wrong-profile"},
+    {"actual_distance_metric": "cosine"},
+    {"actual_distance_metric": None},
     {"chroma_path": "var/knowledge_index/chroma"},
     {"chroma_path": "var/rca_evaluation/real_rag/../knowledge_index/chroma"},
 ))
@@ -1711,6 +1769,32 @@ def test_rag_profile_integrity_preserved(authority, tmp_path, field, bad):
     path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
     profile = load_real_rag_profile(path)
     assert _ready_rag(store, profile=profile).status is GateExecutionStatus.NOT_READY
+
+
+def test_historical_cosine_identity_cannot_satisfy_current_l2_readiness(
+    authority, tmp_path,
+) -> None:
+    store, _ = authority
+    raw = yaml.safe_load((PROFILES / "real_rag.yaml").read_text(encoding="utf-8"))
+    raw["knowledge"]["index_schema_identity"] = "spec014-chroma-cosine-v1"
+    path = tmp_path / "historical-profile.yaml"
+    path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    historical = load_real_rag_profile(path)
+    assert _ready_rag(store, profile=historical).status is GateExecutionStatus.NOT_READY
+
+
+@pytest.mark.parametrize("physical_metric", ("cosine", "historical-unknown"))
+def test_wrong_or_unknown_candidate_c_physical_metric_cannot_be_ready(
+    authority, physical_metric,
+) -> None:
+    store, _ = authority
+    candidate_c = _RAG_AUTHORITIES[store]
+    candidate_c.staged = replace(
+        candidate_c.staged,
+        artifact=replace(
+            candidate_c.staged.artifact, distance_metric=physical_metric),
+    )
+    assert _ready_rag(store).status is GateExecutionStatus.NOT_READY
 
 
 def test_rag_symlink_escape_preserved(authority, tmp_path, monkeypatch):
@@ -1767,3 +1851,28 @@ def test_secret_free_profiles_and_gate_independence_preserved(authority):
     assert llm.status is GateExecutionStatus.READY_NOT_EXECUTED
     assert rag.status is GateExecutionStatus.NOT_READY
     assert docker.status is GateExecutionStatus.READY_NOT_EXECUTED
+
+
+def test_llm_and_rag_required_facts_are_independent(authority):
+    store, _ = authority
+    llm_profile = _profile(GateKind.REAL_LLM)
+    llm_authorization = _issue(store, llm_profile, GateKind.REAL_LLM)
+    missing = resolve_environment_credential(
+        credential_environment=llm_profile.authorization.credential_environment,
+        required_profile_identity=llm_profile.profile_identity,
+        profile_identity=llm_profile.profile_identity, validated_at=NOW,
+        environment_identity="pytest", environment={})
+    llm_missing = evaluate_real_llm(
+        llm_profile, RealLlmFacts(
+            _request(llm_authorization), True, missing, REPO_COMMIT),
+        repository_root=ROOT, authority=store.reader(),
+        evaluation_run_id=RUN_ID, execution_id=EXECUTION_ID)
+    assert llm_missing.status is GateExecutionStatus.NOT_READY
+    assert _ready_rag(store).status is GateExecutionStatus.READY_NOT_EXECUTED
+
+    llm_ready = _ready_llm(store)
+    rag_missing_build = _ready_rag(
+        store, overrides={"candidate_c_authority": None,
+                          "active_build_identity": None})
+    assert llm_ready.status is GateExecutionStatus.READY_NOT_EXECUTED
+    assert rag_missing_build.status is GateExecutionStatus.NOT_READY

@@ -14,7 +14,7 @@ from .claims import (
     AtomicClaimFinding, ClaimEvaluationStatus, GovernedClaimDecomposition,
     evaluate_unsupported_claims, production_claim_commitment,
 )
-from .identity import commitment, require_identity
+from .identity import commitment, identity, require_identity
 from .isolation import _decoded_variants
 from .ledger import LedgerRecord
 from .leakage_policy import TRUSTED_LEAKAGE_POLICY, TrustedLeakagePolicy
@@ -661,7 +661,8 @@ def _canonical_governed(value: str) -> str:
 class TwoStageAdjudicator:
     def __init__(self, store: SqliteEvaluationStore, source_authority: S3SourceAuthority,
                  isolation_policy: TrustedLeakagePolicy, *,
-                 expected_policy_commitment: str) -> None:
+                 expected_policy_commitment: str,
+                 reviewer_protocol: dict[str, object] | None = None) -> None:
         if type(store) is not SqliteEvaluationStore:
             raise TypeError("S1 evaluation store authority is required")
         if type(source_authority) is not S3SourceAuthority:
@@ -673,9 +674,32 @@ class TwoStageAdjudicator:
         _sha256(expected_policy_commitment, "expected_policy_commitment")
         if expected_policy_commitment != isolation_policy.policy_commitment:
             raise ValueError("trusted leakage policy commitment mismatch")
+        if not isinstance(reviewer_protocol, dict):
+            raise TypeError("sealed reviewer protocol is required")
+        stage1 = reviewer_protocol.get("stage1")
+        stage2 = reviewer_protocol.get("stage2")
+        if (not isinstance(stage1, dict) or not isinstance(stage2, dict)
+                or not isinstance(stage1.get("reviewer_ids"), list)
+                or len(stage1["reviewer_ids"]) != 2
+                or not isinstance(stage1.get("tiebreak_reviewer_id"), str)
+                or not isinstance(stage2.get("reviewer_ids"), list)
+                or len(stage2["reviewer_ids"]) != 2
+                or not isinstance(stage2.get("tiebreak_reviewer_id"), str)
+                or reviewer_protocol.get(
+                    "machine_hard_failure_override_allowed") is not False
+                or reviewer_protocol.get("records_append_only") is not True):
+            raise ValueError("sealed reviewer protocol is incomplete")
+        identities = [*stage1["reviewer_ids"], stage1["tiebreak_reviewer_id"],
+                      *stage2["reviewer_ids"],
+                      stage2["tiebreak_reviewer_id"]]
+        if (any(not isinstance(item, str) or not item.strip() for item in identities)
+                or len(identities) != len(set(identities))):
+            raise ValueError("sealed reviewer identities must be present and distinct")
         self._store = store
         self._source_authority = source_authority
         self._isolation_policy = isolation_policy
+        self._reviewer_protocol = json.loads(json.dumps(
+            reviewer_protocol, sort_keys=True))
 
     def resolve_authoritative_criteria(self, execution_id: str) -> OracleScenarioCriteria:
         plan, _, scenario_id = self._require_execution(execution_id)
@@ -729,6 +753,8 @@ class TwoStageAdjudicator:
         if packet.source.execution_id != execution_id:
             raise ValueError("blind packet belongs to another execution")
         self._validate_review_set(submissions, stage="STAGE1")
+        self._validate_registered_reviewers(
+            execution_id, submissions, stage="STAGE1")
         if any(item.input_commitment != packet.packet_commitment for item in submissions):
             raise ValueError("Stage 1 reviewer did not receive the admitted blind packet")
         for submission in submissions:
@@ -824,6 +850,8 @@ class TwoStageAdjudicator:
         if len(submissions) not in {2, 3}:
             raise ReviewIncomplete(
                 "CLAIM_ADJUDICATION requires two reviewers and a third on disagreement")
+        self._validate_registered_reviewers(
+            execution_id, submissions, stage="STAGE1")
         reviewers = []
         evaluated = []
         for submission in submissions:
@@ -935,6 +963,8 @@ class TwoStageAdjudicator:
         packet = self._verify_stage1(stage1)
         facts = self.derive_root_cause_facts(stage1)
         self._validate_review_set(submissions, stage="STAGE2")
+        self._validate_registered_reviewers(
+            execution_id, submissions, stage="STAGE2")
         expected_input = stage2_input_commitment(authoritative, stage1, facts.facts_commitment)
         if any(item.input_commitment != expected_input for item in submissions):
             raise ValueError("Stage 2 input does not bind exact Stage 1 and Oracle")
@@ -946,10 +976,22 @@ class TwoStageAdjudicator:
             execution_id, authoritative, stage1, claim_result_record_id)
         claim_payload = json.loads(claim_result.semantic_json)
         review_ids = []
-        evaluations: dict[str, RootCauseEvaluation] = {}
+        evaluations = {
+            submission.reviewer_id: self._evaluate(
+                authoritative, submission.top_hypothesis, facts)
+            for submission in submissions}
+        selected = self._select_consensus(submissions, stage="STAGE2")
+        evaluation = evaluations[selected.reviewer_id]
+        final = self._store.get(identity("observation", [execution_id, "final"]))
+        final_payload = json.loads(final.semantic_json) if final is not None else {}
+        machine_hard_failure = (
+            final_payload.get("machine_hard_failure") is True
+            or final_payload.get("disposition") in {
+                "TERMINAL_PRODUCTION_FAILURE", "INVALID_EVALUATION"})
+        if machine_hard_failure and evaluation.root_cause_identification_success:
+            raise ValueError("machine hard failure cannot be human-overridden")
         for submission in submissions:
-            evaluation = self._evaluate(authoritative, submission.top_hypothesis, facts)
-            evaluations[submission.reviewer_id] = evaluation
+            submission_evaluation = evaluations[submission.reviewer_id]
             payload = {
                 "stage": "STAGE2", "reviewer_id": submission.reviewer_id,
                 "input_commitment": submission.input_commitment,
@@ -966,7 +1008,8 @@ class TwoStageAdjudicator:
                     "granularity": submission.top_hypothesis.granularity,
                     "accepted_alternative_id": submission.top_hypothesis.accepted_alternative_id,
                 },
-                "root_cause_success": evaluation.root_cause_identification_success,
+                "root_cause_success":
+                    submission_evaluation.root_cause_identification_success,
                 "reason_code": submission.reason_code, "rationale": submission.rationale,
                 "reviewed_at": submission.reviewed_at,
             }
@@ -975,8 +1018,6 @@ class TwoStageAdjudicator:
                            submission.reviewer_id], payload, execution_id,
             ))
             review_ids.append(review.record_id)
-        selected = self._select_consensus(submissions, stage="STAGE2")
-        evaluation = evaluations[selected.reviewer_id]
         scoring = {
             "canonical_causal_class_match": evaluation.canonical_causal_class_match,
             "approved_accepted_alternative_match": evaluation.approved_accepted_alternative_match,
@@ -1084,6 +1125,24 @@ class TwoStageAdjudicator:
             raise ValueError("reviewers must evaluate the same committed input")
         if stage == "STAGE1" and len({submission.item_id for submission in submissions}) != 1:
             raise ValueError("Stage 1 reviewers must decide the same item")
+
+    def _validate_registered_reviewers(
+        self, execution_id: str, submissions: tuple[object, ...], *, stage: str,
+    ) -> None:
+        _, run, _ = self._require_execution(execution_id)
+        run_protocol = json.loads(run.semantic_json).get("reviewer_protocol")
+        if run_protocol != self._reviewer_protocol:
+            raise ValueError("reviewer roster is not bound to the admitted run manifest")
+        protocol_stage = self._reviewer_protocol[
+            "stage1" if stage == "STAGE1" else "stage2"]
+        primary = set(protocol_stage["reviewer_ids"])
+        submitted = [item.reviewer_id for item in submissions]
+        if set(submitted[:2]) != primary:
+            raise ValueError(f"unknown or missing preregistered {stage} reviewer")
+        if len(submitted) == 3:
+            expected = protocol_stage["tiebreak_reviewer_id"]
+            if submitted[2] != expected or expected in primary:
+                raise ValueError(f"unregistered {stage} tie-break reviewer")
 
     @classmethod
     def _select_consensus(cls, submissions: tuple[object, ...], *, stage: str) -> object:
@@ -1272,6 +1331,7 @@ class TwoStageAdjudicator:
         run = self._store.get(execution.parent_id)
         if run is None or run.domain != "evaluation_run":
             raise ValueError("execution run is not admitted")
+        self._store.require_formal_run(run.record_id)
         plan = self._store.get_plan(run.parent_id)
         if plan is None or json.loads(run.semantic_json).get("oracle_revision_id") != plan.oracle_revision_id:
             raise ValueError("execution plan or Oracle pin is invalid")

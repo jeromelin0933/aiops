@@ -1357,7 +1357,7 @@
       "classification": "REVIEWED_EXCLUSION",
       "exclusion_reason": "Reviewed: no direct production-bound Candidate-F prompt, query, handoff, orchestration payload, or persistence surface.",
       "path": "src/knowledge_index/build.py",
-      "source_commitment": "7606978373427526e44bdb576ea33e585a4279d9d072407a0cea9057b06a345d"
+      "source_commitment": "525df57319347012eebe84cd019ef2edb6e438c1cc6d16a14f74ebedd7584870"
     },
     {
       "allowed_defensive_terms": [],
@@ -1382,6 +1382,7 @@
       "allowed_fields": [
         "approval_reference",
         "artifact",
+        "artifact_value",
         "build_identity",
         "capability_identity",
         "chunk_identity",
@@ -1393,6 +1394,7 @@
         "document_version_identity",
         "findings",
         "identity_input",
+        "identity_value",
         "lineage_commitment",
         "manifest_commitment",
         "metadata",
@@ -1412,7 +1414,7 @@
       "classification": "REVIEWED_EXCLUSION",
       "exclusion_reason": "Reviewed: no direct production-bound Candidate-F prompt, query, handoff, orchestration payload, or persistence surface.",
       "path": "src/knowledge_index/build_validation.py",
-      "source_commitment": "7ecfc01f02677f1acf898a75768fb5be70bf81315c0c2b1749ca9daa6fcb0284"
+      "source_commitment": "f9f9d5411f9f628f034a963c4f2556e93549a4b380e1d2ae6f895bbb0fdd7f31"
     },
     {
       "allowed_defensive_terms": [],
@@ -1430,12 +1432,15 @@
         "anonymized_telemetry",
         "artifact_commitment",
         "build_identity",
+        "configuration",
+        "distance_metric",
         "embedding_dimension",
         "embedding_function",
         "embedding_profile_identity",
         "embeddings",
         "entries",
         "exist_ok",
+        "hnsw",
         "ids",
         "include",
         "index_engine",
@@ -1451,13 +1456,14 @@
         "provider",
         "query_embeddings",
         "settings"
+        ,"space"
       ],
       "classification": "APPROVED",
       "entry_points": [
         "ChromaIndexAdapter"
       ],
       "path": "src/knowledge_index/chroma_index_adapter.py",
-      "source_commitment": "cc603d8c1b7b56bda111bb5d727fbd0ff574e6f6a905c4ddb6505ee967e99101",
+      "source_commitment": "84cc031065e216d3afca288872071ddb0ef82871dfdcf258d59e1caeebf56720",
       "surfaces": [
         "KNOWLEDGE_QUERY"
       ]
@@ -1508,6 +1514,7 @@
         "default",
         "description",
         "dest",
+        "distance_metric",
         "encoding",
         "exist_ok",
         "file",
@@ -1537,7 +1544,7 @@
         "_parse_filters"
       ],
       "path": "src/knowledge_index/cli.py",
-      "source_commitment": "d477df547ddff176c0323c0563d2b595c2a8d3b9aed3b58624e593d20e3f1cca",
+      "source_commitment": "a8abf5ace241ce4f5c3a3195cdbe11717d94588cdc69afadad6f7fa5d50b5d2c",
       "surfaces": [
         "KNOWLEDGE_QUERY"
       ]
@@ -1558,6 +1565,7 @@
         "capability",
         "chroma_path",
         "chunking",
+        "distance_metric",
         "encoding",
         "frozen",
         "index_schema_identity",
@@ -1571,7 +1579,7 @@
       "classification": "REVIEWED_EXCLUSION",
       "exclusion_reason": "Reviewed: no direct production-bound Candidate-F prompt, query, handoff, orchestration payload, or persistence surface.",
       "path": "src/knowledge_index/config.py",
-      "source_commitment": "9f9caecaca67ef9a2758cb259f8e289707994af2e9db5536ae90bc467e388b46"
+      "source_commitment": "1cc5b20a8bac8de8177511d58029b0f80a41a02ea1f04b0b0c7a5e239ec1f3b3"
     },
     {
       "allowed_defensive_terms": [
@@ -1638,6 +1646,7 @@
         "detail",
         "direct_threshold",
         "disposition",
+        "distance_metric",
         "document_count",
         "document_id",
         "document_identity",
@@ -1805,7 +1814,7 @@
         "RetrievalOperationRequest"
       ],
       "path": "src/knowledge_index/contracts.py",
-      "source_commitment": "1156fd0c87a1e6e8974d3236bac6f245e52824c770d08492be632277e6b7dd93",
+      "source_commitment": "d220e4d568fdf90c89dec14656e97b383c5841d3bb467b84b4de3956db1c96aa",
       "surfaces": [
         "KNOWLEDGE_QUERY"
       ]
@@ -1891,7 +1900,7 @@
       "classification": "REVIEWED_EXCLUSION",
       "exclusion_reason": "Reviewed: no direct production-bound Candidate-F prompt, query, handoff, orchestration payload, or persistence surface.",
       "path": "src/knowledge_index/identity.py",
-      "source_commitment": "fe66d673beadcad5cbe8c8451cac57a91e2fd42b193c86f38d15f8ecc85935d5"
+      "source_commitment": "8e61fad6c3b632c8310fa2b19e191d5259c9b6cc6ada2f8d6717c102dfbb1151"
     },
     {
       "allowed_defensive_terms": [],
@@ -2150,7 +2159,7 @@
       "classification": "REVIEWED_EXCLUSION",
       "exclusion_reason": "Reviewed: no direct production-bound Candidate-F prompt, query, handoff, orchestration payload, or persistence surface.",
       "path": "src/knowledge_index/snapshot.py",
-      "source_commitment": "c0f874d446d711c59d3e24c23d6c692db43bfd3c8603d0ecae6e5575279a89c8"
+      "source_commitment": "a35939d9db9c9dc96c57c3e311454ebe57b5ac6c421d6286d2f9075d3689a66a"
     },
     {
       "allowed_defensive_terms": [],
@@ -2218,6 +2227,7 @@
         "completions",
         "content_hash",
         "detail",
+        "distance_metric",
         "embedding_dimension",
         "embedding_model",
         "embedding_profile_identity",
@@ -2303,7 +2313,7 @@
         "SqliteKnowledgeStore"
       ],
       "path": "src/knowledge_index/sqlite_store.py",
-      "source_commitment": "0d247515d24b2d9c2ce5cc35b4e86ac86e8f6472131c9b9829e7758383d82247",
+      "source_commitment": "5728e89df1a84c8b3e5cb7f77e2b55b072625de018b319b7af2c7c18104ff6f7",
       "surfaces": [
         "KNOWLEDGE_QUERY",
         "PRODUCTION_PERSISTENCE"
@@ -2412,6 +2422,7 @@
         "d_store",
         "default",
         "description",
+        "distance_metric",
         "event_intake",
         "event_reader",
         "event_store",
@@ -2478,7 +2489,7 @@
         "_ClosableGenerationProvider"
       ],
       "path": "src/runtime_orchestration/cli.py",
-      "source_commitment": "d3841fb5c715df239d8da175d4dee9d9f6b3b3736f669cf8bc18eac522c77ab1",
+      "source_commitment": "84e81f59c65235537b3ea523eac27977af8258e732d468cfeeae1f0a31e20926",
       "surfaces": [
         "GENERATION_PROMPT",
         "CANDIDATE_E_PAYLOAD"

@@ -17,6 +17,8 @@ def test_tracked_config_is_non_secret_and_fixed_to_approved_baseline() -> None:
     assert config.capability.embedding_dimension == 768
     assert config.capability.hidden_retries_disabled
     assert config.chroma_path == "var/knowledge_index/chroma"
+    assert config.distance_metric == "l2"
+    assert config.index_schema_identity == "spec014-chroma-l2-v2"
     assert "source_root" not in CONFIG.read_text(encoding="utf-8")
 
 
@@ -24,6 +26,16 @@ def test_provider_model_path_and_unknown_config_substitution_fail_closed(tmp_pat
     raw = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
     raw["embedding"]["model"] = "substitute-model"
     path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    with pytest.raises(KnowledgeConfigError):
+        load_knowledge_config(path)
+    raw = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
+    raw["index"]["distance_metric"] = "cosine"
+    path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    with pytest.raises(KnowledgeConfigError):
+        load_knowledge_config(path)
+    raw = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
+    del raw["index"]["distance_metric"]
     path.write_text(yaml.safe_dump(raw), encoding="utf-8")
     with pytest.raises(KnowledgeConfigError):
         load_knowledge_config(path)

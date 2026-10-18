@@ -26,7 +26,8 @@ chunking:
   maximum_chunk_bytes: 4096
 index:
   engine: chromadb
-  schema_identity: spec014-chroma-cosine-v1
+  schema_identity: spec014-chroma-l2-v2
+  distance_metric: l2
   path: var/knowledge_index/chroma
 retrieval:
   profile_identity: spec014-retrieval-v1

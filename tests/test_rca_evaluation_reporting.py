@@ -567,7 +567,31 @@ def test_sealed_manifest_binds_all_authoritative_run_families(reporting_store):
         evaluation_plan_id=snapshot.evaluation_plan_id,
         oracle_revision_id=snapshot.oracle_revision_id,
         executions=execution_payloads)
-    assert result.complete and not result.blockers
+    # This historical helper intentionally has no execution classification.
+    # Its sealed facts remain readable, but it is not Formal-pass eligible.
+    assert not result.complete
+    assert result.blockers == ("EXECUTION_MODE_NOT_POSITIVELY_FORMAL",)
+
+
+def test_formal_classification_without_admission_lineage_fails_closed(
+    reporting_store,
+):
+    from rca_evaluation.reporting import _project
+    store, _, _, run, _, _ = reporting_store
+    snapshot = store.reader().read_run_snapshot(run.record_id)
+    root = json.loads(next(item.semantic_json for item in snapshot.records
+                           if item.record_id == run.record_id))
+    root["execution_mode"] = "FORMAL"
+    corrupted = replace(snapshot, records=tuple(
+        replace(item, semantic_json=canonical_bytes(root).decode("utf-8"),
+                semantic_commitment=commitment(root))
+        if item.record_id == run.record_id else item for item in snapshot.records))
+
+    report = _project(corrupted)
+    assert not report.readiness.evaluation_ready
+    assert not report.readiness.formal_evaluation_pass
+    assert "FORMAL_RUN_NOT_ELIGIBLE" in report.readiness.blockers
+    assert "MANIFEST_FORMAL_ADMISSION_LINEAGE_INCOHERENT" in report.readiness.blockers
 
 
 @pytest.mark.parametrize("family,field", [
@@ -790,9 +814,10 @@ def test_ready_without_external_execution_and_engineering_stages_are_separate(tm
         report = build_formal_report(store.reader(), run.record_id)
     assert report.readiness.engineering_implementation_complete
     assert report.readiness.engineering_complete
-    assert report.readiness.evaluation_ready
+    assert not report.readiness.evaluation_ready
     assert not report.readiness.evaluation_executed
     assert not report.readiness.formal_evaluation_pass
+    assert "FORMAL_RUN_NOT_ELIGIBLE" in report.readiness.blockers
     assert all(item.state == "NOT_EXECUTED" for item in report.real_gates)
 
 
@@ -1013,19 +1038,14 @@ def test_original_and_all_authorized_readjudication_branches_are_preserved(tmp_p
         assert report.re_adjudication_ambiguous
 
 
-def test_report_commitment_is_append_only_current_and_ignores_caller_verdict(
+def test_nonformal_projection_cannot_commit_and_ignores_caller_verdict(
     reporting_store,
 ):
     store, _, _, run, executions, _ = reporting_store
     report = build_formal_report(store.reader(), run.record_id)
-    record = append_report_commitment(
-        store, report, generated_at="2026-10-02T03:00:00Z")
-    rebuilt = build_formal_report(store.reader(), run.record_id)
-
-    assert rebuilt == report
-    assert report_is_current(store.reader(), record.record_id)
-    snapshot = store.reader().read_run_snapshot(run.record_id)
-    assert snapshot.report_source_cut_commitment == report.source_cut_commitment
+    with pytest.raises(ValueError, match="FORMAL admission provenance"):
+        append_report_commitment(
+            store, report, generated_at="2026-10-02T03:00:00Z")
 
     store.append(LedgerRecord.create(
         "report", [run.record_id, "caller-crafted"], {
@@ -1043,7 +1063,7 @@ def test_report_commitment_is_append_only_current_and_ignores_caller_verdict(
     forged = replace(
         report, readiness=replace(
             report.readiness, formal_evaluation_pass=True, blockers=()))
-    with pytest.raises(ValueError, match="current deterministic projection"):
+    with pytest.raises(ValueError, match="FORMAL admission provenance"):
         append_report_commitment(
             store, forged, generated_at="2026-10-02T03:01:00Z")
 
@@ -1051,7 +1071,6 @@ def test_report_commitment_is_append_only_current_and_ignores_caller_verdict(
         "observation", [executions[0].record_id, "late-source"],
         {"kind": "LATE_SOURCE"}, executions[0].record_id,
     ))
-    assert not report_is_current(store.reader(), record.record_id)
     assert (build_formal_report(store.reader(), run.record_id).source_cut_commitment
             != report.source_cut_commitment)
 

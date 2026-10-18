@@ -7,6 +7,7 @@ import sqlite3
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
+from pathlib import PurePosixPath
 
 from .authority import TrustedApprovalRegistry
 from .identity import canonical_bytes, commitment, identity, require_identity
@@ -15,7 +16,7 @@ from .oracle import EvaluationPlan, OracleRevision
 
 
 APP_ID = 0x017E0A17
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 RUN_SNAPSHOT_SCHEMA = "SPEC-017-RUN-LEDGER-SNAPSHOT-v1"
 RUN_SNAPSHOT_ORDERING = "DEPTH_DOMAIN_RECORD_ID-v1"
 REPORT_SOURCE_CUT_POLICY = "EXCLUDE_REPORT_PROJECTIONS-v1"
@@ -24,11 +25,13 @@ DEFAULT_RUN_SNAPSHOT_MAX_CANONICAL_BYTES = 16 * 1024 * 1024
 _DOMAIN_ORDER = (
     "evaluation_run", "execution", "observation", "review", "judgment",
     "re_adjudication", "gate_authorization", "gate_execution_receipt",
-    "gate_invocation_start", "gate_invocation_receipt", "docker_namespace",
+    "gate_invocation_start", "gate_invocation_receipt", "rag_child_allocation",
+    "docker_namespace",
     "docker_cleanup", "report",
 )
 _PROTECTED_R3_DOMAINS = frozenset({
     "gate_invocation_start", "gate_invocation_receipt",
+    "rag_child_allocation",
 })
 _ACTUAL_GATES = frozenset({"REAL_LLM", "REAL_RAG", "DOCKER_RCA_E2E"})
 _ACTUAL_TERMINAL_STATUSES = frozenset({
@@ -43,7 +46,7 @@ _ACTUAL_INVOCATION_BINDING_FIELDS = (
     "evaluation_run_id", "execution_id", "gate", "profile_identity",
     "profile_commitment",
 )
-_SCHEMA_SQL = """
+_SCHEMA_V1_SQL = """
     CREATE TABLE oracle_revisions (
         revision_id TEXT PRIMARY KEY, content BLOB NOT NULL);
     CREATE TABLE plans (
@@ -61,6 +64,16 @@ _SCHEMA_SQL = """
     CREATE TRIGGER ledger_no_update BEFORE UPDATE ON ledger BEGIN SELECT RAISE(ABORT, 'immutable'); END;
     CREATE TRIGGER ledger_no_delete BEFORE DELETE ON ledger BEGIN SELECT RAISE(ABORT, 'immutable'); END;
 """
+_PREPARATION_SCHEMA_SQL = """
+    CREATE TABLE preparation_records (
+        record_id TEXT PRIMARY KEY, preparation_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('PREPARED','ADMITTED')),
+        content BLOB NOT NULL, semantic_commitment TEXT NOT NULL,
+        UNIQUE(preparation_id, kind));
+    CREATE TRIGGER preparation_no_update BEFORE UPDATE ON preparation_records BEGIN SELECT RAISE(ABORT, 'immutable'); END;
+    CREATE TRIGGER preparation_no_delete BEFORE DELETE ON preparation_records BEGIN SELECT RAISE(ABORT, 'immutable'); END;
+"""
+_SCHEMA_SQL = _SCHEMA_V1_SQL + _PREPARATION_SCHEMA_SQL
 
 
 def _schema_definition(db: sqlite3.Connection) -> tuple[tuple[str, str, str, str | None], ...]:
@@ -73,6 +86,12 @@ def _schema_definition(db: sqlite3.Connection) -> tuple[tuple[str, str, str, str
 def _expected_schema_definition() -> tuple[tuple[str, str, str, str | None], ...]:
     with sqlite3.connect(":memory:") as pristine:
         pristine.executescript(_SCHEMA_SQL)
+        return _schema_definition(pristine)
+
+
+def _expected_v1_schema_definition() -> tuple[tuple[str, str, str, str | None], ...]:
+    with sqlite3.connect(":memory:") as pristine:
+        pristine.executescript(_SCHEMA_V1_SQL)
         return _schema_definition(pristine)
 
 
@@ -165,6 +184,21 @@ class SqliteEvaluationStore:
         """Return a read-only capability without append/admission methods."""
         self.readiness_check()
         return EvaluationLedgerReader(self, _seal=_READER_SEAL)
+
+    def is_pristine_for_formal_admission(self) -> bool:
+        """Legacy R1 predicate: absolutely no durable facts of any kind."""
+        self.readiness_check()
+        return all(self._db.execute(
+            f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+            for table in ("oracle_revisions", "plans", "ledger",
+                          "preparation_records"))
+
+    def has_no_formal_execution_facts(self) -> bool:
+        """Preparation records are not Oracle, plan, run, execution, or gate facts."""
+        self.readiness_check()
+        return all(self._db.execute(
+            f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+            for table in ("oracle_revisions", "plans", "ledger"))
 
     def _read_run_snapshot(
         self, evaluation_run_id: str, *, max_records: int,
@@ -300,8 +334,286 @@ class SqliteEvaluationStore:
             self._db.execute(f"PRAGMA application_id = {APP_ID}")
             self._db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             self._db.executescript(_SCHEMA_SQL)
+        elif app_id == APP_ID and version == 1:
+            # The sole supported migration is additive.  Validate the complete
+            # old schema before changing it; partial/unknown migrations fail.
+            if _schema_definition(self._db) != _expected_v1_schema_definition():
+                raise EvaluationStoreIntegrityError(
+                    "legacy evaluation schema is not the exact supported v1")
+            try:
+                self._db.executescript(
+                    "BEGIN IMMEDIATE;" + _PREPARATION_SCHEMA_SQL
+                    + f"PRAGMA user_version = {SCHEMA_VERSION};COMMIT;")
+            except BaseException:
+                if self._db.in_transaction:
+                    self._db.execute("ROLLBACK")
+                raise
         elif app_id != APP_ID or version != SCHEMA_VERSION:
             raise EvaluationStoreIntegrityError("foreign or unsupported evaluation database")
+
+    def prepare(self, payload: dict[str, object]) -> dict[str, object]:
+        """Atomically cross the first durable-mutation boundary.
+
+        Only an exact replay may coexist with a preparation record.  Any
+        Oracle/plan/ledger fact means the namespace was not pristine at the
+        authorized boundary and is rejected without repair or deletion.
+        """
+        preparation_id = self._validate_preparation_payload(payload)
+        content = canonical_bytes(payload)
+        semantic_hash = commitment(payload)
+        record_id = identity("preparation", [preparation_id, "PREPARED"])
+        self._db.execute("BEGIN IMMEDIATE")
+        try:
+            if any(self._db.execute(
+                    f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                   for table in ("oracle_revisions", "plans", "ledger")):
+                raise ValueError(
+                    "first preparation mutation requires a pristine formal store")
+            rows = self._db.execute(
+                "SELECT record_id,preparation_id,kind,content,semantic_commitment "
+                "FROM preparation_records").fetchall()
+            expected = (record_id, preparation_id, "PREPARED", content, semantic_hash)
+            if not rows:
+                self._db.execute(
+                    "INSERT INTO preparation_records VALUES (?,?,?,?,?)", expected)
+            elif len(rows) != 1 or tuple(rows[0]) != expected:
+                raise LedgerConflict("contradictory preparation replay")
+            self._db.execute("COMMIT")
+        except BaseException:
+            if self._db.in_transaction:
+                self._db.execute("ROLLBACK")
+            raise
+        return dict(payload)
+
+    def _validate_preparation_payload(self, payload: object) -> str:
+        """Validate store-local structure without duplicating domain discovery."""
+        expected_fields = {
+            "schema", "authority_reference", "lifecycle_state",
+            "preparation_id", "preregistration_identity",
+            "campaign_identity", "campaign_key", "repository",
+            "planned_lineage", "docker_namespace", "real_rag_child",
+            "readiness_preparation", "effects",
+        }
+        if type(payload) is not dict or set(payload) != expected_fields:
+            raise ValueError("preparation payload schema is invalid")
+        preparation_id = require_identity(payload.get("preparation_id"), "preparation")
+        if (payload.get("schema") != "spec017.preparation.v1"
+                or payload.get("authority_reference") !=
+                    "PM-SPEC017-R4-PREADMISSION-20261016"
+                or payload.get("lifecycle_state") != "PREPARED"):
+            raise ValueError("preparation lifecycle contract is invalid")
+        preregistration = self._require_sha256(
+            payload.get("preregistration_identity"), "preregistration identity")
+        campaign_key = payload.get("campaign_key")
+        if (not isinstance(campaign_key, str) or not campaign_key
+                or campaign_key != campaign_key.strip()
+                or payload.get("campaign_identity") !=
+                    commitment({"campaign_key": campaign_key})):
+            raise ValueError("preparation campaign binding is invalid")
+
+        repository = payload.get("repository")
+        lineage = payload.get("planned_lineage")
+        docker = payload.get("docker_namespace")
+        child = payload.get("real_rag_child")
+        readiness = payload.get("readiness_preparation")
+        effects = payload.get("effects")
+        if (not isinstance(repository, dict) or set(repository) != {
+                "root", "branch", "commit", "configuration_reference",
+                "configuration_commitment"}
+                or repository.get("configuration_commitment") != preregistration
+                or any(not isinstance(repository.get(name), str)
+                       or not repository[name]
+                       or repository[name] != repository[name].strip()
+                       for name in (
+                           "root", "branch", "commit", "configuration_reference"))):
+            raise ValueError("preparation repository binding is invalid")
+        repository_commit = repository["commit"]
+        if (len(repository_commit) != 40
+                or any(character not in "0123456789abcdefABCDEF"
+                       for character in repository_commit)):
+            raise ValueError("preparation repository commit is invalid")
+        expected_preparation_id = identity("preparation", [
+            preregistration, campaign_key, repository["branch"],
+            repository["commit"], str(self.path),
+        ])
+        if preparation_id != expected_preparation_id:
+            raise ValueError("preparation identity binding is invalid")
+        if (not isinstance(lineage, dict) or set(lineage) != {
+                "planned_run_identity", "planned_execution_identity",
+                "counts_as_formal_execution"}
+                or lineage.get("counts_as_formal_execution") is not False):
+            raise ValueError("preparation planned lineage is invalid")
+        require_identity(lineage.get("planned_run_identity"), "planned_run")
+        require_identity(lineage.get("planned_execution_identity"),
+                         "planned_execution")
+        expected_run = identity("planned_run", [preparation_id, campaign_key])
+        expected_execution = identity(
+            "planned_execution", [expected_run, "READINESS_TARGET"])
+        if (lineage["planned_run_identity"] != expected_run
+                or lineage["planned_execution_identity"] != expected_execution):
+            raise ValueError("preparation planned lineage binding is invalid")
+        if (not isinstance(docker, dict) or set(docker) != {
+                "namespace_identity", "project_name", "ownership", "state",
+                "resources_created"}
+                or docker.get("ownership") != preparation_id
+                or docker.get("state") != "PREPARED_IDENTITY_ONLY"
+                or docker.get("resources_created") is not False
+                or not isinstance(docker.get("project_name"), str)
+                or not docker["project_name"]):
+            raise ValueError("prepared Docker namespace is invalid")
+        require_identity(docker.get("namespace_identity"), "docker_namespace")
+        expected_namespace = identity("docker_namespace", [
+            preparation_id, expected_run, "FORMAL_FUTURE_TARGET"])
+        if (docker["namespace_identity"] != expected_namespace
+                or docker["project_name"] !=
+                    "spec017-" + expected_namespace.rsplit(":", 1)[1][:20]):
+            raise ValueError("prepared Docker namespace binding is invalid")
+        if (not isinstance(child, dict) or set(child) != {
+                "child_identity", "relative_path", "profile_identity",
+                "ownership", "state", "ownership_commitment"}
+                or child.get("ownership") != preparation_id
+                or child.get("state") != "ALLOCATED"
+                or not isinstance(child.get("child_identity"), str)
+                or not child["child_identity"].startswith("ragchild_")
+                or not isinstance(child.get("profile_identity"), str)
+                or not child["profile_identity"]):
+            raise ValueError("prepared Real-RAG child allocation is invalid")
+        relative = child.get("relative_path")
+        if (not isinstance(relative, str) or not relative
+                or PurePosixPath(relative).is_absolute()
+                or ".." in PurePosixPath(relative).parts):
+            raise ValueError("prepared Real-RAG child path is invalid")
+        self._require_sha256(
+            child.get("ownership_commitment"), "child ownership commitment")
+        expected_child = "ragchild_" + commitment({
+            "preparation": preparation_id,
+            "planned_run": expected_run,
+            "planned_execution": expected_execution,
+            "profile": child["profile_identity"],
+        })[7:]
+        expected_relative = f"real_rag/{expected_child}"
+        owner = {
+            "schema": "spec017.prepared-real-rag-child-ownership.v1",
+            "preparation_id": preparation_id,
+            "planned_run_identity": expected_run,
+            "planned_execution_identity": expected_execution,
+            "profile_identity": child["profile_identity"],
+            "child_identity": expected_child,
+            "relative_path": expected_relative,
+            "lifecycle_state": "ALLOCATED",
+        }
+        if (child["child_identity"] != expected_child
+                or child["relative_path"] != expected_relative
+                or child["ownership_commitment"] != commitment(owner)):
+            raise ValueError("prepared Real-RAG child identity binding is invalid")
+        if (not isinstance(readiness, dict) or set(readiness) != {
+                "state", "material", "commitment"}
+                or readiness.get("state") !=
+                    "PREPARED_NOT_VALIDATED_FOR_ADMISSION"
+                or not isinstance(readiness.get("material"), dict)
+                or commitment(readiness["material"]) != readiness.get("commitment")):
+            raise ValueError("readiness preparation commitment is invalid")
+        material = readiness["material"]
+        if (set(material) != {
+                "provider_profiles", "rag_profiles", "repository_commit",
+                "configuration_commitment", "docker_namespace_identity",
+                "real_rag_child_identity"}
+                or not isinstance(material.get("provider_profiles"), list)
+                or not material["provider_profiles"]
+                or not isinstance(material.get("rag_profiles"), list)
+                or not material["rag_profiles"]
+                or material.get("repository_commit") != repository.get("commit")
+                or material.get("configuration_commitment") != preregistration
+                or material.get("docker_namespace_identity") !=
+                    docker.get("namespace_identity")
+                or material.get("real_rag_child_identity") !=
+                    child.get("child_identity")
+                or child.get("profile_identity") not in
+                    material.get("rag_profiles", [])):
+            raise ValueError("readiness preparation material is contradictory")
+        if effects != {
+                "formal_execution": False, "external_gates": False,
+                "scenario_injection": False, "denominator_consumed": False}:
+            raise ValueError("PREPARED cannot contain Formal execution effects")
+        return preparation_id
+
+    def get_preparation(self, preparation_id: str) -> dict[str, object] | None:
+        require_identity(preparation_id, "preparation")
+        row = self._db.execute(
+            "SELECT content,semantic_commitment FROM preparation_records "
+            "WHERE preparation_id=? AND kind='PREPARED'", (preparation_id,)).fetchone()
+        if row is None:
+            return None
+        try:
+            payload = json.loads(row[0])
+            if (canonical_bytes(payload) != row[0]
+                    or commitment(payload) != row[1]
+                    or self._validate_preparation_payload(payload) != preparation_id):
+                raise ValueError("preparation row commitment mismatch")
+            return payload
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise EvaluationStoreIntegrityError("corrupt preparation record") from exc
+
+    def admit_preparation(
+        self, preparation_id: str, payload: dict[str, object],
+    ) -> dict[str, object]:
+        """Append the deterministic ADMITTED transition after fresh validation."""
+        prepared = self.get_preparation(preparation_id)
+        if prepared is None:
+            raise ValueError("PREPARED state is required before Final Admission")
+        expected_fields = {
+            "schema", "lifecycle_state", "preparation_id",
+            "preparation_commitment", "formal_admission_commitment",
+            "formal_admission_payload",
+        }
+        if (type(payload) is not dict or set(payload) != expected_fields
+                or payload.get("schema") != "spec017.preparation-admission.v1"
+                or payload.get("lifecycle_state") != "ADMITTED"
+                or payload.get("preparation_id") != preparation_id
+                or payload.get("preparation_commitment") != commitment(prepared)
+                or not isinstance(payload.get("formal_admission_payload"), dict)
+                or commitment(payload["formal_admission_payload"]) !=
+                    payload.get("formal_admission_commitment")):
+            raise ValueError("Final Admission payload contradicts preparation")
+        if not self.has_no_formal_execution_facts():
+            raise ValueError("Formal execution facts exist before Final Admission")
+        content = canonical_bytes(payload)
+        semantic_hash = commitment(payload)
+        record_id = identity("formal_admission", [preparation_id])
+        expected = (record_id, preparation_id, "ADMITTED", content, semantic_hash)
+        self._db.execute("BEGIN IMMEDIATE")
+        try:
+            row = self._db.execute(
+                "SELECT record_id,preparation_id,kind,content,semantic_commitment "
+                "FROM preparation_records WHERE preparation_id=? AND kind='ADMITTED'",
+                (preparation_id,)).fetchone()
+            if row is None:
+                self._db.execute(
+                    "INSERT INTO preparation_records VALUES (?,?,?,?,?)", expected)
+            elif tuple(row) != expected:
+                raise LedgerConflict("contradictory Final Admission replay")
+            self._db.execute("COMMIT")
+        except BaseException:
+            if self._db.in_transaction:
+                self._db.execute("ROLLBACK")
+            raise
+        return dict(payload)
+
+    def require_admitted_preparation(
+        self, preparation_id: str, admission_commitment: str,
+    ) -> dict[str, object]:
+        """Fresh-read the exact durable admission used by an execution guard."""
+        require_identity(preparation_id, "preparation")
+        row = self._db.execute(
+            "SELECT content,semantic_commitment FROM preparation_records "
+            "WHERE preparation_id=? AND kind='ADMITTED'", (preparation_id,)).fetchone()
+        if row is None:
+            raise ValueError("only ADMITTED preparation can execute")
+        payload = json.loads(row[0])
+        if (canonical_bytes(payload) != row[0] or commitment(payload) != row[1]
+                or payload.get("formal_admission_commitment") != admission_commitment):
+            raise EvaluationStoreIntegrityError("durable Final Admission is contradictory")
+        return payload
 
     def _insert_once(self, table: str, id_column: str, record_id: str, content: bytes) -> None:
         self._db.execute("BEGIN IMMEDIATE")
@@ -371,6 +683,13 @@ class SqliteEvaluationStore:
 
     def append(self, record: LedgerRecord) -> LedgerRecord:
         """Append an evaluation fact; callers never receive production write access."""
+        if record.domain == "evaluation_run":
+            payload = json.loads(record.semantic_json)
+            if (payload.get("execution_mode") == "FORMAL"
+                    or payload.get("formal_admission_commitment") is not None
+                    or payload.get("formal_admission") is not None):
+                raise ValueError(
+                    "formal evaluation run is protected; use the admitted formal entrypoint")
         if record.domain == "judgment":
             raise ValueError(
                 "formal ORIGINAL judgment is protected; the governed adjudicator must issue it"
@@ -395,6 +714,103 @@ class SqliteEvaluationStore:
                     "UNSUPPORTED_CLAIM_RESULT is protected; the governed adjudicator must issue it"
                 )
         return self._append_validated(record)
+
+    def _append_rag_child_allocation(self, record: LedgerRecord) -> LedgerRecord:
+        """Persist a structurally valid Candidate-F isolated-child allocation."""
+        payload = json.loads(record.semantic_json)
+        if (record.domain != "rag_child_allocation"
+                or payload.get("kind") != "REAL_RAG_CHILD_ALLOCATION"
+                or payload.get("lifecycle_state") != "ALLOCATED"):
+            raise ValueError("RAG child allocation payload is invalid")
+        return self._append_validated(record)
+
+    def _append_formal_run(self, record: LedgerRecord) -> LedgerRecord:
+        """Append a structurally validated FORMAL root from the supported entrypoint."""
+        self._validate_formal_run_record(record)
+        result = self._append_validated(record)
+        self.require_formal_run(result.record_id)
+        return result
+
+    def _validate_formal_run_record(self, record: LedgerRecord) -> None:
+        """Check durable FORMAL classification, lineage, and frozen controls."""
+        record.validate()
+        payload = json.loads(record.semantic_json)
+        commitment_value = payload.get("formal_admission_commitment")
+        if (record.domain != "evaluation_run"
+                or payload.get("execution_mode") != "FORMAL"
+                or not isinstance(commitment_value, str)
+                or len(commitment_value) != 71
+                or not commitment_value.startswith("sha256:")):
+            raise ValueError("formal run root lacks an exact admission binding")
+        admission = payload.get("formal_admission")
+        exact = {
+            "evaluation_plan_id": record.parent_id,
+            "evaluation_run_id": record.record_id,
+            "campaign_key": payload.get("campaign_key"),
+            "manifest_commitment": payload.get("manifest_commitment"),
+            "evaluation_root": str(self.path.parent),
+            "execution_workspace": str(self.path.parent),
+            "database_path": str(self.path),
+        }
+        controls = admission.get("controls") if isinstance(admission, dict) else None
+        expected_controls = {
+            "repetitions": 5, "order": "REPETITION_MAJOR",
+            "bootstrap_seed": 17017, "polling_interval_seconds": 1,
+            "per_execution_timeout_seconds": 300, "early_stop": False,
+            "replacement": "NONE",
+        }
+        order = payload.get("execution_order")
+        sealed_manifest = payload.get("sealed_manifest")
+        expected_scenarios = [
+            f"S{scenario}" for _repetition in range(1, 6)
+            for scenario in range(1, 7)]
+        scenario_inputs = (sealed_manifest.get("scenario_inputs")
+                           if isinstance(sealed_manifest, dict) else None)
+        if (not isinstance(admission, dict)
+                or commitment(admission) != commitment_value
+                or any(admission.get(name) != value for name, value in exact.items())
+                or admission.get("schema") != "spec017.formal-admission.v1"
+                or controls != expected_controls
+                or payload.get("fixed_n") != 5
+                or admission.get("execution_order") != order
+                or not isinstance(order, list) or len(order) != 30
+                or len(set(order)) != 30
+                or not isinstance(sealed_manifest, dict)
+                or commitment(sealed_manifest)
+                    != payload.get("manifest_commitment")
+                or sealed_manifest.get("run_id") != record.record_id
+                or sealed_manifest.get("evaluation_plan_id") != record.parent_id
+                or sealed_manifest.get("execution_ids") != order
+                or not isinstance(scenario_inputs, list)
+                or [item[0] for item in scenario_inputs
+                    if isinstance(item, list) and item] != expected_scenarios
+                or len(scenario_inputs) != 30
+                or sealed_manifest.get("random_seed") != 17017
+                or sealed_manifest.get("polling_interval_ms") != 1_000
+                or sealed_manifest.get("timeout_ms") != 300_000
+                or sealed_manifest.get("execution_order_strategy")
+                    != "REPETITION_MAJOR"
+                or sealed_manifest.get("early_stop_allowed") is not False
+                or sealed_manifest.get("replacement_policy") != "NONE"
+                or payload.get("repository_commit")
+                    != payload.get("production_build")
+                or payload.get("repository_dirty") is not False
+                or payload.get("reviewer_protocol")
+                    != admission.get("reviewer_protocol")
+                or commitment(payload.get("reviewer_protocol"))
+                    != admission.get("reviewer_protocol_commitment")):
+            raise ValueError("formal run/admission/manifest binding is contradictory")
+
+    def require_formal_run(self, evaluation_run_id: str) -> LedgerRecord:
+        """Return a run only when its durable FORMAL lineage is coherent."""
+        run = self.get(evaluation_run_id)
+        if run is None or run.domain != "evaluation_run":
+            raise ValueError("formal evaluation run does not exist")
+        try:
+            self._validate_formal_run_record(run)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("run lacks coherent FORMAL admission provenance") from exc
+        return run
 
     def _append_protected_adjudication(
         self, record: LedgerRecord, *, authority: object,
@@ -833,6 +1249,7 @@ class SqliteEvaluationStore:
             "docker_cleanup": "docker_namespace",
             "gate_invocation_start": "execution",
             "gate_invocation_receipt": "gate_invocation_start",
+            "rag_child_allocation": "execution",
         }[record.domain]
         require_identity(record.parent_id, required_parent)
         if required_parent == "evaluation_plan":
@@ -1036,6 +1453,44 @@ class SqliteEvaluationStore:
                 if canonical_bytes(json.loads(raw)) != raw:
                     raise EvaluationStoreIntegrityError("noncanonical plan row")
                 self.get_plan(plan_id)
+            preparation_ids = {
+                row[0] for row in self._db.execute(
+                    "SELECT DISTINCT preparation_id FROM preparation_records")
+            }
+            for preparation_id in preparation_ids:
+                prepared = self.get_preparation(preparation_id)
+                if prepared is None:
+                    raise EvaluationStoreIntegrityError(
+                        "admission exists without preparation")
+                rows = self._db.execute(
+                    "SELECT record_id,kind,content,semantic_commitment "
+                    "FROM preparation_records WHERE preparation_id=?",
+                    (preparation_id,)).fetchall()
+                for record_id, kind, raw, semantic_hash in rows:
+                    payload = json.loads(raw)
+                    expected_domain = (
+                        "preparation" if kind == "PREPARED"
+                        else "formal_admission")
+                    expected_key = ([preparation_id, "PREPARED"]
+                                    if kind == "PREPARED" else [preparation_id])
+                    if (record_id != identity(expected_domain, expected_key)
+                            or canonical_bytes(payload) != raw
+                            or commitment(payload) != semantic_hash):
+                        raise EvaluationStoreIntegrityError(
+                            "preparation lifecycle row is invalid")
+                    if kind == "ADMITTED" and (
+                            payload.get("schema") !=
+                                "spec017.preparation-admission.v1"
+                            or payload.get("lifecycle_state") != "ADMITTED"
+                            or payload.get("preparation_id") != preparation_id
+                            or payload.get("preparation_commitment") !=
+                                commitment(prepared)
+                            or not isinstance(
+                                payload.get("formal_admission_payload"), dict)
+                            or commitment(payload["formal_admission_payload"]) !=
+                                payload.get("formal_admission_commitment")):
+                        raise EvaluationStoreIntegrityError(
+                            "Final Admission row is invalid")
             invocation_bindings: dict[str, tuple[object, ...]] = {}
             for (record_id,) in self._db.execute("SELECT record_id FROM ledger"):
                 record = self.get(record_id)

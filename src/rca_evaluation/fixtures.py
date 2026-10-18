@@ -33,7 +33,7 @@ REQUIRED_RESTART_BOUNDARIES = (
 OFFICIAL_FIXTURE_MANIFEST_IDENTITY = "spec017-s1-s6-fixtures-v2"
 OFFICIAL_FIXTURE_REVISION = "spec017-fixtures-v2"
 OFFICIAL_FIXTURE_MANIFEST_COMMITMENT = (
-    "sha256:3deee326137845127d9582a6ff9ea369211ce045c5debc04a2052241aed32429"
+    "sha256:43919ec3b36bcc5a5e67348fa99bf3a5b2c77af3785bcefb9ca6da1ef29a43a0"
 )
 
 _VERIFIED_LOADER_PROVENANCE = object()
@@ -89,6 +89,8 @@ class FixtureAdmissionRequest:
     input_commitment: str
     oracle_scenario_reference: str
     recovery_boundary: str | None = None
+    fixture_identity: str | None = None
+    fixture_revision: str | None = None
 
 
 def _manifest_payload(manifest: OfficialFixtureManifest) -> dict:
@@ -142,6 +144,7 @@ class AdmittedFixture:
     oracle_revision_id: str
     oracle_content_commitment: str
     fixture_identity: str
+    source_fixture_revision: str
     scenario_id: str
     variant: str
     input_identity: str
@@ -174,6 +177,7 @@ class AdmittedFixture:
             ("oracle_content_commitment",
              manifest.source_oracle_content_commitment),
             ("fixture_identity", entry.fixture_identity),
+            ("source_fixture_revision", entry.fixture_revision),
             ("scenario_id", entry.scenario_id),
             ("variant", entry.variant),
             ("input_identity", entry.input_identity),
@@ -267,8 +271,16 @@ class VerifiedFixtureResolver:
             or entry.input_commitment != request.input_commitment
             or entry.oracle_scenario_reference
                 != request.oracle_scenario_reference
+            or (request.fixture_identity is not None
+                and entry.fixture_identity != request.fixture_identity)
+            or (request.fixture_revision is not None
+                and entry.fixture_revision != request.fixture_revision)
         ):
             raise ValueError("fixture admission facts do not match the official manifest")
+        if (entry.variant in {"degraded", "failure", "contradiction"}
+                and (request.fixture_identity is None
+                     or request.fixture_revision is None)):
+            raise ValueError("R2 formal fixture admission requires exact identity and revision")
         return AdmittedFixture._admitted(self._manifest, entry)
 
 
@@ -344,6 +356,8 @@ def load_fixture_manifest(
             is_recovery = item.variant in {
                 "material_refresh", "refresh_failure", "non_material",
                 "restart_boundary"}
+            is_r2_formal_source = item.variant in {
+                "degraded", "failure", "contradiction"}
             if is_recovery:
                 if (item.evaluation_classification != "EVALUATION ONLY"
                         or item.pm_approval_reference
@@ -375,6 +389,16 @@ def load_fixture_manifest(
                             or not item.control_commitment):
                         raise ValueError(
                             "restart fixture requires a governed boundary control")
+            if is_r2_formal_source:
+                if (item.evaluation_classification != "EVALUATION ONLY"
+                        or item.pm_approval_reference
+                            != "PM Formal Evaluation delegation"
+                        or item.canonical_artifact_commitment
+                            != item.source_commitment
+                        or not item.control_reference
+                        or item.control_commitment != item.input_commitment):
+                    raise ValueError(
+                        "R2 formal fixture lacks evaluation-only authority binding")
             if repository_root is not None:
                 source_path, separator, selector = item.source_reference.partition("#")
                 if not separator:
@@ -389,7 +413,7 @@ def load_fixture_manifest(
                 if actual_source != item.source_commitment:
                     raise ValueError("fixture source commitment mismatch")
                 document = yaml.safe_load(canonical_content)
-                if is_recovery:
+                if is_recovery or is_r2_formal_source:
                     cursor = document
                     for component in selector.split("."):
                         if not isinstance(cursor, dict) or component not in cursor:

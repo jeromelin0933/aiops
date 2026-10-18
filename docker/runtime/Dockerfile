@@ -1,5 +1,11 @@
 FROM python:3.12-slim
 
+ARG SOURCE_REVISION=UNRESOLVED
+ARG RUNTIME_IMAGE_SOURCE_COMMITMENT=UNRESOLVED
+LABEL org.opencontainers.image.revision="${SOURCE_REVISION}" \
+      io.aiops.runtime.source-commitment="${RUNTIME_IMAGE_SOURCE_COMMITMENT}" \
+      io.aiops.runtime.profile="spec011-runtime-formal-v1"
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app/src

@@ -23,6 +23,14 @@ class ExternalObservation:
     candidate_a_current_version_id: str | None = None
     incident_rca_version_id: str | None = None
     upstream: UpstreamOutcome = UpstreamOutcome()
+    event_id: str | None = None
+    incident_id: str | None = None
+    current_version_id: str | None = None
+    public_lineage_commitment: str | None = None
+    incident_observed_at: str | None = None
+    incident_observed_ns: int | None = None
+    rca_observed_at: str | None = None
+    rca_observed_ns: int | None = None
 
     @property
     def actionable_incident(self) -> bool:

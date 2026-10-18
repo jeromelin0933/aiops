@@ -26,7 +26,13 @@ from .gate_records import (
     read_gate_authorization, read_gate_execution_receipt,
 )
 from .identity import canonical_bytes, commitment, require_identity
-from .sqlite_store import EvaluationLedgerReader
+from .readiness import (
+    CredentialReadiness, CredentialState, RagChildAllocation,
+    ReadinessFactState, RealLlmReadinessCommitment,
+    create_real_rag_readiness_commitment, resolve_candidate_c_build,
+    resolve_repository_identity, verify_supported_real_rag_child_allocation,
+)
+from .sqlite_store import EvaluationLedgerReader, SqliteEvaluationStore
 
 
 class GateKind(str, Enum):
@@ -226,11 +232,13 @@ def load_real_rag_profile(path: str | Path) -> RealRagProfile:
         "config_path", "manifest_path", "release_reference", "manifest_commitment",
         "embedding_adapter", "embedding_provider", "embedding_model",
         "embedding_profile_reference", "embedding_profile_identity", "index_engine",
-        "index_schema_identity", "retrieval_profile_identity", "active_or_lkg_required",
+        "index_schema_identity", "distance_metric", "retrieval_profile_identity", "active_or_lkg_required",
         "public_retrieval_required", "isolated_chroma_root",
     }, "knowledge")
     if knowledge["active_or_lkg_required"] is not True or knowledge["public_retrieval_required"] is not True:
         raise ValueError("real RAG requires Active/LKG and public retrieval")
+    if knowledge["distance_metric"] != "l2":
+        raise ValueError("real RAG requires the approved l2 distance metric")
     for key, value in knowledge.items():
         if key not in {"active_or_lkg_required", "public_retrieval_required"}:
             _text(value, key)
@@ -303,6 +311,7 @@ class RealRagBuildContext:
     artifact_commitment: str
     lineage_commitment: str
     staged_commitment: str
+    distance_metric: str
 
     def pins(self) -> dict[str, object]:
         return {
@@ -324,6 +333,8 @@ class GateReadiness:
     evaluation_run_id: str
     execution_id: str
     real_rag_build_context: RealRagBuildContext | None = None
+    readiness_commitment: str | None = None
+    required_fact_states: tuple[tuple[str, str], ...] = ()
 
 
 def _status(gate: GateKind, profile_identity: str, profile_commitment: str,
@@ -332,6 +343,8 @@ def _status(gate: GateKind, profile_identity: str, profile_commitment: str,
             checks: tuple[PrerequisiteCheck, ...], *, evaluation_run_id: str,
             execution_id: str,
             real_rag_build_context: RealRagBuildContext | None = None,
+            readiness_commitment: str | None = None,
+            required_fact_states: tuple[tuple[str, str], ...] = (),
             ) -> GateReadiness:
     require_identity(evaluation_run_id, "evaluation_run")
     require_identity(execution_id, "execution")
@@ -357,7 +370,7 @@ def _status(gate: GateKind, profile_identity: str, profile_commitment: str,
         record.authorization_id if record else None,
         record.authorization_commitment if record else None,
         state, checks, evaluation_run_id, execution_id,
-        real_rag_build_context,
+        real_rag_build_context, readiness_commitment, required_fact_states,
     )
 
 
@@ -365,6 +378,8 @@ def _status(gate: GateKind, profile_identity: str, profile_commitment: str,
 class RealLlmFacts:
     authorization: AuthorizationRequest
     required_profile_available: bool
+    credential_readiness: CredentialReadiness | None = None
+    repository_identity: str | None = None
 
 
 def evaluate_real_llm(profile: RealLlmProfile, facts: RealLlmFacts,
@@ -372,10 +387,18 @@ def evaluate_real_llm(profile: RealLlmProfile, facts: RealLlmFacts,
                       authority: EvaluationLedgerReader,
                       evaluation_run_id: str, execution_id: str) -> GateReadiness:
     config_path = Path(repository_root) / profile.config_path
-    checks = [PrerequisiteCheck("credential_ready", facts.authorization.credential_ready,
-                                "credential availability only; value not captured"),
+    credential_ready = (facts.credential_readiness is not None
+                        and facts.credential_readiness.credential_state
+                            is CredentialState.AVAILABLE
+                        and facts.credential_readiness.credential_reference
+                            == f"env:{profile.authorization.credential_environment}"
+                        and facts.credential_readiness.profile_identity
+                            == profile.profile_identity)
+    checks = [PrerequisiteCheck("credential_ready", credential_ready,
+                                "typed sanitized environment credential readiness"),
               PrerequisiteCheck("required_profile_available", facts.required_profile_available,
                                 "existing Gemini adapter/profile")]
+    readiness_commitment = None
     try:
         config = load_generation_config(config_path)
         pin = config.pin
@@ -390,13 +413,27 @@ def evaluate_real_llm(profile: RealLlmProfile, facts: RealLlmFacts,
         )
         checks.append(PrerequisiteCheck("governed_generation_profile", matches,
                                         "existing Candidate-D configuration pins"))
+        if credential_ready:
+            readiness_commitment = RealLlmReadinessCommitment.create(
+                profile, config, facts.credential_readiness,
+                repository_identity=resolve_repository_identity(repository_root),
+            ).readiness_commitment
+        checks.append(PrerequisiteCheck(
+            "readiness_commitment", readiness_commitment is not None,
+            "deterministic secret-free Real-LLM readiness commitment"))
     except (OSError, ValueError):
         checks.append(PrerequisiteCheck("governed_generation_profile", False,
                                         "generation configuration unavailable"))
+        checks.append(PrerequisiteCheck("readiness_commitment", False,
+                                        "LLM readiness commitment unavailable"))
     return _status(GateKind.REAL_LLM, profile.profile_identity,
                    profile.profile_commitment, facts.authorization,
                    authority, tuple(checks), evaluation_run_id=evaluation_run_id,
-                   execution_id=execution_id)
+                   execution_id=execution_id,
+                   readiness_commitment=readiness_commitment,
+                   required_fact_states=(("credential", (
+                       ReadinessFactState.RESOLVED.value if credential_ready
+                       else ReadinessFactState.UNRESOLVED.value)),))
 
 
 @dataclass(frozen=True, slots=True)
@@ -409,9 +446,13 @@ class RealRagFacts:
     actual_manifest_commitment: str | None
     actual_embedding_profile_identity: str | None
     actual_index_schema_identity: str | None
+    actual_distance_metric: str | None
     chroma_path: str | None
     real_embedding_and_index: bool
     candidate_c_authority: object | None = None
+    credential_readiness: CredentialReadiness | None = None
+    isolated_child: RagChildAllocation | None = None
+    repository_identity: str | None = None
 
 
 def _read_real_rag_build_context(
@@ -440,7 +481,9 @@ def _read_real_rag_build_context(
         manifest = staged.manifest_provenance
         build_input = staged.build_input
         artifact = staged.artifact
-        if manifest is None:
+        if (manifest is None
+                or build_input.distance_metric != config.distance_metric
+                or artifact.distance_metric != build_input.distance_metric):
             return None
         return RealRagBuildContext(
             activation.active_build_identity,
@@ -460,6 +503,7 @@ def _read_real_rag_build_context(
             artifact.artifact_commitment,
             staged.lineage_commitment,
             staged.staged_commitment,
+            artifact.distance_metric,
         )
     except (AttributeError, TypeError, ValueError):
         return None
@@ -467,8 +511,10 @@ def _read_real_rag_build_context(
 
 def evaluate_real_rag(profile: RealRagProfile, facts: RealRagFacts,
                       *, repository_root: str | Path,
-                      authority: EvaluationLedgerReader,
+                      evaluation_store: SqliteEvaluationStore,
                       evaluation_run_id: str, execution_id: str) -> GateReadiness:
+    """Evaluate the supported Real-RAG path from Candidate-F durable authority."""
+    authority = evaluation_store.reader()
     values = profile.values()
     root = Path(repository_root).resolve()
     config = None
@@ -487,6 +533,7 @@ def evaluate_real_rag(profile: RealRagProfile, facts: RealRagFacts,
             and config.capability.embedding_profile_identity == values["embedding_profile_identity"]
             and values["index_engine"] == "chromadb"
             and config.index_schema_identity == values["index_schema_identity"]
+            and config.distance_metric == values["distance_metric"] == "l2"
             and config.retrieval_profile.profile_identity == values["retrieval_profile_identity"]
             and values["active_or_lkg_required"] is True
             and values["public_retrieval_required"] is True
@@ -506,9 +553,11 @@ def evaluate_real_rag(profile: RealRagProfile, facts: RealRagFacts,
             values["embedding_profile_identity"]
         and build_context.index_engine == values["index_engine"]
         and build_context.index_schema_identity == values["index_schema_identity"]
+        and build_context.distance_metric == values["distance_metric"]
     ))
     isolated = False
-    if facts.chroma_path is not None:
+    verified_child = None
+    if facts.chroma_path is not None and facts.isolated_child is not None:
         try:
             raw_candidate = Path(facts.chroma_path)
             if ".." in raw_candidate.parts:
@@ -520,18 +569,62 @@ def evaluate_real_rag(profile: RealRagProfile, facts: RealRagFacts,
             production_index = (root / config.chroma_path).resolve()
             candidate = (raw_candidate if raw_candidate.is_absolute()
                          else root / raw_candidate).resolve()
+            verified_child = verify_supported_real_rag_child_allocation(
+                facts.isolated_child, evaluation_store=evaluation_store,
+                repository_root=root,
+                isolated_root=values["isolated_chroma_root"],
+                production_root=config.chroma_path,
+                evaluation_run_id=evaluation_run_id,
+                execution_id=execution_id,
+                profile_identity=profile.profile_identity,
+            )
             isolated_root.relative_to(evaluation_base)
             candidate.relative_to(isolated_root)
-            isolated = candidate != isolated_root and candidate != production_index
+            isolated = (candidate != isolated_root and candidate != production_index
+                        and verified_child.readiness_state
+                            is ReadinessFactState.RESOLVED
+                        and candidate == (root / verified_child.relative_path).resolve())
         except (OSError, RuntimeError, ValueError):
             isolated = False
+    credential_ready = (facts.credential_readiness is not None
+                        and facts.credential_readiness.credential_state
+                            is CredentialState.AVAILABLE
+                        and facts.credential_readiness.credential_reference
+                            == f"env:{profile.authorization.credential_environment}"
+                        and facts.credential_readiness.profile_identity
+                            == profile.profile_identity)
+    build_fact, activation_fact = resolve_candidate_c_build(
+        facts.candidate_c_authority, config,
+        expected_manifest_commitment=(values["manifest_commitment"]
+                                      if config is not None else None),
+        expected_corpus_identity=(admission.manifest.corpus_id
+                                  if governed else None),
+        expected_corpus_version=(admission.manifest.corpus_version
+                                 if governed else None),
+    ) if config is not None else (
+            None, None)
+    readiness_commitment = None
+    if (governed and verified_child is not None
+            and facts.credential_readiness is not None
+            and build_fact is not None
+            and activation_fact is not None):
+        try:
+            readiness_commitment = create_real_rag_readiness_commitment(
+                profile, config, admission, verified_child,
+                repository_identity=resolve_repository_identity(repository_root),
+                build_fact=build_fact, activation_fact=activation_fact,
+                credential=facts.credential_readiness,
+            ).readiness_commitment
+        except (AttributeError, TypeError, ValueError):
+            readiness_commitment = None
     checks = (
-        PrerequisiteCheck("credential_ready", facts.authorization.credential_ready,
-                          "credential availability only; value not captured"),
+        PrerequisiteCheck("credential_ready", credential_ready,
+                          "typed sanitized environment credential readiness"),
         PrerequisiteCheck("governed_manifest_and_profile", governed and
                           facts.actual_manifest_commitment == values["manifest_commitment"] and
                           facts.actual_embedding_profile_identity == values["embedding_profile_identity"] and
-                          facts.actual_index_schema_identity == values["index_schema_identity"],
+                          facts.actual_index_schema_identity == values["index_schema_identity"] and
+                          facts.actual_distance_metric == values["distance_metric"],
                           "SPEC-014 pinned manifest/profile/index"),
         PrerequisiteCheck("active_or_lkg", facts.authority_state in {"ACTIVE", "LKG"}
                           and exact_build,
@@ -543,13 +636,25 @@ def evaluate_real_rag(profile: RealRagProfile, facts: RealRagFacts,
         PrerequisiteCheck("real_not_fake", facts.real_embedding_and_index,
                           "real embedding and Chroma provenance"),
         PrerequisiteCheck("isolated_chroma", isolated,
-                          "evaluation-owned non-default Chroma path"),
+                          "Candidate-F-owned non-default Chroma child"),
+        PrerequisiteCheck("readiness_commitment", readiness_commitment is not None,
+                          "deterministic secret-free Real-RAG readiness commitment"),
+        PrerequisiteCheck("required_build_fact", build_fact is not None and
+                          build_fact.state is ReadinessFactState.RESOLVED,
+                          "Candidate-C public validated build fact"),
+        PrerequisiteCheck("required_activation_fact", activation_fact is not None and
+                          activation_fact.state is ReadinessFactState.RESOLVED,
+                          "Candidate-C public activation lineage fact"),
     )
     return _status(GateKind.REAL_RAG, profile.profile_identity,
                    profile.profile_commitment, facts.authorization,
                    authority, checks, evaluation_run_id=evaluation_run_id,
                    execution_id=execution_id,
-                   real_rag_build_context=build_context if exact_build else None)
+                   real_rag_build_context=build_context if exact_build else None,
+                   readiness_commitment=readiness_commitment,
+                   required_fact_states=tuple(
+                       (item.name, item.state.value)
+                       for item in (build_fact, activation_fact) if item is not None))
 
 
 def _evidence_id(payload: dict) -> str:

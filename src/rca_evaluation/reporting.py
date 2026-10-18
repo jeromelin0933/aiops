@@ -547,6 +547,9 @@ def _project(snapshot: EvaluationRunSnapshot) -> FormalReport:
         oracle_revision_id=snapshot.oracle_revision_id,
         executions=tuple((item, execution_payload_by_id[item]) for item in admitted_ids
                          if item in execution_payload_by_id))
+    formal_eligible = (
+        root.get("execution_mode") == "FORMAL"
+        and manifest_verification.complete)
     scoring_complete = all(
         row.root_cause_success is not None
         and row.unsupported_claim_denominator is not None
@@ -571,7 +574,7 @@ def _project(snapshot: EvaluationRunSnapshot) -> FormalReport:
              or (gate.docker_namespace_ids and gate.docker_cleanup_ids))
         for gate in gates)
     evidence_complete = (
-        manifest_verification.complete and bool(evidence_index.manifest_commitment)
+        formal_eligible and bool(evidence_index.manifest_commitment)
         and input_complete
         and scoring_complete and latency_evidence_complete
         and review_complete and gate_evidence_complete)
@@ -664,7 +667,7 @@ def _project(snapshot: EvaluationRunSnapshot) -> FormalReport:
         engineering_implemented and protected_judgment_authority_valid
         and protected_ucr_authority_valid and not re_adjudication_ambiguous)
     pre_execution_ready = (
-        campaign_complete and manifest_verification.complete
+        campaign_complete and formal_eligible
         and bool(evidence_index.manifest_commitment) and input_complete
         and gate_harness_ready and bool(required_isolation)
         and bool(required_deviation) and bool(required_refresh)
@@ -676,7 +679,7 @@ def _project(snapshot: EvaluationRunSnapshot) -> FormalReport:
         and gates_executed)
     formal_pass = _formal_pass_gate(
         executed=evaluation_executed,
-        campaign=campaign_complete, evidence=evidence_complete,
+        campaign=campaign_complete and formal_eligible, evidence=evidence_complete,
         review=review_complete,
         judgment_authority=protected_judgment_authority_valid,
         ucr_authority=protected_ucr_authority_valid,
@@ -694,6 +697,8 @@ def _project(snapshot: EvaluationRunSnapshot) -> FormalReport:
         closure=engineering_complete,
     )
     blockers = []
+    if not formal_eligible:
+        blockers.append("FORMAL_RUN_NOT_ELIGIBLE")
     if not campaign_complete:
         blockers.append("REQUIRED_CAMPAIGN_INCOMPLETE")
     if not evidence_complete:
@@ -786,7 +791,7 @@ def _project(snapshot: EvaluationRunSnapshot) -> FormalReport:
 def build_formal_report(
     reader: EvaluationLedgerReader, evaluation_run_id: str,
 ) -> FormalReport:
-    """Build a report using the authoritative run snapshot as its sole input."""
+    """Build a deterministic projection; projection alone is not Formal eligibility."""
     if type(reader) is not EvaluationLedgerReader:
         raise TypeError("store-issued EvaluationLedgerReader required")
     return _project(reader.read_run_snapshot(evaluation_run_id))
@@ -804,6 +809,10 @@ def append_report_commitment(
         raise ValueError("generated_at must be an ISO-8601 timestamp") from exc
     if parsed.tzinfo is None:
         raise ValueError("generated_at must include a timezone")
+    # REPORTABLE is deliberately broader than FORMAL_ACCEPTANCE_ELIGIBLE.
+    # Historical/generic projections remain readable, but only the Candidate-F
+    # authority can positively prove and commit an admitted FORMAL run.
+    store.require_formal_run(report.evaluation_run_id)
     current = build_formal_report(store.reader(), report.evaluation_run_id)
     if current.report_semantic_commitment != report.report_semantic_commitment:
         raise ValueError("report is not the current deterministic projection")

@@ -32,9 +32,15 @@ def collection_name(build_identity: str) -> str:
 
 
 class ChromaIndexAdapter:
-    def __init__(self, storage_path: str | Path, *, index_schema_identity: str, client: Any | None = None) -> None:
+    def __init__(
+        self, storage_path: str | Path, *, index_schema_identity: str,
+        distance_metric: str, client: Any | None = None,
+    ) -> None:
+        if distance_metric != "l2":
+            raise KnowledgeValidationError("unsupported Chroma distance metric")
         self.storage_path = Path(storage_path)
         self.index_schema_identity = index_schema_identity
+        self.distance_metric = distance_metric
         if client is None:
             import chromadb
             from chromadb.config import Settings
@@ -54,6 +60,17 @@ class ChromaIndexAdapter:
     @staticmethod
     def _artifact_commitment(payload: dict[str, object]) -> str:
         return hashlib.sha256(canonical_serialize(payload).encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _physical_distance_metric(collection: Any) -> str:
+        configuration = getattr(collection, "configuration", None)
+        if not isinstance(configuration, dict):
+            raise KnowledgeValidationError("Chroma physical distance metric is unavailable")
+        hnsw = configuration.get("hnsw")
+        metric = hnsw.get("space") if isinstance(hnsw, dict) else None
+        if metric not in {"l2", "cosine", "ip"}:
+            raise KnowledgeValidationError("Chroma physical distance metric is unavailable")
+        return metric
 
     def stage(
         self,
@@ -75,6 +92,7 @@ class ChromaIndexAdapter:
             "embedding_dimension": request.capability.embedding_dimension,
             "index_engine": "chromadb",
             "index_schema_identity": self.index_schema_identity,
+            "distance_metric": self.distance_metric,
             "entries": entries,
         }
         commitment = self._artifact_commitment(payload)
@@ -83,6 +101,7 @@ class ChromaIndexAdapter:
             request.capability.provider, request.capability.model,
             request.capability.embedding_profile_identity, request.capability.embedding_dimension,
             "chromadb", self.index_schema_identity, entries, True,
+            self.distance_metric,
         )
         existing = self._get(build_identity)
         if existing is not None:
@@ -98,10 +117,15 @@ class ChromaIndexAdapter:
             "embedding_dimension": request.capability.embedding_dimension,
             "index_engine": "chromadb",
             "index_schema_identity": self.index_schema_identity,
+            "distance_metric": self.distance_metric,
         }
         collection = self._client.create_collection(
-            collection_name(build_identity), metadata=metadata, embedding_function=None,
+            collection_name(build_identity), metadata=metadata,
+            configuration={"hnsw": {"space": self.distance_metric}},
+            embedding_function=None,
         )
+        if self._physical_distance_metric(collection) != self.distance_metric:
+            raise KnowledgeValidationError("Chroma physical distance metric contradicts configuration")
         collection.add(
             ids=[item.chunk_identity for item in request.chunks],
             embeddings=[list(item.values) for item in result.embeddings],
@@ -120,10 +144,16 @@ class ChromaIndexAdapter:
             "build_identity", "artifact_commitment", "provider", "model",
             "embedding_profile_identity", "embedding_dimension", "index_engine",
             "index_schema_identity",
+            "distance_metric",
         }
         if set(metadata) != required or metadata["build_identity"] != build_identity:
             raise KnowledgeValidationError("Chroma collection metadata lineage is invalid")
         raw = collection.get(include=["metadatas", "embeddings"])
+        physical_metric = self._physical_distance_metric(collection)
+        if (metadata["distance_metric"] != self.distance_metric
+                or physical_metric != self.distance_metric):
+            raise KnowledgeValidationError(
+                "Chroma physical distance metric requires compatibility repair")
         ids = list(raw.get("ids") or [])
         metadatas = list(raw.get("metadatas") or [])
         embeddings_raw = raw.get("embeddings")
@@ -143,6 +173,7 @@ class ChromaIndexAdapter:
             "embedding_profile_identity": metadata["embedding_profile_identity"],
             "embedding_dimension": dimension, "index_engine": metadata["index_engine"],
             "index_schema_identity": metadata["index_schema_identity"], "entries": entries_tuple,
+            "distance_metric": physical_metric,
         }
         commitment = self._artifact_commitment(payload)
         if commitment != metadata["artifact_commitment"] or metadata["index_engine"] != "chromadb" or metadata["index_schema_identity"] != self.index_schema_identity:
@@ -152,6 +183,7 @@ class ChromaIndexAdapter:
             str(metadata["provider"]), str(metadata["model"]),
             str(metadata["embedding_profile_identity"]), dimension,
             "chromadb", self.index_schema_identity, entries_tuple, True,
+            physical_metric,
         )
 
     def probe(self, build_identity: str, *, maximum_results: int) -> IndexProbeFacts:

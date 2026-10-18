@@ -114,11 +114,14 @@ def test_fixture_manifest_references_existing_inputs_and_admits_required_s4_vari
                 "EVIDENCE", "KNOWLEDGE", "GENERATION",
                 "ARTIFACT_COMMIT", "PUBLICATION",
             }
-    unavailable = tuple(item for item in first.entries if item.variant in {
+    r2_sources = tuple(item for item in first.entries if item.variant in {
         "degraded", "failure", "contradiction"})
-    assert unavailable and all(
-        item.support_status == "MISSING_EXISTING_INPUT_SOURCE"
-        and item.missing_reason for item in unavailable)
+    assert len(r2_sources) == 3 and all(
+        item.support_status == "SUPPORTED"
+        and item.missing_reason is None
+        and item.evaluation_classification == "EVALUATION ONLY"
+        and item.pm_approval_reference == "PM Formal Evaluation delegation"
+        for item in r2_sources)
 
 
 def test_formal_fixture_admission_requires_exact_supported_manifest_entry():
@@ -137,10 +140,14 @@ def test_formal_fixture_admission_requires_exact_supported_manifest_entry():
             "S1", "unknown", nominal.input_identity,
             nominal.input_commitment, nominal.oracle_scenario_reference,
         ))
-    with pytest.raises(ValueError, match="not supported"):
+    contradiction = next(item for item in manifest.entries
+                         if item.fixture_identity == "spec017:S6:contradiction:v1")
+    with pytest.raises(ValueError, match="do not match"):
         manifest.admit(FixtureAdmissionRequest(
             "S6", "contradiction", "caller-input",
             commitment({"caller": True}), "spec017-s1-s6-v1:S6",
+            fixture_identity=contradiction.fixture_identity,
+            fixture_revision=contradiction.fixture_revision,
         ))
     for field, value in (
         ("input_identity", "caller-input"),

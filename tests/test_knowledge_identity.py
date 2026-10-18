@@ -1,4 +1,4 @@
-from dataclasses import fields
+from dataclasses import fields, replace
 import hashlib
 import socket
 import time
@@ -107,6 +107,7 @@ def test_document_version_chunk_and_build_identities_are_deterministic_and_separ
         build_input.index_schema_identity,
         build_input.metadata_schema_identity,
         build_input.build_contract_version,
+        "l2",
     )
     assert build_identity(changed) != build
 
@@ -140,10 +141,26 @@ def test_identity_inputs_preserve_order_only_where_spec_requires_it() -> None:
         index_schema_identity="chroma-schema-v1",
         metadata_schema_identity="knowledge-metadata-v1",
         build_contract_version="build-v1",
+        distance_metric="l2",
     )
     assert build_identity(BuildIdentityInput(ordered_chunk_identities=(one, two), **common)) != build_identity(
         BuildIdentityInput(ordered_chunk_identities=(two, one), **common)
     )
+
+
+def test_distance_metric_is_build_identity_truth_without_reinterpreting_history() -> None:
+    document = document_identity("CORPUS-1", "DOC-A")
+    version = document_version_identity(document, "1", HASH_A)
+    chunk = chunk_identity(ChunkIdentityInput(
+        document, version, "section", 0, HASH_A, "chunk-v1"))
+    historical = BuildIdentityInput(
+        "kmf_" + "a" * 64, (chunk,), "chunk-v1", "1.0", "google",
+        "text-embedding-004", "embedding-v1", 768, "none", "chromadb",
+        "spec014-chroma-cosine-v1", "knowledge-metadata-v1", "build-v1")
+    explicit_l2 = replace(historical, distance_metric="l2")
+    assert build_identity(historical) != build_identity(explicit_l2)
+    assert historical.index_schema_identity == "spec014-chroma-cosine-v1"
+    assert historical.distance_metric == "historical-unknown"
 
 
 def test_identity_boundaries_reject_paths_secrets_and_wrong_namespaces() -> None:

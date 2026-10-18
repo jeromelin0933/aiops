@@ -182,4 +182,14 @@ def chunk_identity(identity_input: ChunkIdentityInput) -> str:
 def build_identity(identity_input: BuildIdentityInput) -> str:
     if not isinstance(identity_input, BuildIdentityInput):
         raise KnowledgeValidationError("identity_input must be a BuildIdentityInput")
+    # Preserve read compatibility for historical identities whose payload
+    # predates an explicit physical metric.  Every current executable profile
+    # supplies the metric and therefore commits it into the new identity.
+    if identity_input.distance_metric == "historical-unknown":
+        payload = {
+            field.name: getattr(identity_input, field.name)
+            for field in fields(identity_input)
+            if field.name != "distance_metric"
+        }
+        return _identity(IdentityNamespace.BUILD, payload)
     return _identity(IdentityNamespace.BUILD, identity_input)

@@ -12,6 +12,8 @@ DOMAINS = frozenset({
     "observation", "judgment", "review", "re_adjudication", "report",
     "gate_authorization", "gate_execution_receipt", "docker_namespace",
     "docker_cleanup", "gate_invocation_start", "gate_invocation_receipt",
+    "rag_child_allocation", "preparation", "planned_run",
+    "planned_execution", "formal_admission",
 })
 
 

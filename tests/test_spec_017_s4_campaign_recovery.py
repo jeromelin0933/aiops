@@ -55,15 +55,21 @@ def _portable_fixture_repository(root, *, crlf=False, mutate_scenarios=False):
     controls = canonical_text_bytes((
         ROOT / "configs/rca_evaluation/fixtures/spec017_r2s4_evaluation_controls_v2.json"
     ).read_bytes())
+    r2_sources = canonical_text_bytes((
+        ROOT / "configs/rca_evaluation/fixtures/spec017_r2_missing_formal_fixtures_v1.json"
+    ).read_bytes())
     if mutate_scenarios:
         scenario = scenario.replace(b"random_seed: 42", b"random_seed: 43")
     if crlf:
         scenario = scenario.replace(b"\n", b"\r\n")
         controls = controls.replace(b"\n", b"\r\n")
+        r2_sources = r2_sources.replace(b"\n", b"\r\n")
     (root / "configs/rca_evaluation/fixtures").mkdir(parents=True, exist_ok=True)
     (root / "configs/scenarios.yaml").write_bytes(scenario)
     (root / "configs/rca_evaluation/fixtures/spec017_r2s4_evaluation_controls_v2.json").write_bytes(
         controls)
+    (root / "configs/rca_evaluation/fixtures/spec017_r2_missing_formal_fixtures_v1.json").write_bytes(
+        r2_sources)
 
 
 def _oracle():

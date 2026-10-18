@@ -63,6 +63,7 @@ class KnowledgeIndexConfig:
     chunking: ChunkingProfile
     chroma_path: str
     index_schema_identity: str
+    distance_metric: str
     retrieval_profile: RetrievalProfile
     applicability_policy: ApplicabilityPolicy
 
@@ -111,9 +112,11 @@ def load_knowledge_config(path: str | Path) -> KnowledgeIndexConfig:
     chunk_profile = ChunkingProfile(_text(chunking["profile_identity"], "chunking.profile_identity"), chunking["maximum_chunk_bytes"])
 
     index = _mapping(root["index"], "index")
-    _keys(index, {"engine", "schema_identity", "path"}, "index")
+    _keys(index, {"engine", "schema_identity", "distance_metric", "path"}, "index")
     if index["engine"] != "chromadb":
         raise KnowledgeConfigError("index engine must be chromadb")
+    if index["distance_metric"] != "l2":
+        raise KnowledgeConfigError("index.distance_metric must be the approved l2 metric")
 
     retrieval = _mapping(root["retrieval"], "retrieval")
     _keys(retrieval, {
@@ -144,5 +147,6 @@ def load_knowledge_config(path: str | Path) -> KnowledgeIndexConfig:
     return KnowledgeIndexConfig(
         "1.0", _path(root["manifest"], "manifest"), _path(authority["path"], "authority_store.path"),
         capability, invocation_limits, embedding["normalization_semantics"], chunk_profile,
-        _path(index["path"], "index.path"), index["schema_identity"], retrieval_profile, policy,
+        _path(index["path"], "index.path"), index["schema_identity"],
+        index["distance_metric"], retrieval_profile, policy,
     )

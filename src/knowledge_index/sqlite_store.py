@@ -1789,6 +1789,8 @@ class SqliteKnowledgeStore:
             index_schema_identity=build_input_data["index_schema_identity"],
             metadata_schema_identity=build_input_data["metadata_schema_identity"],
             build_contract_version=build_input_data["build_contract_version"],
+            distance_metric=build_input_data.get(
+                "distance_metric", "historical-unknown"),
         )
         record = StagedBuildRecord(
             payload["build_identity"], operation, payload["manifest_commitment"],
@@ -2168,10 +2170,13 @@ def _decode_build_chunk(value: object) -> BuildChunk:
 
 
 def _decode_index_artifact(value: dict[str, object]) -> IndexArtifactFacts:
-    if set(value) != {
+    required = {
         "build_identity", "artifact_commitment", "artifact_trust", "provider", "model",
         "embedding_profile_identity", "embedding_dimension", "index_engine",
         "index_schema_identity", "entries", "integrity_ok",
+    }
+    if frozenset(value) not in {
+        frozenset(required), frozenset(required | {"distance_metric"})
     }:
         raise ValueError("index artifact payload has incompatible fields")
     entries = tuple(
@@ -2188,6 +2193,7 @@ def _decode_index_artifact(value: dict[str, object]) -> IndexArtifactFacts:
         value["embedding_profile_identity"], value["embedding_dimension"],
         value["index_engine"], value["index_schema_identity"], entries,
         value["integrity_ok"],
+        value.get("distance_metric", "historical-unknown"),
     )
 
 
@@ -2210,6 +2216,7 @@ def _validate_staged_record_semantics(record: StagedBuildRecord) -> None:
         or artifact.embedding_dimension != build_input.embedding_dimension
         or artifact.index_engine != build_input.index_engine
         or artifact.index_schema_identity != build_input.index_schema_identity
+        or artifact.distance_metric != build_input.distance_metric
         or derive_build_lineage_commitment(
             record.build_identity,
             record.manifest_commitment,
@@ -2274,5 +2281,6 @@ def _retrieval_compatibility_matches(
         and profile.embedding_dimension == artifact.embedding_dimension
         and profile.index_engine == artifact.index_engine
         and profile.index_schema_identity == artifact.index_schema_identity
+        and staged.build_input.distance_metric == artifact.distance_metric
         and profile.canonicalization_version == staged.build_input.canonicalization_version
     )

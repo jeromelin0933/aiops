@@ -330,6 +330,7 @@ class BuildIdentityInput:
     index_schema_identity: str
     metadata_schema_identity: str
     build_contract_version: str
+    distance_metric: str = "historical-unknown"
 
     def __post_init__(self) -> None:
         _typed_identity(self.manifest_commitment, "kmf", "manifest_commitment")
@@ -350,6 +351,7 @@ class BuildIdentityInput:
             "index_schema_identity",
             "metadata_schema_identity",
             "build_contract_version",
+            "distance_metric",
         ):
             _identifier(getattr(self, field), field)
         if (
@@ -1209,13 +1211,14 @@ class IndexArtifactFacts:
     index_schema_identity: str
     entries: tuple[IndexEntryFact, ...]
     integrity_ok: bool
+    distance_metric: str = "historical-unknown"
 
     def __post_init__(self) -> None:
         _typed_identity(self.build_identity, "kbld", "build_identity")
         _hash(self.artifact_commitment, "artifact_commitment")
         if not isinstance(self.artifact_trust, ArtifactTrust):
             raise KnowledgeValidationError("artifact_trust must be ArtifactTrust")
-        for field in ("provider", "model", "embedding_profile_identity", "index_engine", "index_schema_identity"):
+        for field in ("provider", "model", "embedding_profile_identity", "index_engine", "index_schema_identity", "distance_metric"):
             _durable_key(getattr(self, field), field)
         if isinstance(self.embedding_dimension, bool) or not isinstance(self.embedding_dimension, int) or self.embedding_dimension <= 0:
             raise KnowledgeValidationError("embedding_dimension must be positive")
@@ -1952,6 +1955,7 @@ class KnowledgeProvenanceProjection:
     query_filters: tuple[QueryFilter, ...]
     chunks: tuple[KnowledgeProvenanceChunk, ...]
     failures: tuple[RetrievalFailureFact, ...]
+    distance_metric: str = "historical-unknown"
 
     def __post_init__(self) -> None:
         if not isinstance(self.snapshot_identity, KnowledgeSnapshotKey):
@@ -1963,6 +1967,7 @@ class KnowledgeProvenanceProjection:
             _hash(getattr(self, field), field)
         _typed_identity(self.frozen_build_identity, "kbld", "frozen_build_identity")
         _typed_identity(self.manifest_commitment, "kmf", "manifest_commitment")
+        _durable_key(self.distance_metric, "distance_metric")
         if tuple(item.canonical_rank for item in self.chunks) != tuple(
             sorted(item.canonical_rank for item in self.chunks)
         ):

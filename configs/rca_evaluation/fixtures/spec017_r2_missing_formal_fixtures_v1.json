@@ -1,0 +1,134 @@
+{
+  "schema_version": "spec017.r2-missing-formal-fixtures.v1",
+  "fixture_set_identity": "spec017-r2-missing-formal-fixtures",
+  "fixture_set_revision": "v1",
+  "classification": "EVALUATION ONLY",
+  "authority_references": [
+    "SPEC-017-v1.0",
+    "PM Formal Evaluation delegation",
+    "PM-SPEC017-EOL-COMMITMENT-20261015"
+  ],
+  "oracle_binding": {
+    "artifact_revision": "spec017-s1-s6-v1",
+    "oracle_revision_id": "eval:oracle_revision:700ae27c270189b75361125bbdc1ea3bfd79661c87ae86b7759faedcaf706d22",
+    "semantic_content_commitment": "sha256:fc00dfbde43a1b18d9929d00db5b3f9f72f8ca4425b8dd2072bd7fa7d6fc9ea4"
+  },
+  "cases": {
+    "s1_degraded": {
+      "fixture_identity": "spec017:S1:degraded:v1",
+      "fixture_revision": "v1",
+      "oracle_scenario_reference": "spec017-s1-s6-v1:S1",
+      "production_input": {
+        "scenario_trigger": "S1",
+        "scenario_source_reference": "configs/scenarios.yaml#scenarios.S1",
+        "signal": {
+          "duration_seconds": 5,
+          "unauthorized_count": 50,
+          "source_ip": "192.0.2.10",
+          "user_id": "user_mock_001"
+        },
+        "evidence_adapter_condition": {
+          "port": "incident_evidence.capture_service.SourceAdapterPort",
+          "source": "LOKI",
+          "status": "AVAILABLE",
+          "observed_candidate_count": 50,
+          "included_count": 20,
+          "omitted_count": 30,
+          "omission_reason": "evaluation-bounded-complete-sample",
+          "sampling_applied": true,
+          "sampling_policy_identity": "spec017-evaluation-bounded-sample-v1",
+          "continuation_complete": true,
+          "completeness_impact": "DEGRADED"
+        }
+      },
+      "evaluation_truth": {
+        "oracle_predicates": ["O1", "O2", "O3", "O4", "O7", "O10"],
+        "expected_causal_class": "CREDENTIAL_ABUSE_BRUTE_FORCE",
+        "expected_evidence": ["brute_force_detected", "same_source", "same_user"],
+        "forbidden_overclaim_authority": "spec017-s1-s6-v1:S1:O4",
+        "accepted_alternative_authority": "spec017-s1-s6-v1:S1:O3",
+        "expected_knowledge_behavior": "MATCH_EXPECTED_NO_MATCH_LEGAL",
+        "ground_truth_label": "S1_PARTIAL_RAW_LOGS_REMAINING_AUTH_PATTERN",
+        "denominator": "DEGRADED",
+        "expected_disposition": "VALID_DEGRADED_COMPLETION_OR_ORACLE_FAIL"
+      }
+    },
+    "s2_failure": {
+      "fixture_identity": "spec017:S2:failure:v1",
+      "fixture_revision": "v1",
+      "oracle_scenario_reference": "spec017-s1-s6-v1:S2",
+      "production_input": {
+        "scenario_trigger": "S2",
+        "scenario_source_reference": "configs/scenarios.yaml#scenarios.S2",
+        "signal": {
+          "duration_seconds": 45,
+          "trace_id_prefix": "trace-s2",
+          "api_p95_latency_ms": 4500,
+          "downstream_service": "core-db"
+        },
+        "failure_injection": {
+          "port": "llm_generation.ports.GenerationProvider",
+          "method": "invoke_once",
+          "exception": "ProviderInvocationError",
+          "kind": "UNAVAILABLE",
+          "request_sent": true
+        }
+      },
+      "evaluation_truth": {
+        "oracle_predicates": ["O1", "O5", "O10"],
+        "expected_causal_class": "DATABASE_LATENCY_CASCADE",
+        "expected_evidence": ["cross_service_failure", "shared_trace", "core_db", "db_ap_gateway", "high_latency"],
+        "forbidden_overclaim_authority": "spec017-s1-s6-v1:S2:O4",
+        "accepted_alternative_authority": "spec017-s1-s6-v1:S2:O3",
+        "expected_knowledge_behavior": "MATCH_EXPECTED_NO_MATCH_LEGAL",
+        "ground_truth_label": "S2_LLM_TRANSIENT_PROVIDER_UNAVAILABLE",
+        "expected_failure_class": "PROVIDER_UNAVAILABLE",
+        "expected_retry_disposition": "RETRYABLE",
+        "denominator": "FAILURE",
+        "expected_disposition": "SYSTEM_FAILURE_RETAINED"
+      }
+    },
+    "s6_contradiction": {
+      "fixture_identity": "spec017:S6:contradiction:v1",
+      "fixture_revision": "v1",
+      "oracle_scenario_reference": "spec017-s1-s6-v1:S6",
+      "production_input": {
+        "scenario_trigger": "S6",
+        "scenario_source_reference": "configs/scenarios.yaml#scenarios.S6",
+        "baseline_signal": {
+          "target_service": "sms-gateway",
+          "rate_limit_log_count": 55,
+          "rate_limit_quota": 100,
+          "baseline_requests_per_sec": 10,
+          "spike_requests_per_sec": 40
+        },
+        "post_context_evidence": {
+          "loki": {
+            "status_code": 429,
+            "error_type": "RateLimitExceeded",
+            "target_service": "sms-gateway",
+            "rate_limit_quota": 100,
+            "record_count": 55
+          },
+          "prometheus": {
+            "metric": "api_requests_per_sec",
+            "value": 10,
+            "established_baseline": 10
+          },
+          "collection_boundary_seconds": 120
+        }
+      },
+      "evaluation_truth": {
+        "oracle_predicates": ["O1", "O4", "O5", "O7", "O9", "O10"],
+        "expected_causal_class": "REQUEST_SURGE_RATE_LIMIT",
+        "expected_evidence": ["rate_limit_storm", "target_service", "repeated_429", "quota_context", "qps_returned_to_baseline"],
+        "forbidden_overclaim_authority": "spec017-s1-s6-v1:S6:O4",
+        "accepted_alternative_authority": "spec017-s1-s6-v1:S6:O3",
+        "expected_knowledge_behavior": "KNOWLEDGE_MUST_NOT_RESOLVE_CONTRADICTION",
+        "ground_truth_label": "S6_QPS_NORMAL_WHILE_429_PERSISTS",
+        "denominator": "REFRESH",
+        "expected_disposition": "MATERIAL_CONTRADICTION_REQUIRES_REFRESH"
+      }
+    }
+  }
+}

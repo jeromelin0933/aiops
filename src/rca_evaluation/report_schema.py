@@ -19,6 +19,7 @@ class EvidenceEntry:
     parent_id: str | None
     semantic_commitment: str
     evidence_kind: str
+    category: str
     safe_references: tuple[tuple[str, str], ...] = ()
 
 

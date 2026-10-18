@@ -628,6 +628,7 @@ def _seed_active_knowledge(root: Path, embedding_client, chroma_client) -> None:
         "chromadb", config.index_schema_identity,
         "spec014-knowledge-metadata-v1",
         "spec014-build-contract-v2",
+        config.distance_metric,
     )
 
     path = root / config.authority_store_path
@@ -638,6 +639,7 @@ def _seed_active_knowledge(root: Path, embedding_client, chroma_client) -> None:
             GoogleEmbeddingAdapter(embedding_client, config.capability),
             ChromaIndexAdapter(root / config.chroma_path,
                                index_schema_identity=config.index_schema_identity,
+                               distance_metric=config.distance_metric,
                                client=chroma_client))
         staged = build.stage(
             operation_key=BuildOperationKey("s6-cli-stage"),
@@ -741,8 +743,17 @@ def test_actual_cli_dispatches_initial_rca_through_public_a_b_c_ports(
     clients = []
 
     class Collection:
-        def __init__(self, metadata):
+        def __init__(self, metadata, configuration):
             self.metadata = metadata
+            self.configuration = {
+                "hnsw": {
+                    "space": configuration["hnsw"]["space"],
+                    "ef_construction": 100, "ef_search": 100,
+                    "max_neighbors": 16, "resize_factor": 1.2,
+                    "sync_threshold": 1000,
+                },
+                "spann": None, "embedding_function": None,
+            }
             self.ids = []
             self.embeddings = []
             self.metadatas = []
@@ -764,8 +775,9 @@ def test_actual_cli_dispatches_initial_rca_through_public_a_b_c_ports(
             self.closed = False
             self.collections = {}
             clients.append(self)
-        def create_collection(self, name, *, metadata, embedding_function):
-            collection = Collection(metadata)
+        def create_collection(self, name, *, metadata, configuration,
+                              embedding_function):
+            collection = Collection(metadata, configuration)
             self.collections[name] = collection
             return collection
         def get_collection(self, name, *, embedding_function):

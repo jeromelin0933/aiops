@@ -526,6 +526,22 @@ Infrastructure-caused failure與diagnostic failure須分欄報告，但不得sil
 
 Aggregation至少提供scenario-level count/rate、overall micro count/rate、各metric distribution及95% bootstrap interval；sample小時interval只作描述，不得取代raw counts。不得以平均文句分數取代binary Root Cause metric。
 
+## 8.5 PM-authorized Pre-Admission Lifecycle Clarification（Additive）
+
+Authority Reference：`PM-SPEC017-R4-PREADMISSION-20261016`。
+
+本節為原Approved wording的窄幅、additive clarification；原§2.3、§3.2、§8.2～§8.4及其歷史核准文字完整保留，不作retroactive rewrite。正式lifecycle為：
+
+```text
+PREREGISTERED → PREPARED → FINAL FORMAL ADMISSION → ADMITTED → EXECUTION
+```
+
+原fresh／pristine boundary移至Candidate-F evaluation namespace的**首次preparation durable mutation之前**。唯一新增例外是由`SqliteEvaluationStore`管理、可完整驗證的preparation-only durable facts，包括planned lineage、Docker future namespace identity、isolated Real-RAG future child identity、readiness preparation commitment及其replay／recovery facts。這些facts不得成為`evaluation_run`、`execution`、denominator disposition、gate PASS receipt或任何Formal execution result。
+
+`PREPARED`不等於`ADMITTED`，亦不等於execution started。Final Formal Admission必須fresh-read並重新驗證全部preparation、repository/config、credential、build/activation、ownership/isolation及required facts；不得沿用preparation時的readiness結果。只有全部PASS後，`SqliteEvaluationStore`才可append `ADMITTED` transition；只有該durable `ADMITTED` state可供未來Formal runner進入execution。
+
+Final Admission前仍禁止所有Formal Execution facts、scenario injection、denominator consumption、external gate execution、provider invocation、Real-RAG build／activation、Docker resource creation及human Formal Review。R1其他Frozen semantics、R2／R3 semantics與SPEC-011 singular Runtime authority均不變。
+
 ---
 
 # 9. Latency Contract

@@ -1,0 +1,75 @@
+{
+  "schema": "spec017.formal-preregistration.v1",
+  "authority_references": [
+    "PRD-004",
+    "SPEC-017-v1.0",
+    "PM-SPEC017-R2S4-20261013",
+    "PM-SPEC017-EOL-COMMITMENT-20261015"
+  ],
+  "repository": {
+    "required_branch": "feature/spec-017-formal-evaluation-readiness"
+  },
+  "oracle_artifact": "configs/rca_evaluation/oracle/spec017_s1_s6_v1.json",
+  "fixture_manifest": "configs/rca_evaluation/fixtures/spec017_s1_s6_fixture_manifest_v1.json",
+  "evaluation_plan": {
+    "production_build": "REQUIRED_BEFORE_EXECUTION",
+    "model": "gemini-2.5-flash",
+    "prompt": "spec016-rca-prompt-v1",
+    "result_schema": "spec015-rca-result-v1",
+    "corpus_index": "REQUIRED_BEFORE_EXECUTION",
+    "configuration_reference": "configs/rca_evaluation/formal_preregistration_v1.json"
+  },
+  "campaign_controls": {
+    "repetitions": 5,
+    "order": "REPETITION_MAJOR",
+    "bootstrap_seed": 17017,
+    "polling_interval_seconds": 1,
+    "per_execution_timeout_seconds": 300,
+    "early_stop": false,
+    "replacement": "NONE"
+  },
+  "manifest_inputs": {
+    "provider_profile_references": ["spec017-real-llm-gate-v1"],
+    "rag_profile_references": ["spec017-real-rag-gate-v1"],
+    "environment_identity": "REQUIRED_BEFORE_EXECUTION",
+    "evaluator_rubric_version": "SPEC-017-v1.0-F1-F8",
+    "clock_source": "host-monotonic+utc",
+    "clock_synchronization_uncertainty_ms": 0,
+    "approved_spec_commitments": {
+      "repository_branch": "feature/spec-017-formal-evaluation-readiness",
+      "oracle_set_identity": "PM-S1-S6",
+      "oracle_approval_reference": "SPEC-017-v1.0-\u00a77@7996d39242d9aeabbfc481532a89afa530a12088",
+      "fixture_schema_version": "spec017.fixture-manifest.v2",
+      "fixture_content_commitments": ["sha256:43919ec3b36bcc5a5e67348fa99bf3a5b2c77af3785bcefb9ca6da1ef29a43a0"],
+      "denominator_policy_version": "SPEC-017-8.4-v1",
+      "production_contract_versions": {"Candidate-A-E": "SPEC-008/SPEC-011/SPEC-016"},
+      "generation_config_commitment": "sha256:c0671491b4d6702d9a6647275fff258c28e442ef5d7e0d97f94019997419076e",
+      "knowledge_corpus_manifest_commitment": "sha256:42440a80fa910e885cd5ded9a01b8a956325dfa386ce94e8e379955a8582b375",
+      "knowledge_document_revisions": ["REQUIRED_BEFORE_EXECUTION"],
+      "embedding_model": "text-embedding-004",
+      "knowledge_build_identity": "REQUIRED_BEFORE_EXECUTION",
+      "retrieval_profile_identity": "spec014-retrieval-v1",
+      "applicability_profile_identity": "spec014-google-document-query-v1",
+      "docker_compose_digest": "sha256:effe30166412836341751456d7104caa5be4c82b0c2718aadeb379466ccedfa0",
+      "docker_config_digest": "sha256:7d26c295ec40d191301ff8c207f52b85fd8553f82d667daa46c50218610f1160",
+      "docker_image_digest": "REQUIRED_BEFORE_EXECUTION",
+      "docker_namespace_identity": "REQUIRED_BEFORE_EXECUTION",
+      "tool_versions": {"python": "REQUIRED_BEFORE_EXECUTION", "docker": "REQUIRED_BEFORE_EXECUTION"},
+      "reviewer_protocol_version": "SPEC-017-R1-two-stage-v1",
+      "adjudication_policy_version": "SPEC-017-2.4-v1",
+      "public_observation_adapter_version": "SPEC-017-S2-v1",
+      "report_generator_version": "SPEC-017-FORMAL-REPORT-v1",
+      "required_isolation_case_ids": [],
+      "required_deviation_case_ids": [],
+      "required_refresh_case_ids": [],
+      "required_restart_case_ids": []
+    }
+  },
+  "denominator_policy": {
+    "nominal": "30 pre-registered slots; all dispositions retained; no replacement",
+    "degraded": "separate approved degraded-case denominator",
+    "failure": "separate approved failure-case denominator",
+    "refresh": "separate required refresh-case denominator",
+    "restart": "separate required restart-boundary denominator"
+  }
+}

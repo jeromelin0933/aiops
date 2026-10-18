@@ -1,0 +1,71 @@
+x-spec017-formal:
+  schema: spec017.formal-compose.v1
+  runtime_image_profile: spec011-runtime-formal-v1
+  service_classification:
+    runtime: FORMAL_REQUIRED
+    loki: FORMAL_REQUIRED
+    prometheus: FORMAL_REQUIRED
+    promtail: OPTIONAL_DIAGNOSTIC
+    grafana: NOT_REQUIRED
+  future_slots:
+    real_rag_child_mount: /app/var/knowledge_index
+    real_rag_corpus_mount: /app/var/rca_evaluation/corpus_source
+    credential_wiring: EXTERNAL_ENVIRONMENT_NAME_ONLY
+
+services:
+  runtime:
+    image: aiops-spec011-runtime:formal
+    command:
+      - python
+      - scripts/run_correlation_runtime.py
+      - --config
+      - configs/runtime_orchestration.docker.yaml
+    depends_on:
+      - loki
+      - prometheus
+    environment:
+      - GEMINI_API_KEY
+    volumes:
+      - runtime-events:/app/events
+      - runtime-state:/app/var/runtime_orchestration
+      - runtime-knowledge:/app/var/rca_evaluation/knowledge-work
+      - formal-logs:/app/var/rca_evaluation/logs
+      - type: bind
+        source: ${SPEC017_REAL_RAG_CHILD_SOURCE:?governed Candidate-F child source is required}
+        target: /app/var/knowledge_index
+      - type: bind
+        source: ${SPEC017_REAL_RAG_CORPUS_SOURCE:?governed manifest corpus source is required}
+        target: /app/var/rca_evaluation/corpus_source
+        read_only: true
+    networks:
+      - formal
+    stop_grace_period: 30s
+
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+    volumes:
+      - ./docker/prometheus/formal-prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - formal
+
+  loki:
+    image: grafana/loki:2.9.0
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - loki-data:/loki
+    networks:
+      - formal
+
+networks:
+  formal: {}
+
+volumes:
+  runtime-events: {}
+  runtime-state: {}
+  runtime-knowledge: {}
+  formal-logs: {}
+  prometheus-data: {}
+  loki-data: {}

@@ -278,6 +278,7 @@ class KnowledgeBuildService:
             or artifact.embedding_dimension != identity_input.embedding_dimension
             or artifact.index_engine != identity_input.index_engine
             or artifact.index_schema_identity != identity_input.index_schema_identity
+            or artifact.distance_metric != identity_input.distance_metric
         ):
             return BuildStageResult(None, (_failure(
                 BuildFailureCode.INDEX_CONFLICT,

@@ -54,7 +54,11 @@ def _raw_manifest(config: KnowledgeIndexConfig) -> dict[str, object]:
 
 
 def _index(config: KnowledgeIndexConfig) -> ChromaIndexAdapter:
-    return ChromaIndexAdapter(ROOT / config.chroma_path, index_schema_identity=config.index_schema_identity)
+    return ChromaIndexAdapter(
+        ROOT / config.chroma_path,
+        index_schema_identity=config.index_schema_identity,
+        distance_metric=config.distance_metric,
+    )
 
 
 def _store(config: KnowledgeIndexConfig) -> SqliteKnowledgeStore:
@@ -84,6 +88,7 @@ def _identity_input(config: KnowledgeIndexConfig, admission, chunks) -> BuildIde
         config.index_schema_identity,
         "spec014-knowledge-metadata-v1",
         "spec014-build-contract-v2",
+        config.distance_metric,
     )
 
 
