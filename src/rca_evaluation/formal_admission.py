@@ -82,13 +82,15 @@ class ReviewerProtocol:
     def __post_init__(self) -> None:
         if len(self.stage1_reviewer_ids) != 2:
             raise ValueError("exactly two Stage-1 reviewer identities are required")
-        identities = (*self.stage1_reviewer_ids, self.stage1_tiebreak_reviewer_id,
-                      *self.stage2_reviewer_ids,
-                      self.tiebreak_reviewer_id)
-        for value in identities:
+        stage1_identities = (*self.stage1_reviewer_ids,
+                             self.stage1_tiebreak_reviewer_id)
+        stage2_identities = (*self.stage2_reviewer_ids,
+                             self.tiebreak_reviewer_id)
+        for value in (*stage1_identities, *stage2_identities):
             _text(value, "reviewer identity")
-        if len(set(identities)) != len(identities):
-            raise ValueError("reviewer identities must be distinct")
+        if (len(set(stage1_identities)) != len(stage1_identities)
+                or len(set(stage2_identities)) != len(stage2_identities)):
+            raise ValueError("reviewer identities must be distinct within each stage")
         if len(self.stage2_reviewer_ids) != 2:
             raise ValueError("exactly two Stage-2 reviewer identities are required")
         if (not self.stage1_blind_diagnostic_only

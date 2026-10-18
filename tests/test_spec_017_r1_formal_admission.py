@@ -275,6 +275,40 @@ def test_reviewer_identities_protocol_and_official_verdict_are_fail_closed(tmp_p
     assert protocol.records_append_only
 
 
+def test_reviewer_distinctness_is_per_stage_and_allows_approved_cross_stage_reuse(
+        tmp_path):
+    protocol = load_reviewer_protocol(_reviewers(
+        tmp_path,
+        stage1=("豪哥", "tako"), stage1_tiebreak="夜羽",
+        stage2=("富裕", "夜羽"), tiebreak="豪哥",
+    ))
+    assert protocol.stage1_reviewer_ids == ("豪哥", "tako")
+    assert protocol.stage1_tiebreak_reviewer_id == "夜羽"
+    assert protocol.stage2_reviewer_ids == ("富裕", "夜羽")
+    assert protocol.tiebreak_reviewer_id == "豪哥"
+
+
+@pytest.mark.parametrize(("stage1", "stage1_tiebreak", "stage2", "tiebreak"), [
+    (("same", "same"), "stage1-tie", ("stage2-a", "stage2-b"), "stage2-tie"),
+    (("stage1-a", "stage1-b"), "stage1-a", ("stage2-a", "stage2-b"), "stage2-tie"),
+    (("stage1-a", "stage1-b"), "stage1-tie", ("same", "same"), "stage2-tie"),
+    (("stage1-a", "stage1-b"), "stage1-tie", ("stage2-a", "stage2-b"), "stage2-a"),
+])
+def test_same_stage_reviewer_duplicates_are_rejected(
+        tmp_path, stage1, stage1_tiebreak, stage2, tiebreak):
+    roster = _reviewers(
+        tmp_path, stage1=stage1, stage1_tiebreak=stage1_tiebreak,
+        stage2=stage2, tiebreak=tiebreak)
+    with pytest.raises(ValueError, match="distinct within each stage"):
+        load_reviewer_protocol(roster)
+
+
+def test_missing_reviewer_identity_is_rejected(tmp_path):
+    roster = _reviewers(tmp_path, stage2=("stage2-a", ""))
+    with pytest.raises(ValueError, match="reviewer identity"):
+        load_reviewer_protocol(roster)
+
+
 def test_reviewer_identity_changes_change_admission_lineage_commitment(tmp_path):
     first = _admit(tmp_path / "one")
     other_roster = _reviewers(

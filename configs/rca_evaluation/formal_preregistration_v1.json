@@ -51,7 +51,7 @@
       "retrieval_profile_identity": "spec014-retrieval-v1",
       "applicability_profile_identity": "spec014-google-document-query-v1",
       "docker_compose_digest": "sha256:effe30166412836341751456d7104caa5be4c82b0c2718aadeb379466ccedfa0",
-      "docker_config_digest": "sha256:7d26c295ec40d191301ff8c207f52b85fd8553f82d667daa46c50218610f1160",
+      "docker_config_digest": "sha256:f537ca9b923b3af1f95dd84f0d9e1232fcbe72e20785967c38fba539e7b09273",
       "docker_image_digest": "REQUIRED_BEFORE_EXECUTION",
       "docker_namespace_identity": "REQUIRED_BEFORE_EXECUTION",
       "tool_versions": {"python": "REQUIRED_BEFORE_EXECUTION", "docker": "REQUIRED_BEFORE_EXECUTION"},

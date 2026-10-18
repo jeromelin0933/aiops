@@ -431,7 +431,7 @@ def adjudication_context(tmp_path, request, monkeypatch):
         "stage2": {"reviewer_ids": ["R3", "R4"], "reviewer_kind": "HUMAN",
                    "independent": True,
                    "disagreement": "THIRD_HUMAN_TIEBREAK",
-                   "tiebreak_reviewer_id": "R5",
+                   "tiebreak_reviewer_id": "R1",
                    "tiebreak_reviewer_kind": "HUMAN"},
         "machine_hard_failure_override_allowed": False,
         "records_append_only": True,
@@ -933,7 +933,7 @@ def test_stage2_reviewer_roster_is_exact_and_tiebreak_is_preregistered(
     claim_result = protected_claim_result(context, criteria, stage1)
     official = context.adjudicator.finalize_stage2(
         context.execution.record_id, criteria, stage1,
-        (pair[0], disagreement, replace(pair[0], reviewer_id="R5")),
+        (pair[0], disagreement, replace(pair[0], reviewer_id="R1")),
         claim_result_record_id=claim_result.record_id)
     assert official.evaluation.root_cause_identification_success
 

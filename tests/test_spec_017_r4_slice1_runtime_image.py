@@ -21,6 +21,7 @@ from rca_evaluation.runtime_image_readiness import (
 ROOT = Path(__file__).resolve().parents[1]
 HEAD = "e9cee50ce7904fb822e8032bbe8b05a4a826cf07"
 SHA = "sha256:" + "a" * 64
+PYTHON_BASE_DIGEST = "sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1"
 
 
 class _Commands:
@@ -162,13 +163,15 @@ def test_successful_but_malformed_tool_versions_are_contradictory():
     assert facts.docker_compose.state is RuntimeFactState.CONTRADICTORY
 
 
-def test_actual_image_and_base_digest_are_truthfully_unresolved_without_build():
+def test_actual_image_is_unresolved_but_base_image_is_exactly_digest_pinned():
     resolver, _ = _resolver()
     facts = resolver.formal_readiness()
     assert facts.actual_image.state is RuntimeFactState.UNRESOLVED
     assert facts.actual_image.value is None
-    assert facts.source.base_image_reference == "python:3.12-slim"
-    assert facts.source.base_image_digest.state is RuntimeFactState.UNRESOLVED
+    assert facts.source.base_image_reference == (
+        f"python:3.12-slim@{PYTHON_BASE_DIGEST}")
+    assert facts.source.base_image_digest.state is RuntimeFactState.AVAILABLE
+    assert facts.source.base_image_digest.value == PYTHON_BASE_DIGEST
     assert facts.source.logical_image_identity == RUNTIME_IMAGE_PROFILE
     assert facts.source.image_tag == RUNTIME_IMAGE_TAG
     assert facts.source.image_tag != facts.actual_image.value

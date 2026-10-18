@@ -689,12 +689,16 @@ class TwoStageAdjudicator:
                     "machine_hard_failure_override_allowed") is not False
                 or reviewer_protocol.get("records_append_only") is not True):
             raise ValueError("sealed reviewer protocol is incomplete")
-        identities = [*stage1["reviewer_ids"], stage1["tiebreak_reviewer_id"],
-                      *stage2["reviewer_ids"],
-                      stage2["tiebreak_reviewer_id"]]
+        stage1_identities = [*stage1["reviewer_ids"],
+                             stage1["tiebreak_reviewer_id"]]
+        stage2_identities = [*stage2["reviewer_ids"],
+                             stage2["tiebreak_reviewer_id"]]
+        identities = [*stage1_identities, *stage2_identities]
         if (any(not isinstance(item, str) or not item.strip() for item in identities)
-                or len(identities) != len(set(identities))):
-            raise ValueError("sealed reviewer identities must be present and distinct")
+                or len(stage1_identities) != len(set(stage1_identities))
+                or len(stage2_identities) != len(set(stage2_identities))):
+            raise ValueError(
+                "sealed reviewer identities must be present and distinct within each stage")
         self._store = store
         self._source_authority = source_authority
         self._isolation_policy = isolation_policy
