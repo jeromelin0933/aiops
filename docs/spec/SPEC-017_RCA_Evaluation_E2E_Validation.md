@@ -540,7 +540,9 @@ PREREGISTERED → PREPARED → FINAL FORMAL ADMISSION → ADMITTED → EXECUTION
 
 `PREPARED`不等於`ADMITTED`，亦不等於execution started。Final Formal Admission必須fresh-read並重新驗證全部preparation、repository/config、credential、build/activation、ownership/isolation及required facts；不得沿用preparation時的readiness結果。只有全部PASS後，`SqliteEvaluationStore`才可append `ADMITTED` transition；只有該durable `ADMITTED` state可供未來Formal runner進入execution。
 
-Final Admission前仍禁止所有Formal Execution facts、scenario injection、denominator consumption、external gate execution、provider invocation、Real-RAG build／activation、Docker resource creation及human Formal Review。R1其他Frozen semantics、R2／R3 semantics與SPEC-011 singular Runtime authority均不變。
+`PREPARED`可在evaluation-owned isolated namespace內建立及記錄preparation-only resources／facts，包括實際immutable Runtime image identity、Docker ownership／topology／required-service health、isolated Real-RAG child、Candidate-C evaluation-only index build／activation lineage、corpus／index／build identity及child／corpus mount inspection。此等facts必須有exact ownership、typed state與deterministic commitment，且在Final Admission時全部fresh revalidate；resource existence本身不得推論為Formal execution。
+
+Final Admission前仍禁止所有Formal Execution facts、scenario injection、denominator consumption／slot consumption、campaign provider invocation、Formal result facts、production observation result、Formal RCA campaign generation、restart campaign、human Formal Review及Formal metrics。R1其他Frozen semantics、R2／R3 semantics與SPEC-011 singular Runtime authority均不變。
 
 ---
 

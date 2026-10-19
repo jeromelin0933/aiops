@@ -339,6 +339,7 @@ def authorize_formal_execution(
     candidate_c_authority: object | None = None,
     runtime_authority: object | None = None,
     docker_state_inspector: object | None = None,
+    container_real_rag_inspector: object | None = None,
 ) -> FormalExecutionEntryAuthorization:
     """Fresh-read every supported authority before the first execution effect."""
     from .formal_admission import FormalAdmissionReport, inspect_repository
@@ -392,11 +393,21 @@ def authorize_formal_execution(
             or repository.branch != expected_branch):
         raise ValueError("repository drift detected at execution entry")
 
+    from .preparation import validate_prepared_resource_freshness
+    validate_prepared_resource_freshness(
+        store=evaluation_store,
+        preparation_id=admission_report.preparation_id,
+        repository_root=root, runtime_authority=runtime_authority,
+        docker_state_inspector=docker_state_inspector,
+        candidate_c_authority=candidate_c_authority,
+        container_real_rag_inspector=container_real_rag_inspector)
+
     fresh = resolve_materialized_formal_config(
         config, repository_root=root,
         candidate_c_authority=candidate_c_authority,
         runtime_authority=runtime_authority,
         docker_state_inspector=docker_state_inspector,
+        container_real_rag_inspector=container_real_rag_inspector,
         evaluation_store=evaluation_store,
         preparation_id=admission_report.preparation_id,
         _required_facts_resolver=resolve_formal_required_facts,

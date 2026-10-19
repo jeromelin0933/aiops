@@ -1,18 +1,21 @@
 """PM-authorized pre-admission preparation for SPEC-017 Candidate-F.
 
-Preparation issues a durable, deterministic future-target identity and its
-empty evaluation-owned directory/ownership marker.  It does not create an
-evaluation run, execution, Docker resource, RAG index, gate receipt, or
-denominator row.
+Preparation issues a durable, deterministic future-target identity and may
+record exact evaluation-owned preparation resources.  It never creates an
+evaluation run, execution, gate receipt, scenario result, or denominator row.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import copy
+from datetime import datetime, timezone
 from enum import Enum
+import hashlib
 import json
 from pathlib import Path
-from typing import Mapping
+import re
+from typing import Mapping, Protocol
 
 import yaml
 
@@ -32,6 +35,226 @@ class PreparationLifecycle(str, Enum):
     PREPARED = "PREPARED"
     ADMITTED = "ADMITTED"
     EXECUTION = "EXECUTION"
+
+
+class PreparationResourceState(str, Enum):
+    """Typed resource progress; none of these states is execution authority."""
+
+    IDENTITY_ONLY = "IDENTITY_ONLY"
+    PREPARING = "PREPARING"
+    PREPARED_RESOURCES = "PREPARED_RESOURCES"
+    INVALID = "INVALID"
+
+
+class PreparationResourceDomain(str, Enum):
+    RUNTIME_IMAGE = "RUNTIME_IMAGE"
+    DOCKER_TOPOLOGY = "DOCKER_TOPOLOGY"
+    DOCKER_OWNERSHIP = "DOCKER_OWNERSHIP"
+    DOCKER_HEALTH = "DOCKER_HEALTH"
+    DOCKER_STALE_STATE = "DOCKER_STALE_STATE"
+    DOCKER_ACTUAL_RESOURCES = "DOCKER_ACTUAL_RESOURCES"
+    REAL_RAG_BUILD = "REAL_RAG_BUILD"
+    REAL_RAG_ACTIVATION = "REAL_RAG_ACTIVATION"
+    REAL_RAG_CHILD_MOUNT = "REAL_RAG_CHILD_MOUNT"
+    REAL_RAG_CORPUS_MOUNT = "REAL_RAG_CORPUS_MOUNT"
+
+
+_BOUNDED_IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._/@+-]{0,511}")
+_COMMITMENT = re.compile(r"sha256:[0-9a-f]{64}")
+_RESOURCE_AUTHORITIES = {
+    PreparationResourceDomain.RUNTIME_IMAGE: "SPEC011_RUNTIME_IMAGE_INSPECTOR_v1",
+    PreparationResourceDomain.DOCKER_TOPOLOGY: "SPEC017_FORMAL_COMPOSE_RESOLVER_v1",
+    PreparationResourceDomain.DOCKER_OWNERSHIP: "SPEC017_DOCKER_STATE_INSPECTOR_v1",
+    PreparationResourceDomain.DOCKER_HEALTH: "SPEC017_DOCKER_STATE_INSPECTOR_v1",
+    PreparationResourceDomain.DOCKER_STALE_STATE:
+        "SPEC017_DOCKER_STATE_INSPECTOR_v1",
+    PreparationResourceDomain.DOCKER_ACTUAL_RESOURCES:
+        "SPEC017_DOCKER_STATE_INSPECTOR_v1",
+    PreparationResourceDomain.REAL_RAG_BUILD: "CANDIDATE_C_PUBLIC_BUILD_v1",
+    PreparationResourceDomain.REAL_RAG_ACTIVATION: "CANDIDATE_C_PUBLIC_ACTIVATION_v1",
+    PreparationResourceDomain.REAL_RAG_CHILD_MOUNT: "SPEC017_CONTAINER_MOUNTS_v1",
+    PreparationResourceDomain.REAL_RAG_CORPUS_MOUNT: "SPEC017_CONTAINER_MOUNTS_v1",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class PreparationResourceFact:
+    """Positive-schema authoritative observation; no free-form metadata."""
+
+    domain: PreparationResourceDomain
+    preparation_id: str
+    planned_run_identity: str
+    expected_target_identity: str
+    actual_observed_identity: str
+    authority_profile: str
+    semantic_identity_commitment: str
+    observed_at: str
+    fact_commitment: str
+
+    def material(self, *, include_commitment: bool = True) -> dict[str, str]:
+        result = {
+            "domain": self.domain.value,
+            "preparation_id": self.preparation_id,
+            "planned_run_identity": self.planned_run_identity,
+            "expected_target_identity": self.expected_target_identity,
+            "actual_observed_identity": self.actual_observed_identity,
+            "authority_profile": self.authority_profile,
+            "semantic_identity_commitment": self.semantic_identity_commitment,
+            "observed_at": self.observed_at,
+        }
+        if include_commitment:
+            result["fact_commitment"] = self.fact_commitment
+        return result
+
+    @classmethod
+    def create(
+        cls, domain: PreparationResourceDomain, preparation_id: str,
+        planned_run_identity: str, expected_target_identity: str,
+        actual_observed_identity: str, observed_at: str, *,
+        semantic_identity_commitment: str | None = None,
+    ) -> "PreparationResourceFact":
+        authority = _RESOURCE_AUTHORITIES[domain]
+        semantic_material = {
+            "domain": domain.value, "preparation_id": preparation_id,
+            "planned_run_identity": planned_run_identity,
+            "expected_target_identity": expected_target_identity,
+            "actual_observed_identity": actual_observed_identity,
+            "authority_profile": authority,
+        }
+        semantic_identity_commitment = (
+            semantic_identity_commitment or commitment(semantic_material))
+        material = {
+            **semantic_material,
+            "semantic_identity_commitment": semantic_identity_commitment,
+            "observed_at": observed_at,
+        }
+        result = cls(domain, preparation_id, planned_run_identity,
+                     expected_target_identity, actual_observed_identity,
+                     authority, semantic_identity_commitment, observed_at,
+                     commitment(material))
+        result.validate()
+        return result
+
+    def validate(self) -> None:
+        require_identity(self.preparation_id, "preparation")
+        require_identity(self.planned_run_identity, "planned_run")
+        actual_valid = (
+            bool(re.fullmatch(r"kbld_[0-9a-f]{64}", self.actual_observed_identity))
+            if self.domain is PreparationResourceDomain.REAL_RAG_BUILD
+            else bool(_COMMITMENT.fullmatch(self.actual_observed_identity)))
+        expected_valid = (
+            self.expected_target_identity == "spec011-runtime-formal-v1"
+            if self.domain is PreparationResourceDomain.RUNTIME_IMAGE
+            else bool(re.fullmatch(r"kbld_[0-9a-f]{64}", self.expected_target_identity))
+            if self.domain is PreparationResourceDomain.REAL_RAG_ACTIVATION
+            else bool(_COMMITMENT.fullmatch(self.expected_target_identity))
+            if self.domain is not PreparationResourceDomain.DOCKER_TOPOLOGY
+            else self.expected_target_identity.startswith("eval:docker_namespace:"))
+        try:
+            datetime.fromisoformat(self.observed_at.replace("Z", "+00:00"))
+            time_valid = True
+        except (TypeError, ValueError):
+            time_valid = False
+        if (self.authority_profile != _RESOURCE_AUTHORITIES.get(self.domain)
+                or any(not _BOUNDED_IDENTITY.fullmatch(value) for value in (
+                    self.expected_target_identity,
+                    self.actual_observed_identity,
+                    self.authority_profile))
+                or not actual_valid or not expected_valid or not time_valid
+                or len(self.observed_at) > 64
+                or not _COMMITMENT.fullmatch(
+                    self.semantic_identity_commitment)
+                or not _COMMITMENT.fullmatch(self.fact_commitment)
+                or commitment(self.material(include_commitment=False)) !=
+                    self.fact_commitment):
+            raise ValueError("preparation resource fact is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class PreparationResourceFacts:
+    facts: tuple[PreparationResourceFact, ...]
+    facts_commitment: str
+
+    @classmethod
+    def create(cls, facts: tuple[PreparationResourceFact, ...]) -> "PreparationResourceFacts":
+        expected = tuple(PreparationResourceDomain)
+        if tuple(item.domain for item in facts) != expected:
+            raise ValueError("preparation resource fact domains are incomplete")
+        for fact in facts:
+            fact.validate()
+        material = [item.material() for item in facts]
+        result = cls(facts, commitment(material))
+        result.validate()
+        return result
+
+    def validate(self) -> None:
+        if (not _COMMITMENT.fullmatch(self.facts_commitment)
+                or commitment([item.material() for item in self.facts]) !=
+                    self.facts_commitment):
+            raise ValueError("preparation resource facts commitment is invalid")
+        for fact in self.facts:
+            fact.validate()
+
+    def material(self) -> dict[str, object]:
+        return {"facts": [item.material() for item in self.facts],
+                "facts_commitment": self.facts_commitment}
+
+
+def prepared_resource_semantic_identity(
+    facts: PreparationResourceFacts | Mapping[str, object],
+) -> tuple[tuple[str, str, str, str, str, str, str], ...]:
+    """Return the one bounded durable/fresh semantic comparison contract.
+
+    Observation time is deliberately excluded. Domain-specific correctness is
+    promoted into ``semantic_identity_commitment`` before persistence.
+    """
+    raw_facts = (facts.facts if isinstance(facts, PreparationResourceFacts)
+                 else facts.get("facts"))
+    if not isinstance(raw_facts, (tuple, list)):
+        raise ValueError("preparation resource semantic facts are absent")
+    result = []
+    for item in raw_facts:
+        if isinstance(item, PreparationResourceFact):
+            values = (
+                item.domain.value, item.preparation_id,
+                item.planned_run_identity, item.expected_target_identity,
+                item.actual_observed_identity, item.authority_profile,
+                item.semantic_identity_commitment,
+            )
+        elif isinstance(item, Mapping):
+            values = tuple(item.get(name) for name in (
+                "domain", "preparation_id", "planned_run_identity",
+                "expected_target_identity", "actual_observed_identity",
+                "authority_profile", "semantic_identity_commitment"))
+        else:
+            raise ValueError("preparation resource semantic fact is malformed")
+        if any(not isinstance(value, str) or not value for value in values):
+            raise ValueError("preparation resource semantic identity is malformed")
+        result.append(values)
+    if tuple(item[0] for item in result) != tuple(
+            domain.value for domain in PreparationResourceDomain):
+        raise ValueError("preparation resource semantic domains are incomplete")
+    return tuple(result)
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateCPreparationRequest:
+    preparation_id: str
+    planned_run_identity: str
+    child_identity: str
+    child_path: str
+    profile_identity: str
+    manifest_commitment: str
+    corpus_identity: str
+    corpus_release: str
+
+
+class PreparationDockerOperations(Protocol):
+    def create_exact(self, authority: object, topology: object) -> None: ...
+
+
+class CandidateCPreparationOperations(Protocol):
+    def prepare_exact(self, request: CandidateCPreparationRequest) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,6 +374,10 @@ def _build_payload(
             "ownership": preparation_id,
             "state": "PREPARED_IDENTITY_ONLY",
             "resources_created": False,
+            "resource_state": PreparationResourceState.IDENTITY_ONLY.value,
+            "resource_commitment": None,
+            "topology_commitment": None,
+            "actual_ownership_commitment": None,
         },
         "real_rag_child": {
             "child_identity": child_identity,
@@ -159,17 +386,147 @@ def _build_payload(
             "ownership": preparation_id,
             "state": "ALLOCATED",
             "ownership_commitment": ownership_commitment,
+            "resource_state": PreparationResourceState.IDENTITY_ONLY.value,
+            "corpus_identity": None,
+            "index_identity": None,
+            "build_identity": None,
+            "activation_identity": None,
+            "artifacts": [],
+            "resource_commitment": None,
         },
         "readiness_preparation": {
             "state": "PREPARED_NOT_VALIDATED_FOR_ADMISSION",
             "material": readiness_material,
             "commitment": commitment(readiness_material),
         },
+        "resource_facts": None,
         "effects": {
             "formal_execution": False, "external_gates": False,
             "scenario_injection": False, "denominator_consumed": False,
         },
     }
+
+
+def _prepared_resources_payload(
+    prepared: Mapping[str, object], *, facts: PreparationResourceFacts,
+    artifacts: Mapping[str, str], corpus_identity: str,
+) -> dict[str, object]:
+    """Private positive-schema serializer for internally observed facts."""
+    facts.validate()
+    prepared_resource_semantic_identity(facts)
+    result = copy.deepcopy(dict(prepared))
+    docker = result.get("docker_namespace")
+    child = result.get("real_rag_child")
+    if not isinstance(docker, dict) or not isinstance(child, dict):
+        raise ValueError("preparation resource payload is malformed")
+    if (facts.facts[0].preparation_id != prepared.get("preparation_id")
+            or any(item.preparation_id != prepared.get("preparation_id")
+                   or item.planned_run_identity !=
+                        prepared["planned_lineage"]["planned_run_identity"]
+                   for item in facts.facts)):
+        raise ValueError("preparation resource facts belong to another preparation")
+    by_domain = {item.domain: item for item in facts.facts}
+    runtime_image_identity = by_domain[
+        PreparationResourceDomain.RUNTIME_IMAGE].actual_observed_identity
+    docker_topology_commitment = by_domain[
+        PreparationResourceDomain.DOCKER_TOPOLOGY].actual_observed_identity
+    docker_ownership_commitment = by_domain[
+        PreparationResourceDomain.DOCKER_OWNERSHIP].actual_observed_identity
+    service_health_commitment = by_domain[
+        PreparationResourceDomain.DOCKER_HEALTH].actual_observed_identity
+    build_identity = by_domain[
+        PreparationResourceDomain.REAL_RAG_BUILD].actual_observed_identity
+    activation_identity = by_domain[
+        PreparationResourceDomain.REAL_RAG_ACTIVATION].actual_observed_identity
+    mount_commitment = commitment({
+        "child": by_domain[PreparationResourceDomain.REAL_RAG_CHILD_MOUNT]
+            .actual_observed_identity,
+        "corpus": by_domain[PreparationResourceDomain.REAL_RAG_CORPUS_MOUNT]
+            .actual_observed_identity,
+    })
+    index_identity = build_identity
+    if (not isinstance(artifacts, Mapping) or not artifacts
+            or len(artifacts) > 128):
+        raise ValueError("prepared Candidate-C artifact manifest is invalid")
+    normalized: list[dict[str, str]] = []
+    for relative, digest in sorted(artifacts.items()):
+        path = Path(relative)
+        if (not isinstance(relative, str) or not relative or path.is_absolute()
+                or ".." in path.parts or relative == PREPARED_CHILD_MARKER
+                or not isinstance(digest, str)
+                or not digest.startswith("sha256:") or len(digest) != 71):
+            raise ValueError("prepared Candidate-C artifact is invalid")
+        normalized.append({"relative_path": path.as_posix(), "digest": digest})
+    docker_material = {
+        "namespace_identity": docker["namespace_identity"],
+        "project_name": docker["project_name"],
+        "ownership": docker["ownership"],
+        "topology_commitment": docker_topology_commitment,
+        "actual_ownership_commitment": docker_ownership_commitment,
+        "runtime_image_identity": runtime_image_identity,
+        "service_health_commitment": service_health_commitment,
+    }
+    docker.update({
+        "state": "PREPARED_RESOURCES", "resources_created": True,
+        "resource_state": PreparationResourceState.PREPARED_RESOURCES.value,
+        "topology_commitment": docker_topology_commitment,
+        "actual_ownership_commitment": docker_ownership_commitment,
+        "resource_commitment": commitment(docker_material),
+    })
+    child_material = {
+        "child_identity": child["child_identity"],
+        "ownership": child["ownership"], "corpus_identity": corpus_identity,
+        "index_identity": index_identity, "build_identity": build_identity,
+        "activation_identity": activation_identity, "artifacts": normalized,
+        "mount_commitment": mount_commitment,
+    }
+    child.update({
+        "resource_state": PreparationResourceState.PREPARED_RESOURCES.value,
+        "corpus_identity": corpus_identity, "index_identity": index_identity,
+        "build_identity": build_identity, "activation_identity": activation_identity,
+        "artifacts": normalized, "resource_commitment": commitment(child_material),
+    })
+    readiness = result["readiness_preparation"]
+    readiness["state"] = "PREPARED_RESOURCES_NOT_VALIDATED_FOR_ADMISSION"
+    readiness["material"] = {
+        **readiness["material"], "runtime_image_identity": runtime_image_identity,
+        "service_health_commitment": service_health_commitment,
+        "mount_commitment": mount_commitment,
+        "docker_resource_commitment": docker["resource_commitment"],
+        "real_rag_resource_commitment": child["resource_commitment"],
+    }
+    readiness["commitment"] = commitment(readiness["material"])
+    result["resource_facts"] = facts.material()
+    return result
+
+
+def identity_only_preparation_payload(
+    prepared: Mapping[str, object],
+) -> dict[str, object]:
+    """Project immutable preparation identity for Final Admission freshness."""
+    result = copy.deepcopy(dict(prepared))
+    docker = result["docker_namespace"]
+    child = result["real_rag_child"]
+    docker.update({
+        "state": "PREPARED_IDENTITY_ONLY", "resources_created": False,
+        "resource_state": PreparationResourceState.IDENTITY_ONLY.value,
+        "resource_commitment": None, "topology_commitment": None,
+        "actual_ownership_commitment": None,
+    })
+    child.update({
+        "resource_state": PreparationResourceState.IDENTITY_ONLY.value,
+        "corpus_identity": None, "index_identity": None, "build_identity": None,
+        "activation_identity": None, "artifacts": [], "resource_commitment": None,
+    })
+    readiness = result["readiness_preparation"]
+    for name in (
+        "runtime_image_identity", "service_health_commitment", "mount_commitment",
+        "docker_resource_commitment", "real_rag_resource_commitment"):
+        readiness["material"].pop(name, None)
+    readiness["state"] = "PREPARED_NOT_VALIDATED_FOR_ADMISSION"
+    readiness["commitment"] = commitment(readiness["material"])
+    result["resource_facts"] = None
+    return result
 
 
 def _expected_child_marker(prepared: Mapping[str, object]) -> dict[str, object]:
@@ -245,7 +602,7 @@ def verify_prepared_real_rag_child(
     store: SqliteEvaluationStore, preparation_id: str,
     repository_root: str | Path,
 ) -> dict[str, object]:
-    """Fresh-read durable allocation, filesystem ownership, and empty state."""
+    """Fresh-read durable allocation and exact allowlisted prepared artifacts."""
     require_identity(preparation_id, "preparation")
     prepared = store.get_preparation(preparation_id)
     if prepared is None:
@@ -253,7 +610,11 @@ def verify_prepared_real_rag_child(
     child = prepared["real_rag_child"]
     lineage = prepared["planned_lineage"]
     if (child.get("ownership") != preparation_id
-            or child.get("state") != "ALLOCATED"):
+            or child.get("state") != "ALLOCATED"
+            or child.get("resource_state") not in {
+                None, PreparationResourceState.IDENTITY_ONLY.value,
+                PreparationResourceState.PREPARING.value,
+                PreparationResourceState.PREPARED_RESOURCES.value}):
         raise ValueError("prepared Real-RAG allocation owner/lifecycle mismatch")
     require_identity(lineage.get("planned_run_identity"), "planned_run")
     require_identity(lineage.get("planned_execution_identity"), "planned_execution")
@@ -264,19 +625,308 @@ def verify_prepared_real_rag_child(
     marker = target / PREPARED_CHILD_MARKER
     if not marker.is_file():
         raise ValueError("prepared Real-RAG child ownership marker is missing")
-    entries = tuple(target.iterdir())
-    if entries != (marker,) and set(entries) != {marker}:
-        raise ValueError("prepared Real-RAG child contains unexpected state")
     try:
         actual_marker = json.loads(marker.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError("prepared Real-RAG child ownership marker is missing or invalid") from exc
     if actual_marker != _expected_child_marker(prepared):
         raise ValueError("prepared Real-RAG child ownership marker mismatch")
+    expected_artifacts = child.get("artifacts", [])
+    allowed = {PREPARED_CHILD_MARKER}
+    for artifact in expected_artifacts:
+        relative = artifact.get("relative_path") if isinstance(artifact, Mapping) else None
+        digest = artifact.get("digest") if isinstance(artifact, Mapping) else None
+        if (not isinstance(relative, str) or not relative
+                or Path(relative).is_absolute() or ".." in Path(relative).parts
+                or not isinstance(digest, str)):
+            raise ValueError("prepared Candidate-C artifact manifest is invalid")
+        actual = (target / relative).resolve()
+        try:
+            actual.relative_to(target)
+        except ValueError as exc:
+            raise ValueError("prepared Candidate-C artifact escapes child") from exc
+        if not actual.is_file() or "sha256:" + hashlib.sha256(actual.read_bytes()).hexdigest() != digest:
+            raise ValueError("prepared Candidate-C artifact lineage mismatch")
+        allowed.add(Path(relative).as_posix())
+    observed = {path.relative_to(target).as_posix()
+                for path in target.rglob("*") if path.is_file()}
+    if observed != allowed:
+        raise ValueError("prepared Real-RAG child contains unexpected state")
+    if child.get("resource_state") == PreparationResourceState.PREPARED_RESOURCES.value:
+        durable = prepared.get("resource_facts")
+        facts = ({item.get("domain"): item for item in durable.get("facts", ())}
+                 if isinstance(durable, Mapping) else {})
+        if (facts.get(PreparationResourceDomain.REAL_RAG_BUILD.value, {}).get(
+                "actual_observed_identity") != child.get("build_identity")
+                or facts.get(
+                    PreparationResourceDomain.REAL_RAG_ACTIVATION.value, {}).get(
+                        "actual_observed_identity") != child.get("activation_identity")
+                or facts.get(PreparationResourceDomain.REAL_RAG_BUILD.value, {}).get(
+                    "expected_target_identity") != child.get("corpus_identity")):
+            raise ValueError("prepared Candidate-C build/activation lineage mismatch")
     siblings = tuple(isolated_root.iterdir())
     if len(siblings) != 1 or siblings[0] != target:
         raise ValueError("duplicate or stale Real-RAG child allocation exists")
     return dict(child)
+
+
+def _artifact_manifest(target: Path) -> dict[str, str]:
+    artifacts: dict[str, str] = {}
+    for path in sorted(item for item in target.rglob("*") if item.is_file()):
+        relative = path.relative_to(target).as_posix()
+        if relative == PREPARED_CHILD_MARKER:
+            continue
+        artifacts[relative] = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+    if not artifacts:
+        raise ValueError("Candidate-C preparation produced no authoritative artifacts")
+    return artifacts
+
+
+def observe_authoritative_preparation_facts(
+    *, store: SqliteEvaluationStore, preparation_id: str,
+    repository_root: str | Path, runtime_authority: object,
+    docker_state_inspector: object, candidate_c_authority: object,
+    container_real_rag_inspector: object,
+) -> PreparationResourceFacts:
+    """Fresh-read all eight domains through supported resolver/inspector ports."""
+    from .container_wiring import (
+        ContainerRealRagInspectionTarget, ContainerRealRagReadiness,
+        resolve_formal_container_wiring,
+    )
+    from .formal_compose import resolve_formal_compose_topology
+    from .formal_docker_lifecycle import (
+        resolve_campaign_docker_lifecycle_required_facts,
+    )
+    from .readiness import ReadinessFactState
+    from .runtime_image_readiness import (
+        PreparedRuntimeImage, RuntimeFactState, RuntimeFormalReadinessFacts,
+    )
+
+    prepared = store.get_preparation(preparation_id)
+    if prepared is None:
+        raise ValueError("authoritative resource observation requires PREPARED state")
+    planned_run = prepared["planned_lineage"]["planned_run_identity"]
+    observed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    runtime = runtime_authority.formal_readiness()
+    if type(runtime) is not RuntimeFormalReadinessFacts:
+        raise TypeError("typed Runtime image inspector is required")
+    runtime.validate()
+    source = runtime.source
+    if (source.repository_dirty
+            or runtime.actual_image.state is not RuntimeFactState.AVAILABLE
+            or source.base_image_digest.state is not RuntimeFactState.AVAILABLE):
+        raise ValueError("Runtime image inspection is unresolved or contradictory")
+    image = runtime.actual_image.value
+    image_material = {
+        "repository_revision": source.repository_revision,
+        "source_commitment": source.source_commitment,
+        "dockerfile_commitment": source.dockerfile_commitment,
+        "base_image_digest": source.base_image_digest.value,
+        "dependency_commitment": source.dependency_commitment,
+        "runtime_profile": source.logical_image_identity,
+        "image_id": image["image_id"], "image_digest": image["image_digest"],
+    }
+    inspected_image = PreparedRuntimeImage(
+        source.repository_revision, source.source_commitment,
+        source.dockerfile_commitment, source.base_image_digest.value,
+        source.dependency_commitment, source.logical_image_identity,
+        image["image_id"], image["image_digest"],
+        commitment(image_material))
+    inspected_image.validate()
+
+    topology = resolve_formal_compose_topology(store, preparation_id, repository_root)
+    docker_facts = resolve_campaign_docker_lifecycle_required_facts(
+        topology, docker_state_inspector)
+    docker_by_name = {item.name: item for item in docker_facts}
+    for name in ("actual_docker_ownership", "formal_required_service_health",
+                 "formal_docker_stale_state", "actual_formal_docker_resources"):
+        if docker_by_name[name].state is not ReadinessFactState.RESOLVED:
+            raise ValueError(f"authoritative Docker fact is not resolved: {name}")
+    docker_resources = docker_by_name["actual_formal_docker_resources"].value
+    docker_source = docker_resources["inspection_results_commitment"]
+
+    wiring = resolve_formal_container_wiring(
+        store, preparation_id, repository_root,
+        candidate_c_authority=candidate_c_authority)
+    if (wiring.build_fact.state is not ReadinessFactState.RESOLVED
+            or wiring.activation_fact.state is not ReadinessFactState.RESOLVED):
+        raise ValueError("Candidate-C public build/activation is not resolved")
+    inspections: list[ContainerRealRagReadiness] = []
+    for envelope, mount in zip(topology.envelopes, wiring.mounts):
+        target = ContainerRealRagInspectionTarget(
+            preparation_id, envelope.compose_project_identity, mount)
+        current = container_real_rag_inspector.inspect(target)
+        if type(current) is not ContainerRealRagReadiness:
+            raise TypeError("typed container Real-RAG inspector is required")
+        if (current.preparation_id != preparation_id
+                or current.project_identity != envelope.compose_project_identity
+                or current.planned_execution_identity !=
+                    mount.planned_execution_identity
+                or current.child_identity != mount.execution_child_identity
+                or current.child_target != mount.child_container_target
+                or current.corpus_target != mount.corpus_container_target):
+            raise ValueError("container inspector provenance contradicts target")
+        current.assert_resolved()
+        if (current.build_fact.value != wiring.build_fact.value
+                or current.activation_fact.value != wiring.activation_fact.value):
+            raise ValueError("container Candidate-C lineage contradicts public authority")
+        inspections.append(current)
+
+    child_expected = commitment([item.mount_commitment for item in wiring.mounts])
+    child_actual = commitment([item.mount_fact.value for item in inspections])
+    corpus_expected = commitment([{
+        "target": item.corpus_container_target,
+        "manifest": item.manifest_commitment,
+        "release": item.corpus_release,
+    } for item in wiring.mounts])
+    corpus_actual = commitment([item.corpus_fact.value for item in inspections])
+    ownership_identity = commitment(docker_by_name["actual_docker_ownership"].value)
+    health_identity = commitment(docker_by_name["formal_required_service_health"].value)
+    stale_state_identity = commitment(
+        docker_by_name["formal_docker_stale_state"].value)
+    actual_resource_set_identity = docker_resources[
+        "actual_resource_set_commitment"]
+    build_identity = str(wiring.build_fact.value)
+    activation_identity = commitment(wiring.activation_fact.value)
+    manifest_commitment = wiring.mounts[0].manifest_commitment
+
+    return PreparationResourceFacts.create((
+        PreparationResourceFact.create(
+            PreparationResourceDomain.RUNTIME_IMAGE, preparation_id, planned_run,
+            source.logical_image_identity, inspected_image.image_digest,
+            observed_at,
+            semantic_identity_commitment=
+                inspected_image.preparation_commitment),
+        PreparationResourceFact.create(
+            PreparationResourceDomain.DOCKER_TOPOLOGY, preparation_id, planned_run,
+            prepared["docker_namespace"]["namespace_identity"],
+            topology.topology_commitment, observed_at),
+        PreparationResourceFact.create(
+            PreparationResourceDomain.DOCKER_OWNERSHIP, preparation_id, planned_run,
+            topology.topology_commitment, ownership_identity, observed_at),
+        PreparationResourceFact.create(
+            PreparationResourceDomain.DOCKER_HEALTH, preparation_id, planned_run,
+            topology.topology_commitment, health_identity, observed_at),
+        PreparationResourceFact.create(
+            PreparationResourceDomain.DOCKER_STALE_STATE, preparation_id,
+            planned_run, topology.topology_commitment, stale_state_identity,
+            observed_at),
+        PreparationResourceFact.create(
+            PreparationResourceDomain.DOCKER_ACTUAL_RESOURCES, preparation_id,
+            planned_run, topology.topology_commitment,
+            actual_resource_set_identity, observed_at,
+            semantic_identity_commitment=docker_source),
+        PreparationResourceFact.create(
+            PreparationResourceDomain.REAL_RAG_BUILD, preparation_id, planned_run,
+            manifest_commitment, build_identity, observed_at),
+        PreparationResourceFact.create(
+            PreparationResourceDomain.REAL_RAG_ACTIVATION, preparation_id, planned_run,
+            build_identity, activation_identity, observed_at),
+        PreparationResourceFact.create(
+            PreparationResourceDomain.REAL_RAG_CHILD_MOUNT, preparation_id, planned_run,
+            child_expected, child_actual, observed_at),
+        PreparationResourceFact.create(
+            PreparationResourceDomain.REAL_RAG_CORPUS_MOUNT, preparation_id, planned_run,
+            corpus_expected, corpus_actual, observed_at),
+    ))
+
+
+def prepare_authoritative_resources(
+    *, store: SqliteEvaluationStore, preparation_id: str,
+    repository_root: str | Path, runtime_authority: object,
+    runtime_image_operations: object, docker_operations: object,
+    docker_state_inspector: object, candidate_c_operations: object,
+    candidate_c_authority: object, container_real_rag_inspector: object,
+) -> PreparationResourceFacts:
+    """Supported PREPARED operation; adapters supply capability, never fact values."""
+    from .formal_compose import resolve_formal_compose_topology
+    from .formal_docker_lifecycle import resolve_preparation_docker_authority
+    from .runtime_image_readiness import PreparedRuntimeImage
+
+    if type(store) is not SqliteEvaluationStore:
+        raise TypeError("authoritative preparation requires SqliteEvaluationStore")
+    prepared = store.get_preparation(preparation_id)
+    if prepared is None or prepared["docker_namespace"].get("resource_state") != "IDENTITY_ONLY":
+        raise ValueError("authoritative preparation requires identity-only PREPARED state")
+    prepared_image = runtime_authority.prepare_image(runtime_image_operations)
+    if type(prepared_image) is not PreparedRuntimeImage:
+        raise TypeError("Runtime image preparation must return its supported typed result")
+    prepared_image.validate()
+
+    topology = resolve_formal_compose_topology(store, preparation_id, repository_root)
+    docker_authority = resolve_preparation_docker_authority(
+        store, preparation_id, repository_root)
+    if not callable(getattr(docker_operations, "create_exact", None)):
+        raise TypeError("typed preparation Docker operations are required")
+    docker_operations.create_exact(docker_authority, topology)
+
+    child = verify_prepared_real_rag_child(store, preparation_id, repository_root)
+    _, target = _child_paths(store, prepared, Path(repository_root).resolve())
+    from knowledge_index import admit_production_manifest
+    rag_profile = yaml.safe_load((
+        Path(repository_root).resolve()
+        / "configs/rca_evaluation/real_rag.yaml").read_text(encoding="utf-8"))
+    manifest = admit_production_manifest(
+        Path(repository_root).resolve()
+        / rag_profile["knowledge"]["manifest_path"],
+        repository_root=Path(repository_root).resolve())
+    request = CandidateCPreparationRequest(
+        preparation_id, prepared["planned_lineage"]["planned_run_identity"],
+        child["child_identity"], str(target), child["profile_identity"],
+        manifest.manifest_commitment, manifest.manifest.corpus_id,
+        manifest.manifest.canonical_release_reference)
+    if not callable(getattr(candidate_c_operations, "prepare_exact", None)):
+        raise TypeError("typed Candidate-C preparation operations are required")
+    candidate_c_operations.prepare_exact(request)
+
+    facts = observe_authoritative_preparation_facts(
+        store=store, preparation_id=preparation_id,
+        repository_root=repository_root, runtime_authority=runtime_authority,
+        docker_state_inspector=docker_state_inspector,
+        candidate_c_authority=candidate_c_authority,
+        container_real_rag_inspector=container_real_rag_inspector)
+    if (facts.facts[0].actual_observed_identity != prepared_image.image_digest
+            or facts.facts[0].semantic_identity_commitment !=
+                prepared_image.preparation_commitment):
+        raise ValueError("post-build Runtime image inspection drifted")
+    artifacts = _artifact_manifest(target)
+    by_domain = {item.domain: item for item in facts.facts}
+    corpus_identity = by_domain[
+        PreparationResourceDomain.REAL_RAG_BUILD].expected_target_identity
+    payload = _prepared_resources_payload(
+        prepared, facts=facts, artifacts=artifacts,
+        corpus_identity=corpus_identity)
+    store._record_prepared_resources(preparation_id, payload)
+    return facts
+
+
+def validate_prepared_resource_freshness(
+    *, store: SqliteEvaluationStore, preparation_id: str,
+    repository_root: str | Path, runtime_authority: object,
+    docker_state_inspector: object, candidate_c_authority: object,
+    container_real_rag_inspector: object,
+) -> PreparationResourceFacts:
+    """Require fresh semantic identity to equal immutable PREPARED observations."""
+    prepared = store.get_preparation(preparation_id)
+    if (prepared is None
+            or prepared["docker_namespace"].get("resource_state") !=
+                PreparationResourceState.PREPARED_RESOURCES.value):
+        raise ValueError("Final Admission requires authoritative PREPARED resources")
+    durable = prepared.get("resource_facts")
+    if not isinstance(durable, Mapping):
+        raise ValueError("durable PREPARED resource facts are absent")
+    fresh = observe_authoritative_preparation_facts(
+        store=store, preparation_id=preparation_id,
+        repository_root=repository_root, runtime_authority=runtime_authority,
+        docker_state_inspector=docker_state_inspector,
+        candidate_c_authority=candidate_c_authority,
+        container_real_rag_inspector=container_real_rag_inspector)
+    durable_semantics = prepared_resource_semantic_identity(durable)
+    fresh_semantics = prepared_resource_semantic_identity(fresh)
+    if durable_semantics != fresh_semantics:
+        raise ValueError("fresh authoritative resources contradict PREPARED facts")
+    return fresh
 
 
 def prepare_formal_campaign(

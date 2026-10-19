@@ -21,6 +21,7 @@ from rca_evaluation.readiness import (
 )
 from rca_evaluation.sqlite_store import SqliteEvaluationStore
 import rca_evaluation.formal_admission as admission_module
+import rca_evaluation.preparation as preparation_module
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -328,6 +329,8 @@ def test_invalid_prepared_to_admitted_transition_is_rejected(tmp_path):
 
 
 def test_final_admission_fresh_reads_and_appends_only_admitted(tmp_path, monkeypatch):
+    monkeypatch.setattr(preparation_module, "validate_prepared_resource_freshness",
+                        lambda **_: None)
     config = _config(tmp_path)
     prepared, evaluation = _prepare(tmp_path, config)
     calls = []
@@ -381,6 +384,8 @@ def test_final_admission_blocks_stale_commitment_and_unresolved_fact(tmp_path, m
 
 
 def test_final_admission_re_resolves_current_readiness_on_replay(tmp_path, monkeypatch):
+    monkeypatch.setattr(preparation_module, "validate_prepared_resource_freshness",
+                        lambda **_: None)
     config = _config(tmp_path)
     prepared, evaluation = _prepare(tmp_path, config)
     monkeypatch.setattr(admission_module, "inspect_repository",
@@ -413,6 +418,8 @@ def test_final_admission_re_resolves_current_readiness_on_replay(tmp_path, monke
 def test_public_cli_final_admission_is_durable_and_replay_is_exact(
     tmp_path, monkeypatch, capsys,
 ):
+    monkeypatch.setattr(preparation_module, "validate_prepared_resource_freshness",
+                        lambda **_: None)
     config = _config(tmp_path)
     reviewers = _reviewers(tmp_path)
     prepared, evaluation = _prepare(tmp_path, config)
@@ -514,6 +521,8 @@ def test_public_cli_current_readiness_or_preparation_drift_is_blocked(
 def test_public_cli_never_reports_success_when_durable_readback_fails(
     tmp_path, monkeypatch, capsys,
 ):
+    monkeypatch.setattr(preparation_module, "validate_prepared_resource_freshness",
+                        lambda **_: None)
     config = _config(tmp_path)
     prepared, evaluation = _prepare(tmp_path, config)
     monkeypatch.setattr(admission_module, "inspect_repository",
@@ -578,7 +587,7 @@ def test_exact_v1_schema_migrates_additively_without_promoting_records(tmp_path)
     connection.executescript(_SCHEMA_V1_SQL)
     connection.close()
     with SqliteEvaluationStore(database) as migrated:
-        assert migrated._db.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert migrated._db.execute("PRAGMA user_version").fetchone()[0] == 3
         assert migrated.is_pristine_for_formal_admission()
         assert migrated._db.execute(
             "SELECT COUNT(*) FROM preparation_records").fetchone()[0] == 0

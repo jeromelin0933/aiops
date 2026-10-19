@@ -384,6 +384,7 @@ def admit_formal_campaign(
     candidate_c_authority: object | None = None,
     runtime_authority: object | None = None,
     docker_state_inspector: object | None = None,
+    container_real_rag_inspector: object | None = None,
     allocation_reference: RagChildAllocation | None = None,
     evaluation_store: SqliteEvaluationStore | None = None,
     allocation_evaluation_run_id: str | None = None,
@@ -414,6 +415,7 @@ def admit_formal_campaign(
             candidate_c_authority=candidate_c_authority,
             runtime_authority=runtime_authority,
             docker_state_inspector=docker_state_inspector,
+            container_real_rag_inspector=container_real_rag_inspector,
             allocation_reference=allocation_reference,
             evaluation_store=evaluation_store,
             evaluation_run_id=allocation_evaluation_run_id,
@@ -557,6 +559,7 @@ def final_admit_formal_campaign(
     candidate_c_authority: object | None = None,
     runtime_authority: object | None = None,
     docker_state_inspector: object | None = None,
+    container_real_rag_inspector: object | None = None,
 ) -> FormalAdmissionReport:
     """Supported Final Admission; repository truth is always fresh-read."""
     return _final_admit_formal_campaign(
@@ -570,6 +573,7 @@ def final_admit_formal_campaign(
         candidate_c_authority=candidate_c_authority,
         runtime_authority=runtime_authority,
         docker_state_inspector=docker_state_inspector,
+        container_real_rag_inspector=container_real_rag_inspector,
         repository_state=None)
 
 
@@ -582,9 +586,13 @@ def _final_admit_formal_campaign(
     candidate_c_authority: object | None = None,
     runtime_authority: object | None = None,
     docker_state_inspector: object | None = None,
+    container_real_rag_inspector: object | None = None,
 ) -> FormalAdmissionReport:
     """Internal implementation; repository_state exists only as a test seam."""
-    from .preparation import _build_payload, verify_prepared_real_rag_child
+    from .preparation import (
+        _build_payload, identity_only_preparation_payload,
+        validate_prepared_resource_freshness, verify_prepared_real_rag_child,
+    )
 
     if type(evaluation_store) is not SqliteEvaluationStore:
         raise TypeError("Final Admission requires SqliteEvaluationStore authority")
@@ -602,9 +610,15 @@ def _final_admit_formal_campaign(
         repository_root=root, config=config, campaign_key=campaign_key,
         repository_branch=state.branch, repository_commit=state.commit,
         database_path=database)
-    if prepared != expected:
+    if identity_only_preparation_payload(prepared) != expected:
         raise ValueError("stale or contradictory preparation facts")
     verify_prepared_real_rag_child(evaluation_store, preparation_id, root)
+    validate_prepared_resource_freshness(
+        store=evaluation_store, preparation_id=preparation_id,
+        repository_root=root, runtime_authority=runtime_authority,
+        docker_state_inspector=docker_state_inspector,
+        candidate_c_authority=candidate_c_authority,
+        container_real_rag_inspector=container_real_rag_inspector)
     if not evaluation_store.has_no_formal_execution_facts():
         raise ValueError("unexpected Formal execution or denominator fact")
     allowed = {database.name, database.name + "-journal",
@@ -631,6 +645,7 @@ def _final_admit_formal_campaign(
         candidate_c_authority=candidate_c_authority,
         runtime_authority=runtime_authority,
         docker_state_inspector=docker_state_inspector,
+        container_real_rag_inspector=container_real_rag_inspector,
         evaluation_store=evaluation_store,
         preparation_id=preparation_id, _allow_prepared_namespace=True,
     )

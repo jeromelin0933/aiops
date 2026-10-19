@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
-from typing import Callable, Sequence
+from typing import Callable, Protocol, Sequence
 
 import yaml
 
@@ -174,6 +174,46 @@ class RuntimeFormalReadinessFacts:
         self.source.validate()
         if commitment(self.material(include_commitment=False)) != self.readiness_commitment:
             raise ValueError("Runtime image readiness commitment is contradictory")
+
+
+class RuntimeImagePreparationOperations(Protocol):
+    """Narrow build port; it accepts only a resolver-issued source identity."""
+
+    def build_exact(self, source: RuntimeImageSourceIdentity) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedRuntimeImage:
+    repository_revision: str
+    source_commitment: str
+    dockerfile_commitment: str
+    base_image_digest: str
+    dependency_commitment: str
+    runtime_profile: str
+    image_id: str
+    image_digest: str
+    preparation_commitment: str
+
+    def validate(self) -> None:
+        material = {
+            "repository_revision": self.repository_revision,
+            "source_commitment": self.source_commitment,
+            "dockerfile_commitment": self.dockerfile_commitment,
+            "base_image_digest": self.base_image_digest,
+            "dependency_commitment": self.dependency_commitment,
+            "runtime_profile": self.runtime_profile,
+            "image_id": self.image_id,
+            "image_digest": self.image_digest,
+        }
+        if (not re.fullmatch(r"[0-9a-f]{40}", self.repository_revision)
+                or any(not _SHA256.fullmatch(value) for value in (
+                    self.source_commitment, self.dockerfile_commitment,
+                    self.base_image_digest, self.dependency_commitment,
+                    self.image_id, self.image_digest,
+                    self.preparation_commitment))
+                or self.runtime_profile != RUNTIME_IMAGE_PROFILE
+                or commitment(material) != self.preparation_commitment):
+            raise ValueError("prepared Runtime image binding is contradictory")
 
 
 CommandRunner = Callable[[Sequence[str], Path], CommandResult]
@@ -434,5 +474,42 @@ class RuntimeImageReadinessResolver:
         result = RuntimeFormalReadinessFacts(
             RUNTIME_IMAGE_READINESS_SCHEMA, source, client, engine, compose,
             actual, commitment(facts_without_commitment))
+        result.validate()
+        return result
+
+    def prepare_image(
+        self, operations: RuntimeImagePreparationOperations,
+    ) -> PreparedRuntimeImage:
+        """Build the exact PREPARED image and trust only post-build inspection."""
+        before = self.formal_readiness()
+        source = before.source
+        if (source.repository_dirty
+                or source.source_definition.state is not RuntimeFactState.AVAILABLE
+                or source.formal_build_source.state is not RuntimeFactState.AVAILABLE
+                or source.base_image_digest.state is not RuntimeFactState.AVAILABLE):
+            raise ValueError("Runtime image preparation source is not exact")
+        if not hasattr(operations, "build_exact"):
+            raise TypeError("typed Runtime image preparation operations are required")
+        operations.build_exact(source)
+        after = self.formal_readiness()
+        if (after.source != source
+                or after.actual_image.state is not RuntimeFactState.AVAILABLE):
+            raise ValueError("prepared Runtime image was not verified by Docker inspection")
+        value = after.actual_image.value
+        material = {
+            "repository_revision": source.repository_revision,
+            "source_commitment": source.source_commitment,
+            "dockerfile_commitment": source.dockerfile_commitment,
+            "base_image_digest": source.base_image_digest.value,
+            "dependency_commitment": source.dependency_commitment,
+            "runtime_profile": source.logical_image_identity,
+            "image_id": value["image_id"], "image_digest": value["image_digest"],
+        }
+        result = PreparedRuntimeImage(
+            source.repository_revision, source.source_commitment,
+            source.dockerfile_commitment, source.base_image_digest.value,
+            source.dependency_commitment, source.logical_image_identity,
+            value["image_id"],
+            value["image_digest"], commitment(material))
         result.validate()
         return result

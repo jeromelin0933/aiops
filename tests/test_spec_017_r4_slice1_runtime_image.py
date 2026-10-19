@@ -305,3 +305,41 @@ def test_dockerfile_declares_future_source_revision_binding():
     assert "org.opencontainers.image.revision" in dockerfile
     assert "io.aiops.runtime.source-commitment" in dockerfile
     assert f'io.aiops.runtime.profile="{RUNTIME_IMAGE_PROFILE}"' in dockerfile
+
+
+def test_prepared_image_build_is_bound_to_source_and_post_build_inspection():
+    commands = _Commands(dirty=False, engine=True)
+    resolver = RuntimeImageReadinessResolver(ROOT, _command_runner=commands)
+
+    class Operations:
+        sources = []
+
+        def build_exact(self, source):
+            self.sources.append(source)
+            commands.image = [{
+                "Id": SHA, "RepoDigests": [f"registry.invalid/runtime@{SHA}"],
+                "Config": {"Labels": {
+                    "org.opencontainers.image.revision": source.repository_revision,
+                    "io.aiops.runtime.source-commitment": source.source_commitment,
+                    "io.aiops.runtime.profile": source.logical_image_identity,
+                }},
+            }]
+
+    operations = Operations()
+    prepared = resolver.prepare_image(operations)
+    assert operations.sources[0].source_commitment == prepared.source_commitment
+    assert prepared.image_id == SHA
+    assert prepared.image_digest == SHA
+    assert commands.calls[-1] == (
+        "docker", "image", "inspect", RUNTIME_IMAGE_TAG)
+
+
+def test_prepared_image_cannot_be_minted_by_build_operation_claim():
+    resolver, _ = _resolver(dirty=False, engine=True)
+
+    class ClaimOnly:
+        def build_exact(self, source):
+            pass
+
+    with pytest.raises(ValueError, match="not verified by Docker inspection"):
+        resolver.prepare_image(ClaimOnly())

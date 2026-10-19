@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from enum import Enum
 import hashlib
 from pathlib import Path, PurePosixPath
-from typing import Mapping
+from typing import Mapping, Protocol
 
 from knowledge_index import admit_production_manifest, load_knowledge_config
 from llm_generation.config import load_generation_config
@@ -225,6 +225,14 @@ class FormalContainerWiringReadiness:
 
 @dataclass(frozen=True, slots=True)
 class ContainerRealRagReadiness:
+    preparation_id: str
+    project_identity: str
+    planned_execution_identity: str
+    child_identity: str
+    child_target: str
+    corpus_target: str
+    inspection_profile: str
+    inspected_at: str
     credential: CredentialReadiness
     mount_fact: RequiredFact
     corpus_fact: RequiredFact
@@ -232,6 +240,14 @@ class ContainerRealRagReadiness:
     activation_fact: RequiredFact
 
     def assert_resolved(self) -> None:
+        require_identity(self.preparation_id, "preparation")
+        require_identity(self.planned_execution_identity, "planned_execution")
+        if (not self.project_identity or not self.child_identity
+                or not self.child_target.startswith("/")
+                or not self.corpus_target.startswith("/")
+                or self.inspection_profile != "SPEC017_CONTAINER_MOUNTS_v1"
+                or not self.inspected_at):
+            raise ValueError("container inspection provenance is incomplete")
         if self.credential.credential_state is not CredentialState.AVAILABLE:
             raise ValueError("container embedding credential is not available")
         for fact in (self.mount_fact, self.corpus_fact,
@@ -240,6 +256,21 @@ class ContainerRealRagReadiness:
                 raise ValueError(f"contradictory required fact: {fact.name}")
             if fact.state is not ReadinessFactState.RESOLVED:
                 raise ValueError(f"unresolved required fact: {fact.name}")
+
+
+@dataclass(frozen=True, slots=True)
+class ContainerRealRagInspectionTarget:
+    preparation_id: str
+    project_identity: str
+    mount: FormalRealRagMount
+
+
+class ContainerRealRagInspector(Protocol):
+    """Typed fresh-inspection port; callers cannot pass resolved booleans."""
+
+    def inspect(
+        self, target: ContainerRealRagInspectionTarget,
+    ) -> ContainerRealRagReadiness: ...
 
 
 def _load_profiles(root: Path) -> tuple[object, object, object, object, object]:
@@ -448,6 +479,7 @@ def materialize_formal_compose_environment(
 
 def resolve_container_real_rag_readiness(
     mount: FormalRealRagMount, *, container_root: str | Path = "/",
+    project_identity: str = "direct-container-inspection",
     candidate_c_authority: object | None = None,
     _environment: Mapping[str, str] | None = None,
     _validated_at: str | None = None,
@@ -543,5 +575,12 @@ def resolve_container_real_rag_readiness(
         expected_manifest_commitment=manifest.manifest_commitment,
         expected_corpus_identity=manifest.manifest.corpus_id,
         expected_corpus_version=manifest.manifest.corpus_version)
-    return ContainerRealRagReadiness(
+    inspected_at = (_validated_at or datetime.now(timezone.utc).isoformat().replace(
+        "+00:00", "Z"))
+    result = ContainerRealRagReadiness(
+        mount.preparation_id, project_identity,
+        mount.planned_execution_identity, mount.execution_child_identity,
+        mount.child_container_target, mount.corpus_container_target,
+        "SPEC017_CONTAINER_MOUNTS_v1", inspected_at,
         credential, mount_fact, corpus_fact, build, activation)
+    return result

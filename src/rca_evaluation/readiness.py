@@ -635,6 +635,7 @@ def resolve_formal_required_facts(
     execution_id: str | None = None,
     preparation_id: str | None = None,
     docker_state_inspector: object | None = None,
+    container_real_rag_inspector: object | None = None,
 ) -> FormalRequiredFactsResolution:
     """Resolve Formal facts from public/governed sources, never caller values.
 
@@ -951,16 +952,55 @@ def resolve_formal_required_facts(
                      for item in container_wiring.mounts]},
                 "SqliteEvaluationStore plus governed R3/Candidate-C configuration",
                 "30 exact isolated child/corpus mount plans fresh-derived"))
-            prerequisites.extend((
-                _formal_fact(
-                    "actual_real_rag_child_mount", None,
-                    "future authorized container inspection",
-                    "actual execution child mount has not been inspected"),
-                _formal_fact(
-                    "actual_real_rag_corpus_mount", None,
-                    "future authorized container inspection",
-                    "approved corpus source mount has not been inspected"),
-            ))
+            if container_real_rag_inspector is None:
+                prerequisites.extend((
+                    _formal_fact(
+                        "actual_real_rag_child_mount", None,
+                        "typed container filesystem inspector",
+                        "actual execution child mount has not been inspected"),
+                    _formal_fact(
+                        "actual_real_rag_corpus_mount", None,
+                        "typed container filesystem inspector",
+                        "approved corpus source mount has not been inspected"),
+                ))
+            else:
+                from .container_wiring import (
+                    ContainerRealRagInspectionTarget,
+                    ContainerRealRagReadiness,
+                )
+                inspected = []
+                for envelope, mount in zip(topology.envelopes, container_wiring.mounts):
+                    target = ContainerRealRagInspectionTarget(
+                        preparation_id, envelope.compose_project_identity, mount)
+                    current = container_real_rag_inspector.inspect(target)
+                    if type(current) is not ContainerRealRagReadiness:
+                        raise TypeError("typed container Real-RAG inspection is required")
+                    if (current.preparation_id != target.preparation_id
+                            or current.project_identity != target.project_identity
+                            or current.planned_execution_identity !=
+                                mount.planned_execution_identity
+                            or current.child_identity != mount.execution_child_identity
+                            or current.child_target != mount.child_container_target
+                            or current.corpus_target != mount.corpus_container_target):
+                        raise ValueError("container inspection target/provenance mismatch")
+                    inspected.append(current)
+                for name, attribute in (
+                    ("actual_real_rag_child_mount", "mount_fact"),
+                    ("actual_real_rag_corpus_mount", "corpus_fact"),
+                ):
+                    source_facts = [getattr(item, attribute) for item in inspected]
+                    states = {item.state for item in source_facts}
+                    state = (ReadinessFactState.CONTRADICTORY
+                             if ReadinessFactState.CONTRADICTORY in states
+                             else ReadinessFactState.RESOLVED
+                             if states == {ReadinessFactState.RESOLVED}
+                             else ReadinessFactState.UNRESOLVED)
+                    value = ([item.value for item in source_facts]
+                             if state is ReadinessFactState.RESOLVED else None)
+                    prerequisites.append(RequiredFact(
+                        name, state, value, "typed container filesystem inspector",
+                        "all 30 exact mounts fresh-inspected" if value is not None
+                        else "one or more exact mounts are unresolved/contradictory"))
         except (AttributeError, KeyError, OSError, RuntimeError,
                 TypeError, ValueError, yaml.YAMLError):
             prerequisites.append(_formal_fact(
@@ -1065,6 +1105,7 @@ def resolve_materialized_formal_config(
     execution_id: str | None = None,
     preparation_id: str | None = None,
     docker_state_inspector: object | None = None,
+    container_real_rag_inspector: object | None = None,
     _required_facts_resolver: object | None = None,
 ) -> ResolvedMaterializedFormalConfig:
     """Fresh-resolve and materialize the supported Formal configuration.
@@ -1087,6 +1128,7 @@ def resolve_materialized_formal_config(
         execution_id=execution_id,
         preparation_id=preparation_id,
         docker_state_inspector=docker_state_inspector,
+        container_real_rag_inspector=container_real_rag_inspector,
     )
     resolution.assert_resolved()
     materialized = (

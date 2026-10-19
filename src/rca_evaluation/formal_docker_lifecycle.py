@@ -135,11 +135,26 @@ class InspectedDockerResource:
 @dataclass(frozen=True, slots=True)
 class DockerProjectInspection:
     schema: str
+    preparation_id: str
+    planned_run_identity: str
+    planned_execution_identity: str
+    namespace_identity: str
     project_identity: str
     topology_commitment: str
+    expected_service_set: tuple[str, ...]
+    expected_network_identity: str
+    expected_volume_identities: tuple[str, ...]
+    expected_ownership_markers: tuple[tuple[str, str], ...]
     resources: tuple[InspectedDockerResource, ...]
+    actual_resource_set_commitment: str
+    resource_state_commitment: str
     inspected_at: str
-    inspection_commitment: str
+    observation_commitment: str
+
+    @property
+    def inspection_commitment(self) -> str:
+        """Compatibility name for lifecycle evidence, never resource equality."""
+        return self.observation_commitment
 
     @classmethod
     def create(
@@ -151,23 +166,81 @@ class DockerProjectInspection:
             raise ValueError("Docker inspection time is required")
         for resource in resources:
             resource.validate_shape()
-        material = {
+        ordered_resources = tuple(sorted(
+            resources, key=lambda item: (item.kind.value, item.identity)))
+        actual_resource_set_commitment = commitment(
+            [resource_material(item) for item in ordered_resources])
+        semantic_material = {
             "schema": LIFECYCLE_SCHEMA,
+            "preparation_id": envelope.preparation_id,
+            "planned_run_identity": envelope.planned_run_identity,
+            "planned_execution_identity": envelope.planned_execution_identity,
+            "namespace_identity": envelope.namespace_identity,
             "project_identity": envelope.compose_project_identity,
             "topology_commitment": envelope.topology_commitment,
-            "resources": [resource_material(item) for item in resources],
+            "expected_service_set": sorted(envelope.services),
+            "actual_container_identities": sorted(
+                item.identity for item in resources
+                if item.kind is DockerResourceKind.CONTAINER),
+            "expected_network_identity": envelope.network_identity,
+            "actual_network_identities": sorted(
+                item.identity for item in resources
+                if item.kind is DockerResourceKind.NETWORK),
+            "expected_volume_identities": sorted(
+                item.volume_identity for item in envelope.volume_mounts),
+            "actual_volume_identities": sorted(
+                item.identity for item in resources
+                if item.kind is DockerResourceKind.VOLUME),
+            "expected_ownership_markers": dict(
+                expected_ownership_labels(envelope)),
+            "actual_resource_set_commitment": actual_resource_set_commitment,
+        }
+        resource_state_commitment = commitment(semantic_material)
+        observation_material = {
+            "resource_state_commitment": resource_state_commitment,
             "inspected_at": inspected_at,
         }
         return cls(
-            LIFECYCLE_SCHEMA, envelope.compose_project_identity,
-            envelope.topology_commitment, resources, inspected_at,
-            commitment(material))
+            LIFECYCLE_SCHEMA, envelope.preparation_id,
+            envelope.planned_run_identity, envelope.planned_execution_identity,
+            envelope.namespace_identity, envelope.compose_project_identity,
+            envelope.topology_commitment, tuple(sorted(envelope.services)),
+            envelope.network_identity,
+            tuple(sorted(item.volume_identity for item in envelope.volume_mounts)),
+            expected_ownership_labels(envelope), resources,
+            actual_resource_set_commitment, resource_state_commitment,
+            inspected_at, commitment(observation_material))
 
     def validate(self) -> None:
-        material = {
-            "schema": self.schema, "project_identity": self.project_identity,
+        ordered_resources = tuple(sorted(
+            self.resources, key=lambda item: (item.kind.value, item.identity)))
+        semantic_material = {
+            "schema": self.schema,
+            "preparation_id": self.preparation_id,
+            "planned_run_identity": self.planned_run_identity,
+            "planned_execution_identity": self.planned_execution_identity,
+            "namespace_identity": self.namespace_identity,
+            "project_identity": self.project_identity,
             "topology_commitment": self.topology_commitment,
-            "resources": [resource_material(item) for item in self.resources],
+            "expected_service_set": list(self.expected_service_set),
+            "actual_container_identities": sorted(
+                item.identity for item in self.resources
+                if item.kind is DockerResourceKind.CONTAINER),
+            "expected_network_identity": self.expected_network_identity,
+            "actual_network_identities": sorted(
+                item.identity for item in self.resources
+                if item.kind is DockerResourceKind.NETWORK),
+            "expected_volume_identities": list(self.expected_volume_identities),
+            "actual_volume_identities": sorted(
+                item.identity for item in self.resources
+                if item.kind is DockerResourceKind.VOLUME),
+            "expected_ownership_markers": dict(self.expected_ownership_markers),
+            "actual_resource_set_commitment": self.actual_resource_set_commitment,
+        }
+        actual_set = commitment(
+            [resource_material(item) for item in ordered_resources])
+        observation_material = {
+            "resource_state_commitment": self.resource_state_commitment,
             "inspected_at": self.inspected_at,
         }
         for resource in self.resources:
@@ -175,7 +248,10 @@ class DockerProjectInspection:
         if (self.schema != LIFECYCLE_SCHEMA
                 or len({(item.kind, item.identity) for item in self.resources})
                     != len(self.resources)
-                or commitment(material) != self.inspection_commitment):
+                or actual_set != self.actual_resource_set_commitment
+                or commitment(semantic_material) != self.resource_state_commitment
+                or commitment(observation_material) !=
+                    self.observation_commitment):
             raise ValueError("Docker inspection is contradictory")
 
 
@@ -236,8 +312,21 @@ def assess_exact_ownership(
         return OwnershipAssessment(
             OperationalState.CONTRADICTORY, LifecycleFailure.OWNERSHIP_CONFLICT,
             ("inspection integrity/commitment mismatch",))
-    if (inspection.project_identity != envelope.compose_project_identity
-            or inspection.topology_commitment != envelope.topology_commitment):
+    if (inspection.preparation_id != envelope.preparation_id
+            or inspection.planned_run_identity != envelope.planned_run_identity
+            or inspection.planned_execution_identity !=
+                envelope.planned_execution_identity
+            or inspection.namespace_identity != envelope.namespace_identity
+            or inspection.project_identity != envelope.compose_project_identity
+            or inspection.topology_commitment != envelope.topology_commitment
+            or inspection.expected_service_set !=
+                tuple(sorted(envelope.services))
+            or inspection.expected_network_identity !=
+                envelope.network_identity
+            or inspection.expected_volume_identities != tuple(sorted(
+                item.volume_identity for item in envelope.volume_mounts))
+            or inspection.expected_ownership_markers !=
+                expected_ownership_labels(envelope)):
         return OwnershipAssessment(
             OperationalState.CONTRADICTORY, LifecycleFailure.OWNERSHIP_CONFLICT,
             ("project/topology ownership mismatch",))
@@ -411,6 +500,75 @@ class ExecutionDockerAuthority:
     injection_state: InjectionLifecycleState
     event_binding_commitment: str | None
     authority_commitment: str
+
+
+@dataclass(frozen=True, slots=True)
+class PreparationDockerAuthority:
+    """Capability for exact preparation resources, never execution operations."""
+
+    preparation_id: str
+    namespace_identity: str
+    project_names: tuple[str, ...]
+    expected_services: tuple[str, ...]
+    topology_commitment: str
+    allowed_operations: tuple[str, ...]
+    authority_commitment: str
+
+    def validate(self) -> None:
+        require_identity(self.preparation_id, "preparation")
+        require_identity(self.namespace_identity, "docker_namespace")
+        material = {
+            "preparation_id": self.preparation_id,
+            "namespace_identity": self.namespace_identity,
+            "project_names": list(self.project_names),
+            "expected_services": list(self.expected_services),
+            "topology_commitment": self.topology_commitment,
+            "allowed_operations": list(self.allowed_operations),
+        }
+        if (not self.project_names or len(set(self.project_names)) != len(self.project_names)
+                or self.expected_services != tuple(sorted(
+                    name for name, classification in SERVICE_CLASSIFICATION.items()
+                    if classification is
+                        FormalServiceClassification.FORMAL_REQUIRED))
+                or self.allowed_operations != (
+                    "CREATE_EXACT_PREPARATION_RESOURCES", "INSPECT_HEALTH",
+                    "INSPECT_MOUNTS", "INSPECT_READINESS")
+                or commitment(material) != self.authority_commitment):
+            raise ValueError("Preparation Docker authority is contradictory")
+
+
+def resolve_preparation_docker_authority(
+    store: SqliteEvaluationStore, preparation_id: str,
+    repository_root: str | Path,
+) -> PreparationDockerAuthority:
+    """Bind preparation capability to Candidate-F's exact isolated topology."""
+    if type(store) is not SqliteEvaluationStore:
+        raise TypeError("preparation Docker authority requires SqliteEvaluationStore")
+    prepared = store.get_preparation(preparation_id)
+    if prepared is None:
+        raise ValueError("Preparation Docker authority requires PREPARED state")
+    docker = prepared["docker_namespace"]
+    if docker.get("resource_state", "IDENTITY_ONLY") not in {
+            "IDENTITY_ONLY", "PREPARING", "PREPARED_RESOURCES"}:
+        raise ValueError("prepared Docker resource state is contradictory")
+    topology = resolve_formal_compose_topology(store, preparation_id, repository_root)
+    material = {
+        "preparation_id": preparation_id,
+        "namespace_identity": docker["namespace_identity"],
+        "project_names": [item.compose_project_identity for item in topology.envelopes],
+        "expected_services": sorted(topology.envelopes[0].services),
+        "topology_commitment": topology.topology_commitment,
+        "allowed_operations": [
+            "CREATE_EXACT_PREPARATION_RESOURCES", "INSPECT_HEALTH",
+            "INSPECT_MOUNTS", "INSPECT_READINESS"],
+    }
+    result = PreparationDockerAuthority(
+        preparation_id, docker["namespace_identity"],
+        tuple(material["project_names"]), tuple(material["expected_services"]),
+        topology.topology_commitment, tuple(material["allowed_operations"]),
+        commitment(material))
+    result.validate()
+    return result
 
 
 def _record_id(execution_id: str, label: str) -> str:
@@ -885,7 +1043,8 @@ def docker_lifecycle_required_facts(
                          else ReadinessFactState.UNRESOLVED)
     return (
         RequiredFact("actual_docker_ownership", ownership_state,
-                     {"inspection_commitment": inspection.inspection_commitment}
+                     {"resource_state_commitment":
+                          inspection.resource_state_commitment}
                      if ownership_state is ReadinessFactState.RESOLVED else None,
                      "read-only Docker state inspector",
                      "exact project ownership fresh-inspected"
@@ -977,9 +1136,19 @@ def resolve_campaign_docker_lifecycle_required_facts(
         else ReadinessFactState.UNRESOLVED)
     legacy_value = None
     if legacy_state is ReadinessFactState.RESOLVED:
+        actual_resource_set_commitment = commitment([{
+            "planned_execution_identity": execution,
+            "resource_state_commitment": facts[0].value[
+                "resource_state_commitment"],
+        } for execution, facts in per_execution])
         legacy_value = {
+            "preparation_id": topology.preparation_id,
+            "planned_run_identity":
+                topology.envelopes[0].planned_run_identity,
             "topology_commitment": topology.topology_commitment,
             "execution_envelope_count": len(topology.envelopes),
+            "actual_resource_set_commitment":
+                actual_resource_set_commitment,
             "inspection_results_commitment": commitment({
                 item.name: item.value for item in result}),
         }
@@ -994,7 +1163,7 @@ def resolve_campaign_docker_lifecycle_required_facts(
 
 __all__ = [
     "CONTROL_ARTIFACT_PATH", "DockerProjectInspection", "DockerResourceKind",
-    "DockerResourceState", "ExecutionDockerAuthority",
+    "DockerResourceState", "ExecutionDockerAuthority", "PreparationDockerAuthority",
     "FormalDockerLifecycleCommand", "FormalDockerLifecycleController",
     "FormalHealthProjection",
     "InspectedDockerResource", "InterruptionContract", "LifecycleFailure",
@@ -1004,6 +1173,7 @@ __all__ = [
     "assess_cleanup_postconditions",
     "docker_lifecycle_required_facts", "expected_ownership_labels",
     "project_health", "resolve_execution_docker_authority",
+    "resolve_preparation_docker_authority",
     "resolve_campaign_docker_lifecycle_required_facts",
     "verify_recovery_continuity", "volume_retention",
 ]

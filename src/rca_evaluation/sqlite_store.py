@@ -16,7 +16,7 @@ from .oracle import EvaluationPlan, OracleRevision
 
 
 APP_ID = 0x017E0A17
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 RUN_SNAPSHOT_SCHEMA = "SPEC-017-RUN-LEDGER-SNAPSHOT-v1"
 RUN_SNAPSHOT_ORDERING = "DEPTH_DOMAIN_RECORD_ID-v1"
 REPORT_SOURCE_CUT_POLICY = "EXCLUDE_REPORT_PROJECTIONS-v1"
@@ -67,13 +67,16 @@ _SCHEMA_V1_SQL = """
 _PREPARATION_SCHEMA_SQL = """
     CREATE TABLE preparation_records (
         record_id TEXT PRIMARY KEY, preparation_id TEXT NOT NULL,
-        kind TEXT NOT NULL CHECK(kind IN ('PREPARED','ADMITTED')),
+        kind TEXT NOT NULL CHECK(kind IN ('PREPARED','PREPARED_RESOURCES','ADMITTED')),
         content BLOB NOT NULL, semantic_commitment TEXT NOT NULL,
         UNIQUE(preparation_id, kind));
     CREATE TRIGGER preparation_no_update BEFORE UPDATE ON preparation_records BEGIN SELECT RAISE(ABORT, 'immutable'); END;
     CREATE TRIGGER preparation_no_delete BEFORE DELETE ON preparation_records BEGIN SELECT RAISE(ABORT, 'immutable'); END;
 """
 _SCHEMA_SQL = _SCHEMA_V1_SQL + _PREPARATION_SCHEMA_SQL
+
+_PREPARATION_SCHEMA_V2_SQL = _PREPARATION_SCHEMA_SQL.replace(
+    "'PREPARED','PREPARED_RESOURCES','ADMITTED'", "'PREPARED','ADMITTED'")
 
 
 def _schema_definition(db: sqlite3.Connection) -> tuple[tuple[str, str, str, str | None], ...]:
@@ -92,6 +95,12 @@ def _expected_schema_definition() -> tuple[tuple[str, str, str, str | None], ...
 def _expected_v1_schema_definition() -> tuple[tuple[str, str, str, str | None], ...]:
     with sqlite3.connect(":memory:") as pristine:
         pristine.executescript(_SCHEMA_V1_SQL)
+        return _schema_definition(pristine)
+
+
+def _expected_v2_schema_definition() -> tuple[tuple[str, str, str, str | None], ...]:
+    with sqlite3.connect(":memory:") as pristine:
+        pristine.executescript(_SCHEMA_V1_SQL + _PREPARATION_SCHEMA_V2_SQL)
         return _schema_definition(pristine)
 
 
@@ -334,6 +343,7 @@ class SqliteEvaluationStore:
             self._db.execute(f"PRAGMA application_id = {APP_ID}")
             self._db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             self._db.executescript(_SCHEMA_SQL)
+            self._schema_version = SCHEMA_VERSION
         elif app_id == APP_ID and version == 1:
             # The sole supported migration is additive.  Validate the complete
             # old schema before changing it; partial/unknown migrations fail.
@@ -348,8 +358,20 @@ class SqliteEvaluationStore:
                 if self._db.in_transaction:
                     self._db.execute("ROLLBACK")
                 raise
+            self._schema_version = SCHEMA_VERSION
+        elif app_id == APP_ID and version == 2:
+            if _schema_definition(self._db) != _expected_v2_schema_definition():
+                raise EvaluationStoreIntegrityError(
+                    "legacy evaluation schema is not the exact supported v2")
+            # v2 preparation rows are immutable historical evidence.  The v3
+            # CHECK expansion is needed only for new PREPARED_RESOURCES rows,
+            # so opening a v2 database must not rebuild its table or change its
+            # physical schema version.
+            self._schema_version = 2
         elif app_id != APP_ID or version != SCHEMA_VERSION:
             raise EvaluationStoreIntegrityError("foreign or unsupported evaluation database")
+        else:
+            self._schema_version = SCHEMA_VERSION
 
     def prepare(self, payload: dict[str, object]) -> dict[str, object]:
         """Atomically cross the first durable-mutation boundary.
@@ -358,6 +380,9 @@ class SqliteEvaluationStore:
         Oracle/plan/ledger fact means the namespace was not pristine at the
         authorized boundary and is rejected without repair or deletion.
         """
+        if self._schema_version != SCHEMA_VERSION:
+            raise EvaluationStoreIntegrityError(
+                "legacy evaluation database is read-only")
         preparation_id = self._validate_preparation_payload(payload)
         content = canonical_bytes(payload)
         semantic_hash = commitment(payload)
@@ -371,7 +396,7 @@ class SqliteEvaluationStore:
                     "first preparation mutation requires a pristine formal store")
             rows = self._db.execute(
                 "SELECT record_id,preparation_id,kind,content,semantic_commitment "
-                "FROM preparation_records").fetchall()
+                "FROM preparation_records WHERE kind='PREPARED'").fetchall()
             expected = (record_id, preparation_id, "PREPARED", content, semantic_hash)
             if not rows:
                 self._db.execute(
@@ -385,14 +410,82 @@ class SqliteEvaluationStore:
             raise
         return dict(payload)
 
+    def _record_prepared_resources(
+        self, preparation_id: str, payload: dict[str, object],
+    ) -> dict[str, object]:
+        """Append an exact PREPARED_RESOURCES transition, never execution facts."""
+        if self._schema_version != SCHEMA_VERSION:
+            raise EvaluationStoreIntegrityError(
+                "legacy evaluation database is read-only")
+        initial_row = self._db.execute(
+            "SELECT content FROM preparation_records "
+            "WHERE preparation_id=? AND kind='PREPARED'", (preparation_id,)).fetchone()
+        if initial_row is None:
+            raise ValueError("identity-only PREPARED state is required")
+        if self._validate_preparation_payload(payload) != preparation_id:
+            raise ValueError("prepared resource transition identity mismatch")
+        if payload["docker_namespace"].get("resource_state") != "PREPARED_RESOURCES":
+            raise ValueError("prepared resource transition requires PREPARED_RESOURCES")
+        from .preparation import identity_only_preparation_payload
+        initial = json.loads(initial_row[0])
+        if identity_only_preparation_payload(payload) != initial:
+            raise ValueError("prepared resource transition changes immutable identity")
+        if not self.has_no_formal_execution_facts():
+            raise ValueError("Formal execution facts exist during preparation")
+        content = canonical_bytes(payload)
+        semantic_hash = commitment(payload)
+        record_id = identity(
+            "preparation", [preparation_id, "PREPARED_RESOURCES"])
+        expected = (record_id, preparation_id, "PREPARED_RESOURCES", content,
+                    semantic_hash)
+        self._db.execute("BEGIN IMMEDIATE")
+        try:
+            row = self._db.execute(
+                "SELECT record_id,preparation_id,kind,content,semantic_commitment "
+                "FROM preparation_records WHERE preparation_id=? "
+                "AND kind='PREPARED_RESOURCES'", (preparation_id,)).fetchone()
+            if row is None:
+                self._db.execute(
+                    "INSERT INTO preparation_records VALUES (?,?,?,?,?)", expected)
+            elif tuple(row) != expected:
+                raise LedgerConflict("contradictory prepared resource replay")
+            self._db.execute("COMMIT")
+        except BaseException:
+            if self._db.in_transaction:
+                self._db.execute("ROLLBACK")
+            raise
+        return dict(payload)
+
     def _validate_preparation_payload(self, payload: object) -> str:
         """Validate store-local structure without duplicating domain discovery."""
-        expected_fields = {
+        return self._validate_preparation_payload_version(payload, legacy_v2=False)
+
+    def _validate_legacy_v2_preparation_payload(self, payload: object) -> str:
+        """Validate the one exact historical v2 PREPARED payload shape."""
+        legacy_fields = {
             "schema", "authority_reference", "lifecycle_state",
             "preparation_id", "preregistration_identity",
             "campaign_identity", "campaign_key", "repository",
             "planned_lineage", "docker_namespace", "real_rag_child",
             "readiness_preparation", "effects",
+        }
+        if type(payload) is not dict or set(payload) != legacy_fields:
+            raise ValueError("legacy v2 preparation payload schema is invalid")
+        projected = dict(payload)
+        projected["resource_facts"] = None
+        return self._validate_preparation_payload_version(
+            projected, legacy_v2=True)
+
+    def _validate_preparation_payload_version(
+        self, payload: object, *, legacy_v2: bool,
+    ) -> str:
+        """Validate an exact persisted version; projection is never stored."""
+        expected_fields = {
+            "schema", "authority_reference", "lifecycle_state",
+            "preparation_id", "preregistration_identity",
+            "campaign_identity", "campaign_key", "repository",
+            "planned_lineage", "docker_namespace", "real_rag_child",
+            "readiness_preparation", "resource_facts", "effects",
         }
         if type(payload) is not dict or set(payload) != expected_fields:
             raise ValueError("preparation payload schema is invalid")
@@ -452,15 +545,40 @@ class SqliteEvaluationStore:
         if (lineage["planned_run_identity"] != expected_run
                 or lineage["planned_execution_identity"] != expected_execution):
             raise ValueError("preparation planned lineage binding is invalid")
-        if (not isinstance(docker, dict) or set(docker) != {
-                "namespace_identity", "project_name", "ownership", "state",
-                "resources_created"}
+        legacy_docker_fields = {
+            "namespace_identity", "project_name", "ownership", "state",
+            "resources_created"}
+        prepared_docker_fields = legacy_docker_fields | {
+            "resource_state", "resource_commitment", "topology_commitment",
+            "actual_ownership_commitment"}
+        allowed_docker_fields = ({frozenset(legacy_docker_fields)} if legacy_v2
+                                 else {frozenset(prepared_docker_fields)})
+        if (not isinstance(docker, dict) or set(docker) not in allowed_docker_fields
                 or docker.get("ownership") != preparation_id
-                or docker.get("state") != "PREPARED_IDENTITY_ONLY"
-                or docker.get("resources_created") is not False
                 or not isinstance(docker.get("project_name"), str)
                 or not docker["project_name"]):
             raise ValueError("prepared Docker namespace is invalid")
+        resource_state = ("IDENTITY_ONLY" if legacy_v2
+                          else docker.get("resource_state"))
+        if resource_state not in {"IDENTITY_ONLY", "PREPARING", "PREPARED_RESOURCES"}:
+            raise ValueError("prepared Docker resource state is invalid")
+        if resource_state == "IDENTITY_ONLY":
+            if (docker.get("state") != "PREPARED_IDENTITY_ONLY"
+                    or docker.get("resources_created") is not False
+                    or any(docker.get(name) is not None for name in (
+                        "resource_commitment", "topology_commitment",
+                        "actual_ownership_commitment"))):
+                raise ValueError("prepared Docker identity-only state is contradictory")
+        elif resource_state == "PREPARING":
+            if docker.get("resources_created") is not False:
+                raise ValueError("preparing Docker resources are contradictory")
+        else:
+            if (docker.get("state") != "PREPARED_RESOURCES"
+                    or docker.get("resources_created") is not True
+                    or any(not isinstance(docker.get(name), str)
+                           for name in ("resource_commitment", "topology_commitment",
+                                        "actual_ownership_commitment"))):
+                raise ValueError("prepared Docker resources are contradictory")
         require_identity(docker.get("namespace_identity"), "docker_namespace")
         expected_namespace = identity("docker_namespace", [
             preparation_id, expected_run, "FORMAL_FUTURE_TARGET"])
@@ -468,9 +586,16 @@ class SqliteEvaluationStore:
                 or docker["project_name"] !=
                     "spec017-" + expected_namespace.rsplit(":", 1)[1][:20]):
             raise ValueError("prepared Docker namespace binding is invalid")
-        if (not isinstance(child, dict) or set(child) != {
+        legacy_child_fields = {
                 "child_identity", "relative_path", "profile_identity",
                 "ownership", "state", "ownership_commitment"}
+        prepared_child_fields = legacy_child_fields | {
+            "resource_state", "corpus_identity", "index_identity",
+            "build_identity", "activation_identity", "artifacts",
+            "resource_commitment"}
+        allowed_child_fields = ({frozenset(legacy_child_fields)} if legacy_v2
+                                else {frozenset(prepared_child_fields)})
+        if (not isinstance(child, dict) or set(child) not in allowed_child_fields
                 or child.get("ownership") != preparation_id
                 or child.get("state") != "ALLOCATED"
                 or not isinstance(child.get("child_identity"), str)
@@ -478,6 +603,36 @@ class SqliteEvaluationStore:
                 or not isinstance(child.get("profile_identity"), str)
                 or not child["profile_identity"]):
             raise ValueError("prepared Real-RAG child allocation is invalid")
+        child_resource_state = ("IDENTITY_ONLY" if legacy_v2
+                                else child.get("resource_state"))
+        if child_resource_state != resource_state:
+            raise ValueError("prepared Docker/Real-RAG resource states contradict")
+        resource_names = ("corpus_identity", "index_identity", "build_identity",
+                          "activation_identity", "resource_commitment")
+        if child_resource_state == "IDENTITY_ONLY":
+            if (any(child.get(name) is not None for name in resource_names)
+                    or child.get("artifacts", []) != []):
+                raise ValueError("prepared Real-RAG identity-only state is contradictory")
+        elif child_resource_state == "PREPARED_RESOURCES":
+            artifacts = child.get("artifacts")
+            if (any(not isinstance(child.get(name), str) or not child[name]
+                    for name in resource_names)
+                    or not isinstance(artifacts, list) or not artifacts
+                    or len(artifacts) > 128):
+                raise ValueError("prepared Real-RAG resource lineage is invalid")
+            seen: set[str] = set()
+            for artifact in artifacts:
+                if (not isinstance(artifact, dict)
+                        or set(artifact) != {"relative_path", "digest"}
+                        or not isinstance(artifact["relative_path"], str)
+                        or PurePosixPath(artifact["relative_path"]).is_absolute()
+                        or ".." in PurePosixPath(artifact["relative_path"]).parts
+                        or artifact["relative_path"] in seen
+                        or not isinstance(artifact["digest"], str)
+                        or len(artifact["digest"]) != 71
+                        or not artifact["digest"].startswith("sha256:")):
+                    raise ValueError("prepared Real-RAG artifact manifest is invalid")
+                seen.add(artifact["relative_path"])
         relative = child.get("relative_path")
         if (not isinstance(relative, str) or not relative
                 or PurePosixPath(relative).is_absolute()
@@ -508,16 +663,23 @@ class SqliteEvaluationStore:
             raise ValueError("prepared Real-RAG child identity binding is invalid")
         if (not isinstance(readiness, dict) or set(readiness) != {
                 "state", "material", "commitment"}
-                or readiness.get("state") !=
-                    "PREPARED_NOT_VALIDATED_FOR_ADMISSION"
+                or readiness.get("state") not in {
+                    "PREPARED_NOT_VALIDATED_FOR_ADMISSION",
+                    "PREPARED_RESOURCES_NOT_VALIDATED_FOR_ADMISSION"}
                 or not isinstance(readiness.get("material"), dict)
                 or commitment(readiness["material"]) != readiness.get("commitment")):
             raise ValueError("readiness preparation commitment is invalid")
         material = readiness["material"]
-        if (set(material) != {
+        identity_material_fields = {
                 "provider_profiles", "rag_profiles", "repository_commit",
                 "configuration_commitment", "docker_namespace_identity",
                 "real_rag_child_identity"}
+        resource_material_fields = identity_material_fields | {
+            "runtime_image_identity", "service_health_commitment",
+            "mount_commitment", "docker_resource_commitment",
+            "real_rag_resource_commitment"}
+        if (set(material) not in {
+                frozenset(identity_material_fields), frozenset(resource_material_fields)}
                 or not isinstance(material.get("provider_profiles"), list)
                 or not material["provider_profiles"]
                 or not isinstance(material.get("rag_profiles"), list)
@@ -531,6 +693,107 @@ class SqliteEvaluationStore:
                 or child.get("profile_identity") not in
                     material.get("rag_profiles", [])):
             raise ValueError("readiness preparation material is contradictory")
+        if resource_state == "PREPARED_RESOURCES":
+            if (set(material) != resource_material_fields
+                    or readiness.get("state") !=
+                        "PREPARED_RESOURCES_NOT_VALIDATED_FOR_ADMISSION"
+                    or material.get("docker_resource_commitment") !=
+                        docker.get("resource_commitment")
+                    or material.get("real_rag_resource_commitment") !=
+                        child.get("resource_commitment")):
+                raise ValueError("prepared resource commitments are contradictory")
+            docker_resource_material = {
+                "namespace_identity": docker["namespace_identity"],
+                "project_name": docker["project_name"],
+                "ownership": docker["ownership"],
+                "topology_commitment": docker["topology_commitment"],
+                "actual_ownership_commitment":
+                    docker["actual_ownership_commitment"],
+                "runtime_image_identity": material["runtime_image_identity"],
+                "service_health_commitment":
+                    material["service_health_commitment"],
+            }
+            child_resource_material = {
+                "child_identity": child["child_identity"],
+                "ownership": child["ownership"],
+                "corpus_identity": child["corpus_identity"],
+                "index_identity": child["index_identity"],
+                "build_identity": child["build_identity"],
+                "activation_identity": child["activation_identity"],
+                "artifacts": child["artifacts"],
+                "mount_commitment": material["mount_commitment"],
+            }
+            if (docker["resource_commitment"] !=
+                    commitment(docker_resource_material)
+                    or child["resource_commitment"] !=
+                    commitment(child_resource_material)):
+                raise ValueError("prepared resource commitment is invalid")
+        elif set(material) != identity_material_fields:
+            raise ValueError("identity-only readiness contains resource facts")
+        resource_facts = payload.get("resource_facts")
+        if resource_state == "IDENTITY_ONLY":
+            if resource_facts is not None:
+                raise ValueError("identity-only preparation contains resource facts")
+        elif resource_state == "PREPARED_RESOURCES":
+            from .preparation import (
+                PreparationResourceDomain, PreparationResourceFact,
+                PreparationResourceFacts,
+            )
+            if (not isinstance(resource_facts, dict)
+                    or set(resource_facts) != {"facts", "facts_commitment"}
+                    or not isinstance(resource_facts.get("facts"), list)
+                    or len(resource_facts["facts"]) !=
+                        len(PreparationResourceDomain)):
+                raise ValueError("prepared resource fact schema is invalid")
+            typed = []
+            exact_fields = {
+                "domain", "preparation_id", "planned_run_identity",
+                "expected_target_identity", "actual_observed_identity",
+                "authority_profile", "semantic_identity_commitment",
+                "observed_at", "fact_commitment",
+            }
+            for raw in resource_facts["facts"]:
+                if not isinstance(raw, dict) or set(raw) != exact_fields:
+                    raise ValueError("prepared resource fact field is not allowlisted")
+                try:
+                    typed.append(PreparationResourceFact(
+                        PreparationResourceDomain(raw["domain"]),
+                        raw["preparation_id"], raw["planned_run_identity"],
+                        raw["expected_target_identity"],
+                        raw["actual_observed_identity"], raw["authority_profile"],
+                        raw["semantic_identity_commitment"],
+                        raw["observed_at"], raw["fact_commitment"]))
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("prepared resource fact is invalid") from exc
+            typed_facts = PreparationResourceFacts(
+                tuple(typed), resource_facts["facts_commitment"])
+            typed_facts.validate()
+            by_domain = {item.domain: item for item in typed_facts.facts}
+            if (by_domain[PreparationResourceDomain.RUNTIME_IMAGE]
+                    .actual_observed_identity !=
+                    material["runtime_image_identity"]
+                    or by_domain[PreparationResourceDomain.DOCKER_TOPOLOGY]
+                        .actual_observed_identity !=
+                        docker["topology_commitment"]
+                    or by_domain[PreparationResourceDomain.DOCKER_OWNERSHIP]
+                        .actual_observed_identity !=
+                        docker["actual_ownership_commitment"]
+                    or by_domain[PreparationResourceDomain.DOCKER_HEALTH]
+                        .actual_observed_identity !=
+                        material["service_health_commitment"]
+                    or by_domain[PreparationResourceDomain.REAL_RAG_BUILD]
+                        .actual_observed_identity !=
+                        child["build_identity"]
+                    or by_domain[PreparationResourceDomain.REAL_RAG_BUILD]
+                        .actual_observed_identity !=
+                        child["index_identity"]
+                    or by_domain[PreparationResourceDomain.REAL_RAG_BUILD]
+                        .expected_target_identity !=
+                        child["corpus_identity"]
+                    or by_domain[PreparationResourceDomain.REAL_RAG_ACTIVATION]
+                        .actual_observed_identity !=
+                        child["activation_identity"]):
+                raise ValueError("prepared resource facts contradict projections")
         if effects != {
                 "formal_execution": False, "external_gates": False,
                 "scenario_injection": False, "denominator_consumed": False}:
@@ -541,15 +804,25 @@ class SqliteEvaluationStore:
         require_identity(preparation_id, "preparation")
         row = self._db.execute(
             "SELECT content,semantic_commitment FROM preparation_records "
-            "WHERE preparation_id=? AND kind='PREPARED'", (preparation_id,)).fetchone()
+            "WHERE preparation_id=? AND kind IN ('PREPARED_RESOURCES','PREPARED') "
+            "ORDER BY CASE kind WHEN 'PREPARED_RESOURCES' THEN 0 ELSE 1 END",
+            (preparation_id,)).fetchone()
         if row is None:
             return None
         try:
             payload = json.loads(row[0])
             if (canonical_bytes(payload) != row[0]
-                    or commitment(payload) != row[1]
-                    or self._validate_preparation_payload(payload) != preparation_id):
+                    or commitment(payload) != row[1]):
                 raise ValueError("preparation row commitment mismatch")
+            if self._schema_version == 2:
+                if (self._validate_legacy_v2_preparation_payload(payload)
+                        != preparation_id):
+                    raise ValueError("legacy preparation identity mismatch")
+                projected = dict(payload)
+                projected["resource_facts"] = None
+                return projected
+            if self._validate_preparation_payload(payload) != preparation_id:
+                raise ValueError("preparation identity mismatch")
             return payload
         except (TypeError, ValueError, json.JSONDecodeError) as exc:
             raise EvaluationStoreIntegrityError("corrupt preparation record") from exc
@@ -558,6 +831,9 @@ class SqliteEvaluationStore:
         self, preparation_id: str, payload: dict[str, object],
     ) -> dict[str, object]:
         """Append the deterministic ADMITTED transition after fresh validation."""
+        if self._schema_version != SCHEMA_VERSION:
+            raise EvaluationStoreIntegrityError(
+                "legacy evaluation database is read-only")
         prepared = self.get_preparation(preparation_id)
         if prepared is None:
             raise ValueError("PREPARED state is required before Final Admission")
@@ -1441,9 +1717,14 @@ class SqliteEvaluationStore:
         try:
             if self._db.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                 raise EvaluationStoreIntegrityError("SQLite integrity failure")
-            if self._db.execute("PRAGMA application_id").fetchone()[0] != APP_ID or self._db.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
+            if (self._db.execute("PRAGMA application_id").fetchone()[0] != APP_ID
+                    or self._db.execute("PRAGMA user_version").fetchone()[0]
+                        != self._schema_version):
                 raise EvaluationStoreIntegrityError("evaluation schema identity changed")
-            if _schema_definition(self._db) != _expected_schema_definition():
+            expected_schema = (_expected_v2_schema_definition()
+                               if self._schema_version == 2
+                               else _expected_schema_definition())
+            if _schema_definition(self._db) != expected_schema:
                 raise EvaluationStoreIntegrityError("evaluation schema definition changed")
             for revision_id, raw in self._db.execute("SELECT revision_id,content FROM oracle_revisions"):
                 if canonical_bytes(json.loads(raw)) != raw:
@@ -1470,14 +1751,28 @@ class SqliteEvaluationStore:
                     payload = json.loads(raw)
                     expected_domain = (
                         "preparation" if kind == "PREPARED"
+                        else "preparation"
+                        if kind == "PREPARED_RESOURCES"
                         else "formal_admission")
-                    expected_key = ([preparation_id, "PREPARED"]
-                                    if kind == "PREPARED" else [preparation_id])
+                    expected_key = (
+                        [preparation_id, kind]
+                        if kind in {"PREPARED", "PREPARED_RESOURCES"}
+                        else [preparation_id])
                     if (record_id != identity(expected_domain, expected_key)
                             or canonical_bytes(payload) != raw
                             or commitment(payload) != semantic_hash):
                         raise EvaluationStoreIntegrityError(
                             "preparation lifecycle row is invalid")
+                    if kind == "PREPARED_RESOURCES":
+                        try:
+                            if (self._validate_preparation_payload(payload)
+                                    != preparation_id
+                                    or payload["docker_namespace"].get(
+                                        "resource_state") != "PREPARED_RESOURCES"):
+                                raise ValueError
+                        except (KeyError, TypeError, ValueError) as exc:
+                            raise EvaluationStoreIntegrityError(
+                                "prepared resource row is invalid") from exc
                     if kind == "ADMITTED" and (
                             payload.get("schema") !=
                                 "spec017.preparation-admission.v1"

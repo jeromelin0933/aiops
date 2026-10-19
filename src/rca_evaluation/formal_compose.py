@@ -359,12 +359,21 @@ def resolve_formal_compose_topology(
         raise ValueError("Formal Compose topology requires PREPARED state")
     docker = prepared["docker_namespace"]
     repository = prepared.get("repository")
+    resource_state = docker.get("resource_state", "IDENTITY_ONLY")
+    state_pair = (docker.get("state"), docker.get("resources_created"))
+    valid_state = (
+        resource_state == "IDENTITY_ONLY"
+        and state_pair == ("PREPARED_IDENTITY_ONLY", False)
+        or resource_state == "PREPARING"
+        and state_pair[1] is False
+        or resource_state == "PREPARED_RESOURCES"
+        and state_pair == ("PREPARED_RESOURCES", True)
+    )
     if (not isinstance(repository, Mapping)
             or Path(str(repository.get("root", ""))).resolve() != root
-            or docker.get("state") != "PREPARED_IDENTITY_ONLY"
-            or docker.get("resources_created") is not False
+            or not valid_state
             or _is_shared(docker.get("project_name", ""))):
-        raise ValueError("prepared Docker namespace is shared or already executed")
+        raise ValueError("prepared Docker namespace is shared or contradictory")
     source = _validate_artifact(root)
     envelopes = tuple(
         _envelope(prepared, scenario_id=scenario, repetition=repetition,
@@ -376,4 +385,8 @@ def resolve_formal_compose_topology(
         FORMAL_COMPOSE_SCHEMA, preparation_id, envelopes,
         commitment(provisional.material(include_commitment=False)))
     result.validate()
+    durable_topology = docker.get("topology_commitment")
+    if (resource_state == "PREPARED_RESOURCES"
+            and durable_topology != result.topology_commitment):
+        raise ValueError("fresh Formal Compose topology contradicts PREPARED facts")
     return result

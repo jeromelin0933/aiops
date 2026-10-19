@@ -468,6 +468,7 @@ class CampaignRunner:
         candidate_c_authority: object | None = None,
         runtime_authority: object | None = None,
         docker_state_inspector: object | None = None,
+        container_real_rag_inspector: object | None = None,
         warmup: Callable[[], None] = lambda: None,
     ) -> tuple[ExecutionResult, ...]:
         """The sole official Formal Evaluation execution entrypoint."""
@@ -485,6 +486,7 @@ class CampaignRunner:
             candidate_c_authority=candidate_c_authority,
             runtime_authority=runtime_authority,
             docker_state_inspector=docker_state_inspector,
+            container_real_rag_inspector=container_real_rag_inspector,
         )
         self.validate_formal_execution(
             admission_report=admission_report,

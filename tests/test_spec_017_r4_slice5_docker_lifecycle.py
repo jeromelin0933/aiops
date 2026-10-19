@@ -143,6 +143,55 @@ def _inspection(envelope: FormalComposeEnvelope, resources=None, stamp="t1"):
         inspected_at=stamp)
 
 
+def test_docker_observation_time_is_not_resource_semantic_identity():
+    envelope = _envelope()
+    first = _inspection(envelope, stamp="2026-10-19T00:00:00Z")
+    second = _inspection(envelope, stamp="2026-10-19T00:01:00Z")
+    assert first.resource_state_commitment == second.resource_state_commitment
+    assert (first.actual_resource_set_commitment ==
+            second.actual_resource_set_commitment)
+    assert first.observation_commitment != second.observation_commitment
+    assert first.inspection_commitment == first.observation_commitment
+
+
+@pytest.mark.parametrize("drift", [
+    "container", "network", "volume", "ownership", "health",
+])
+def test_docker_resource_semantic_identity_fails_closed_on_actual_drift(drift):
+    envelope = _envelope()
+    resources = list(_resources(envelope))
+    if drift == "container":
+        index = next(i for i, item in enumerate(resources)
+                     if item.kind is DockerResourceKind.CONTAINER)
+        resources[index] = replace(resources[index], identity="foreign-container")
+    elif drift == "network":
+        index = next(i for i, item in enumerate(resources)
+                     if item.kind is DockerResourceKind.NETWORK)
+        resources[index] = replace(resources[index], identity="foreign-network")
+    elif drift == "volume":
+        index = next(i for i, item in enumerate(resources)
+                     if item.kind is DockerResourceKind.VOLUME)
+        resources[index] = replace(resources[index], identity="foreign-volume")
+    elif drift == "ownership":
+        resources[0] = replace(
+            resources[0], ownership_labels=(("foreign", "owner"),))
+    else:
+        resources[0] = replace(
+            resources[0], health=OperationalState.UNHEALTHY)
+    baseline = _inspection(envelope)
+    changed = _inspection(envelope, resources, stamp="t2")
+    assert changed.actual_resource_set_commitment != (
+        baseline.actual_resource_set_commitment)
+    assert changed.resource_state_commitment != baseline.resource_state_commitment
+
+
+def test_docker_topology_identity_is_part_of_resource_semantics():
+    envelope = _envelope()
+    drifted = _drifted_envelope(envelope)
+    assert (_inspection(envelope).resource_state_commitment !=
+            _inspection(drifted).resource_state_commitment)
+
+
 def _authority(envelope: FormalComposeEnvelope) -> ExecutionDockerAuthority:
     return ExecutionDockerAuthority(
         "eval:execution:" + "a" * 64, "eval:evaluation_run:" + "b" * 64,
@@ -268,6 +317,33 @@ def test_required_fact_composition_fresh_inspects_all_thirty_envelopes(tmp_path)
                    for item in lifecycle.values())
         with pytest.raises(ValueError, match="unresolved required fact"):
             integrated.assert_resolved()
+    finally:
+        store.close()
+
+
+def test_campaign_docker_semantics_are_stable_across_fresh_timestamps(tmp_path):
+    _, _, store, topology = _topology(tmp_path)
+
+    class Inspector:
+        def __init__(self, prefix):
+            self.prefix = prefix
+
+        def inspect(self, envelope):
+            return _inspection(
+                envelope,
+                stamp=f"{self.prefix}-{envelope.planned_execution_identity}")
+
+    try:
+        first = resolve_campaign_docker_lifecycle_required_facts(
+            topology, Inspector("t1"))
+        second = resolve_campaign_docker_lifecycle_required_facts(
+            topology, Inspector("t2"))
+        assert [(item.name, item.value) for item in first] == [
+            (item.name, item.value) for item in second]
+        resources = next(item for item in first
+                         if item.name == "actual_formal_docker_resources")
+        assert resources.value["actual_resource_set_commitment"].startswith(
+            "sha256:")
     finally:
         store.close()
 

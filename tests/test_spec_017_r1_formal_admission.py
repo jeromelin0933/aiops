@@ -8,6 +8,7 @@ import pytest
 
 from rca_evaluation.authority import load_trusted_oracle_approvals
 from rca_evaluation import formal_admission as subject
+from rca_evaluation import preparation as preparation_subject
 from rca_evaluation.formal_admission import (
     FORMAL_ORDER, FORMAL_POLLING_MS, FORMAL_REPETITIONS, FORMAL_SEED,
     FORMAL_TIMEOUT_MS, RepositoryState, ReviewerProtocol,
@@ -102,6 +103,11 @@ class _Unused:
 
 
 def _formal_runner(report, monkeypatch, *, required_facts_resolver=None):
+    # These legacy lifecycle tests isolate admission/runner semantics.  The
+    # authoritative preparation-resource workflow has dedicated tests.
+    monkeypatch.setattr(
+        preparation_subject, "validate_prepared_resource_freshness",
+        lambda **_: None)
     monkeypatch.setattr(
         subject, "inspect_repository",
         lambda root: RepositoryState(BRANCH, HEAD, False))
