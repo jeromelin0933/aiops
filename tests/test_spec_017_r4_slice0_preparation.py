@@ -93,6 +93,73 @@ def _child_path(prepared, evaluation: Path) -> Path:
     return evaluation / payload["real_rag_child"]["relative_path"]
 
 
+def _assert_fresh_namespace(evaluation: Path) -> None:
+    preparation_module._namespace_shape(
+        evaluation / "evaluation.db", evaluation)
+
+
+def test_absent_real_rag_root_is_fresh_and_read_only(tmp_path):
+    evaluation = tmp_path / "rca_evaluation"
+    evaluation.mkdir()
+
+    _assert_fresh_namespace(evaluation)
+
+    assert not (evaluation / "evaluation.db").exists()
+    assert not (evaluation / "real_rag").exists()
+
+
+def test_empty_real_rag_root_is_fresh_and_read_only(tmp_path):
+    evaluation = tmp_path / "rca_evaluation"
+    isolated_root = evaluation / "real_rag"
+    isolated_root.mkdir(parents=True)
+    before = isolated_root.stat()
+
+    _assert_fresh_namespace(evaluation)
+
+    after = isolated_root.stat()
+    assert list(isolated_root.iterdir()) == []
+    assert not (evaluation / "evaluation.db").exists()
+    assert (after.st_mode, after.st_size, after.st_mtime_ns) == (
+        before.st_mode, before.st_size, before.st_mtime_ns)
+
+
+@pytest.mark.parametrize("entry_kind", [
+    "unknown_child", "unknown_file", "ownership_marker", "candidate_artifact",
+])
+def test_nonempty_real_rag_root_without_authority_fails_closed(
+    tmp_path, entry_kind,
+):
+    evaluation = tmp_path / "rca_evaluation"
+    isolated_root = evaluation / "real_rag"
+    isolated_root.mkdir(parents=True)
+    if entry_kind == "unknown_child":
+        (isolated_root / "unknown-child").mkdir()
+    else:
+        name = {
+            "unknown_file": "unexpected.txt",
+            "ownership_marker": PREPARED_CHILD_MARKER,
+            "candidate_artifact": "chroma.sqlite3",
+        }[entry_kind]
+        (isolated_root / name).write_text("unauthorized", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="stale Real-RAG state"):
+        _assert_fresh_namespace(evaluation)
+
+
+def test_real_rag_namespace_must_be_exact_safe_directory(tmp_path):
+    evaluation = tmp_path / "rca_evaluation"
+    evaluation.mkdir()
+    (evaluation / "real_rag").write_text("not a directory", encoding="utf-8")
+    with pytest.raises(ValueError, match="stale Real-RAG state"):
+        _assert_fresh_namespace(evaluation)
+
+    unrelated = tmp_path / "not_rca_evaluation"
+    unrelated.mkdir()
+    with pytest.raises(ValueError, match="dedicated rca_evaluation DB namespace"):
+        preparation_module._namespace_shape(
+            unrelated / "evaluation.db", unrelated)
+
+
 def _cli_args(prepared, evaluation: Path, config: Path, reviewers: Path) -> list[str]:
     return [
         "--admission-only", "--preparation-id", prepared.preparation_id,

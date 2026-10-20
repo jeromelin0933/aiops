@@ -355,6 +355,15 @@ class PreparationReport:
         )
 
 
+def _real_rag_root_has_state(isolated_root: Path) -> bool:
+    """Return whether the exact evaluation-owned root has pre-existing state."""
+    if isolated_root.is_symlink():
+        return True
+    if not isolated_root.exists():
+        return False
+    return not isolated_root.is_dir() or any(isolated_root.iterdir())
+
+
 def _namespace_shape(database_path: Path, evaluation_root: Path) -> None:
     database = database_path.resolve()
     root = evaluation_root.resolve()
@@ -366,7 +375,8 @@ def _namespace_shape(database_path: Path, evaluation_root: Path) -> None:
                    database.name + "-shm", database.name + "-wal", "real_rag"}
         if any(item.name not in allowed for item in root.iterdir()):
             raise ValueError("preparation namespace contains unauthorized preexisting state")
-        if (root / "real_rag").exists() and not database.exists():
+        if (not database.exists()
+                and _real_rag_root_has_state(root / "real_rag")):
             raise ValueError("stale Real-RAG state exists before preparation authority")
 
 
@@ -658,7 +668,7 @@ def _issue_prepared_child(
         verify_prepared_real_rag_child(
             store, str(prepared["preparation_id"]), repository_root)
         return
-    if isolated_root.exists() and any(isolated_root.iterdir()):
+    if _real_rag_root_has_state(isolated_root):
         raise ValueError("duplicate or stale Real-RAG child allocation exists")
     isolated_root.mkdir(parents=True, exist_ok=True)
     target.mkdir()
