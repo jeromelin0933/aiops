@@ -115,6 +115,10 @@ class InspectedDockerResource:
     image_identity: str | None = None
     mounts: tuple[tuple[str, str], ...] = ()
     health: OperationalState | None = None
+    image_reference: str | None = None
+    networks: tuple[str, ...] = ()
+    observed_status: str | None = None
+    observed_health_status: str | None = None
 
     def validate_shape(self) -> None:
         if (not isinstance(self.kind, DockerResourceKind)
@@ -124,11 +128,19 @@ class InspectedDockerResource:
                 or len(dict(self.ownership_labels)) != len(self.ownership_labels)
                 or self.kind is DockerResourceKind.CONTAINER
                     and (not self.service or not self.image_profile
-                         or not isinstance(self.health, OperationalState))
+                         or (self.observed_status is None
+                             and not isinstance(self.health, OperationalState))
+                         or self.image_reference is not None
+                            and not self.image_reference
+                         or tuple(sorted(self.networks)) != self.networks
+                         or len(set(self.networks)) != len(self.networks))
                 or self.kind is not DockerResourceKind.CONTAINER
                     and (self.service is not None or self.image_profile is not None
                          or self.image_identity is not None or self.mounts
-                         or self.health is not None)):
+                         or self.health is not None
+                         or self.image_reference is not None or self.networks
+                         or self.observed_status is not None
+                         or self.observed_health_status is not None)):
             raise ValueError("Docker inspection resource is malformed")
 
 
@@ -256,7 +268,7 @@ class DockerProjectInspection:
 
 
 def resource_material(resource: InspectedDockerResource) -> dict[str, object]:
-    return {
+    result = {
         "kind": resource.kind.value, "identity": resource.identity,
         "state": resource.state.value,
         "ownership_labels": dict(resource.ownership_labels),
@@ -265,6 +277,16 @@ def resource_material(resource: InspectedDockerResource) -> dict[str, object]:
         "mounts": [list(item) for item in resource.mounts],
         "health": resource.health.value if resource.health is not None else None,
     }
+    if (resource.image_reference is not None or resource.networks
+            or resource.observed_status is not None
+            or resource.observed_health_status is not None):
+        result["raw_container_observation"] = {
+            "image_reference": resource.image_reference,
+            "networks": list(resource.networks),
+            "status": resource.observed_status,
+            "health_status": resource.observed_health_status,
+        }
+    return result
 
 
 class DockerStateInspector(Protocol):
@@ -372,6 +394,11 @@ def assess_exact_ownership(
         if (item.service not in prefixes
                 or not item.identity.startswith(prefixes[item.service])
                 or item.image_profile != RUNTIME_IMAGE_PROFILE
+                or (item.service == "runtime"
+                    and item.image_reference is not None
+                    and item.image_reference != envelope.runtime_image_tag)
+                or (item.networks
+                    and item.networks != (envelope.network_identity,))
                 or set(item.mounts) != {
                     (mount.volume_identity, mount.target)
                     for mount in envelope.volume_mounts
@@ -431,6 +458,16 @@ def project_health(
     def state(name: str) -> OperationalState:
         item = containers.get(name)
         if item is None or item.state is DockerResourceState.ABSENT:
+            return OperationalState.UNAVAILABLE
+        if item.observed_status is not None:
+            if item.observed_status != "running":
+                return (OperationalState.UNHEALTHY
+                        if item.observed_status == "dead"
+                        else OperationalState.UNAVAILABLE)
+            if item.observed_health_status in (None, "healthy"):
+                return OperationalState.AVAILABLE
+            if item.observed_health_status == "unhealthy":
+                return OperationalState.UNHEALTHY
             return OperationalState.UNAVAILABLE
         if item.state is DockerResourceState.FAILED:
             return OperationalState.UNHEALTHY

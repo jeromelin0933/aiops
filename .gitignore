@@ -46,6 +46,7 @@ reports/spec005/
 
 # SPEC-014 generated local Knowledge capability state
 var/knowledge_index/
+/var/rca_evaluation/
 .env.*
 !.env.example
 *service-account*.json

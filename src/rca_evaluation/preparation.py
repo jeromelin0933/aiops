@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from enum import Enum
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 from typing import Mapping, Protocol
@@ -26,6 +27,65 @@ from .sqlite_store import SqliteEvaluationStore
 PREPARATION_AUTHORITY = "PM-SPEC017-R4-PREADMISSION-20261016"
 PREPARATION_SCHEMA = "spec017.preparation.v1"
 PREPARED_CHILD_MARKER = ".candidate-f-ownership.json"
+
+
+def _walk_files(root: Path) -> tuple[tuple[str, Path], ...]:
+    """Enumerate files safely even when deterministic identities exceed MAX_PATH."""
+    raw_root = str(root.resolve())
+    filesystem_root = ("\\\\?\\" + raw_root
+                       if os.name == "nt" and not raw_root.startswith("\\\\?\\")
+                       else raw_root)
+    values: list[tuple[str, Path]] = []
+    for directory, _, files in os.walk(filesystem_root):
+        for name in files:
+            actual = Path(directory) / name
+            relative = os.path.relpath(str(actual), filesystem_root).replace("\\", "/")
+            values.append((relative, actual))
+    return tuple(sorted(values, key=lambda item: item[0]))
+
+
+def _filesystem_path(path: Path) -> Path:
+    value = str(path.resolve())
+    return Path("\\\\?\\" + value) if os.name == "nt" else Path(value)
+
+
+def _expected_execution_children(
+    prepared: Mapping[str, object],
+) -> tuple[tuple[str, dict[str, object]], ...]:
+    """Derive execution-child markers from the same frozen lineage inputs."""
+    from .oracle import SCENARIOS
+
+    lineage = prepared["planned_lineage"]
+    child = prepared["real_rag_child"]
+    allocation = str(child["relative_path"])
+    values = []
+    for repetition in range(1, 6):
+        for scenario in SCENARIOS:
+            planned_execution = identity(
+                "planned_execution", [lineage["planned_run_identity"],
+                                      repetition, scenario])
+            execution_child = "ragchild_" + commitment({
+                "preparation": prepared["preparation_id"],
+                "planned_run": lineage["planned_run_identity"],
+                "planned_execution": planned_execution,
+                "allocation_root": child["child_identity"],
+                "profile": child["profile_identity"],
+            })[7:]
+            source_reference = f"{allocation}/executions/{execution_child}"
+            marker = {
+                "schema": "spec017.formal-real-rag-execution-child.v1",
+                "preparation_id": prepared["preparation_id"],
+                "planned_run_identity": lineage["planned_run_identity"],
+                "planned_execution_identity": planned_execution,
+                "allocation_root_identity": child["child_identity"],
+                "execution_child_identity": execution_child,
+                "profile_identity": child["profile_identity"],
+                "child_source_reference": source_reference,
+                "lifecycle_state": "ALLOCATED",
+            }
+            values.append((execution_child, {
+                **marker, "ownership_commitment": commitment(marker)}))
+    return tuple(values)
 
 
 class PreparationLifecycle(str, Enum):
@@ -247,6 +307,14 @@ class CandidateCPreparationRequest:
     manifest_commitment: str
     corpus_identity: str
     corpus_release: str
+    source_revision: str = "7e577de0ad85946c00c7259af3e1636f9eabd5ae"
+    embedding_model: str = "text-embedding-004"
+    embedding_profile_identity: str = "spec014-google-document-query-v1"
+    index_schema_identity: str = "spec014-chroma-l2-v2"
+    distance_metric: str = "l2"
+    retrieval_profile_identity: str = "spec014-retrieval-v1"
+    gate_profile_identity: str = "spec017-real-rag-gate-v1"
+    execution_mounts: tuple[object, ...] = ()
 
 
 class PreparationDockerOperations(Protocol):
@@ -601,6 +669,7 @@ def _issue_prepared_child(
 def verify_prepared_real_rag_child(
     store: SqliteEvaluationStore, preparation_id: str,
     repository_root: str | Path,
+    *, _preparation_artifacts: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
     """Fresh-read durable allocation and exact allowlisted prepared artifacts."""
     require_identity(preparation_id, "preparation")
@@ -631,8 +700,12 @@ def verify_prepared_real_rag_child(
         raise ValueError("prepared Real-RAG child ownership marker is missing or invalid") from exc
     if actual_marker != _expected_child_marker(prepared):
         raise ValueError("prepared Real-RAG child ownership marker mismatch")
-    expected_artifacts = child.get("artifacts", [])
+    expected_artifacts = (
+        [{"relative_path": relative, "digest": digest}
+         for relative, digest in sorted(_preparation_artifacts.items())]
+        if _preparation_artifacts is not None else child.get("artifacts", []))
     allowed = {PREPARED_CHILD_MARKER}
+    authoritative_artifacts: dict[str, str] = {}
     for artifact in expected_artifacts:
         relative = artifact.get("relative_path") if isinstance(artifact, Mapping) else None
         digest = artifact.get("digest") if isinstance(artifact, Mapping) else None
@@ -645,11 +718,48 @@ def verify_prepared_real_rag_child(
             actual.relative_to(target)
         except ValueError as exc:
             raise ValueError("prepared Candidate-C artifact escapes child") from exc
-        if not actual.is_file() or "sha256:" + hashlib.sha256(actual.read_bytes()).hexdigest() != digest:
+        filesystem_actual = _filesystem_path(actual)
+        if (not filesystem_actual.is_file()
+                or "sha256:" + hashlib.sha256(
+                    filesystem_actual.read_bytes()).hexdigest() != digest):
             raise ValueError("prepared Candidate-C artifact lineage mismatch")
         allowed.add(Path(relative).as_posix())
-    observed = {path.relative_to(target).as_posix()
-                for path in target.rglob("*") if path.is_file()}
+        authoritative_artifacts[Path(relative).as_posix()] = digest
+    has_candidate_resources = (
+        child.get("resource_state") ==
+            PreparationResourceState.PREPARED_RESOURCES.value
+        or _preparation_artifacts is not None)
+    if has_candidate_resources:
+        candidate_artifacts = {
+            relative.removeprefix("candidate-c/"): digest
+            for relative, digest in authoritative_artifacts.items()
+            if relative.startswith("candidate-c/")
+        }
+        if not candidate_artifacts:
+            raise ValueError("prepared Candidate-C authoritative artifacts are absent")
+        for execution_child, expected_execution_marker in (
+                _expected_execution_children(prepared)):
+            prefix = f"executions/{execution_child}/"
+            marker_relative = prefix + PREPARED_CHILD_MARKER
+            marker_path = _filesystem_path(target / marker_relative)
+            try:
+                actual_execution_marker = json.loads(
+                    marker_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                raise ValueError(
+                    "prepared execution-child marker is missing or invalid") from exc
+            if actual_execution_marker != expected_execution_marker:
+                raise ValueError("prepared execution-child marker mismatch")
+            allowed.add(marker_relative)
+            for suffix, digest in candidate_artifacts.items():
+                relative = prefix + suffix
+                actual = _filesystem_path(target / relative)
+                if (not actual.is_file() or "sha256:" + hashlib.sha256(
+                        actual.read_bytes()).hexdigest() != digest):
+                    raise ValueError(
+                        "prepared execution-child Candidate-C artifact mismatch")
+                allowed.add(relative)
+    observed = {relative for relative, _ in _walk_files(target)}
     if observed != allowed:
         raise ValueError("prepared Real-RAG child contains unexpected state")
     if child.get("resource_state") == PreparationResourceState.PREPARED_RESOURCES.value:
@@ -672,9 +782,9 @@ def verify_prepared_real_rag_child(
 
 def _artifact_manifest(target: Path) -> dict[str, str]:
     artifacts: dict[str, str] = {}
-    for path in sorted(item for item in target.rglob("*") if item.is_file()):
-        relative = path.relative_to(target).as_posix()
-        if relative == PREPARED_CHILD_MARKER:
+    for relative, path in _walk_files(target):
+        if (relative == PREPARED_CHILD_MARKER
+                or relative.startswith("executions/")):
             continue
         artifacts[relative] = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
     if not artifacts:
@@ -687,6 +797,7 @@ def observe_authoritative_preparation_facts(
     repository_root: str | Path, runtime_authority: object,
     docker_state_inspector: object, candidate_c_authority: object,
     container_real_rag_inspector: object,
+    _preparation_artifacts: Mapping[str, str] | None = None,
 ) -> PreparationResourceFacts:
     """Fresh-read all eight domains through supported resolver/inspector ports."""
     from .container_wiring import (
@@ -748,7 +859,8 @@ def observe_authoritative_preparation_facts(
 
     wiring = resolve_formal_container_wiring(
         store, preparation_id, repository_root,
-        candidate_c_authority=candidate_c_authority)
+        candidate_c_authority=candidate_c_authority,
+        _preparation_artifacts=_preparation_artifacts)
     if (wiring.build_fact.state is not ReadinessFactState.RESOLVED
             or wiring.activation_fact.state is not ReadinessFactState.RESOLVED):
         raise ValueError("Candidate-C public build/activation is not resolved")
@@ -871,26 +983,35 @@ def prepare_authoritative_resources(
         Path(repository_root).resolve()
         / rag_profile["knowledge"]["manifest_path"],
         repository_root=Path(repository_root).resolve())
+    from .container_wiring import resolve_formal_container_wiring
+    wiring = resolve_formal_container_wiring(
+        store, preparation_id, repository_root, candidate_c_authority=None,
+        _environment={})
     request = CandidateCPreparationRequest(
         preparation_id, prepared["planned_lineage"]["planned_run_identity"],
         child["child_identity"], str(target), child["profile_identity"],
         manifest.manifest_commitment, manifest.manifest.corpus_id,
-        manifest.manifest.canonical_release_reference)
+        manifest.manifest.canonical_release_reference,
+        manifest.manifest.source_revision,
+        "text-embedding-004", "spec014-google-document-query-v1",
+        "spec014-chroma-l2-v2", "l2", "spec014-retrieval-v1",
+        child["profile_identity"], wiring.mounts)
     if not callable(getattr(candidate_c_operations, "prepare_exact", None)):
         raise TypeError("typed Candidate-C preparation operations are required")
     candidate_c_operations.prepare_exact(request)
+    artifacts = _artifact_manifest(target)
 
     facts = observe_authoritative_preparation_facts(
         store=store, preparation_id=preparation_id,
         repository_root=repository_root, runtime_authority=runtime_authority,
         docker_state_inspector=docker_state_inspector,
         candidate_c_authority=candidate_c_authority,
-        container_real_rag_inspector=container_real_rag_inspector)
+        container_real_rag_inspector=container_real_rag_inspector,
+        _preparation_artifacts=artifacts)
     if (facts.facts[0].actual_observed_identity != prepared_image.image_digest
             or facts.facts[0].semantic_identity_commitment !=
                 prepared_image.preparation_commitment):
         raise ValueError("post-build Runtime image inspection drifted")
-    artifacts = _artifact_manifest(target)
     by_domain = {item.domain: item for item in facts.facts}
     corpus_identity = by_domain[
         PreparationResourceDomain.REAL_RAG_BUILD].expected_target_identity

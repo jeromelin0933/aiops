@@ -31,3 +31,20 @@ def test_generated_candidate_c_state_and_credentials_are_ignored() -> None:
         ["git", "check-ignore", "--", "configs/knowledge_manifest.json"], cwd=ROOT,
         capture_output=True, text=True,
     ).returncode == 1
+
+
+def test_candidate_f_generated_namespace_is_exactly_ignored() -> None:
+    candidates = [
+        "var/rca_evaluation/formal.db",
+        "var/rca_evaluation/real_rag/example-child/",
+    ]
+    output = git("check-ignore", "--", *candidates).splitlines()
+    assert set(output) == set(candidates)
+    for tracked_source in (
+        "src/rca_evaluation/preparation.py",
+        "configs/rca_evaluation/real_rag.yaml",
+    ):
+        assert subprocess.run(
+            ["git", "check-ignore", "--", tracked_source], cwd=ROOT,
+            capture_output=True, text=True,
+        ).returncode == 1

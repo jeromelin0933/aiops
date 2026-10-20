@@ -349,6 +349,7 @@ def resolve_formal_container_wiring(
     repository_root: str | Path, *, candidate_c_authority: object | None = None,
     _environment: Mapping[str, str] | None = None,
     _validated_at: str | None = None,
+    _preparation_artifacts: Mapping[str, str] | None = None,
 ) -> FormalContainerWiringReadiness:
     """Fresh-read the supported Formal wiring; underscored inputs are test seams."""
     if type(store) is not SqliteEvaluationStore:
@@ -362,7 +363,9 @@ def resolve_formal_container_wiring(
     if (not isinstance(repository, Mapping)
             or Path(str(repository.get("root", ""))).resolve() != root):
         raise ValueError("prepared repository context is contradictory")
-    child = verify_prepared_real_rag_child(store, preparation_id, root)
+    child = verify_prepared_real_rag_child(
+        store, preparation_id, root,
+        _preparation_artifacts=_preparation_artifacts)
     topology = resolve_formal_compose_topology(store, preparation_id, root)
     llm, rag, generation, knowledge, manifest = _load_profiles(root)
     llm_material, rag_material = _profile_material(
