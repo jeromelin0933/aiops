@@ -317,12 +317,82 @@ class CandidateCPreparationRequest:
     execution_mounts: tuple[object, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class DockerPreparationPhase:
+    """Ephemeral continuation identity for one exact Docker preparation."""
+
+    preparation_id: str
+    topology_commitment: str
+    project_names: tuple[str, ...]
+
+    def validate(self) -> None:
+        require_identity(self.preparation_id, "preparation")
+        if (not self.topology_commitment.startswith("sha256:")
+                or len(self.topology_commitment) != 71
+                or len(self.project_names) != 30
+                or len(set(self.project_names)) != len(self.project_names)
+                or any(not item for item in self.project_names)):
+            raise ValueError("Docker preparation phase identity is malformed")
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateCPreparationEvidence:
+    """Ephemeral evidence derived from Candidate-C public authority."""
+
+    preparation_id: str
+    child_identity: str
+    manifest_commitment: str
+    corpus_identity: str
+    build_identity: str
+    activation_identity: str
+    validation_commitment: str
+    artifact_commitment: str
+    artifacts: tuple[tuple[str, str], ...]
+
+    def validate(self) -> None:
+        require_identity(self.preparation_id, "preparation")
+        if (not self.child_identity.startswith("ragchild_")
+                or len(self.child_identity) != len("ragchild_") + 64):
+            raise ValueError("Candidate-C child identity is malformed")
+        if (not self.build_identity.startswith("kbld_")
+                or len(self.build_identity) != len("kbld_") + 64):
+            raise ValueError("Candidate-C build identity is malformed")
+        if (not self.manifest_commitment.startswith("kmf_")
+                or not self.corpus_identity
+                or any(not value.startswith("sha256:") or len(value) != 71
+                       for value in (self.activation_identity,
+                                     self.validation_commitment,
+                                     self.artifact_commitment))
+                or not self.artifacts
+                or tuple(sorted(self.artifacts)) != self.artifacts
+                or len(dict(self.artifacts)) != len(self.artifacts)
+                or any(not path or Path(path).is_absolute() or ".." in Path(path).parts
+                       or not digest.startswith("sha256:") or len(digest) != 71
+                       for path, digest in self.artifacts)):
+            raise ValueError("Candidate-C preparation evidence is malformed")
+
+
 class PreparationDockerOperations(Protocol):
-    def create_exact(self, authority: object, topology: object) -> None: ...
+    def create_exact(
+        self, authority: object, topology: object, *,
+        evidence: CandidateCPreparationEvidence | None = None,
+        candidate_c_authority: object | None = None,
+    ) -> DockerPreparationPhase: ...
+
+    def start_exact(
+        self, phase: DockerPreparationPhase, authority: object, topology: object,
+        evidence: CandidateCPreparationEvidence, candidate_c_authority: object,
+    ) -> None: ...
 
 
 class CandidateCPreparationOperations(Protocol):
-    def prepare_exact(self, request: CandidateCPreparationRequest) -> None: ...
+    def recover_exact(
+        self, request: CandidateCPreparationRequest,
+    ) -> CandidateCPreparationEvidence: ...
+
+    def prepare_exact(
+        self, request: CandidateCPreparationRequest,
+    ) -> CandidateCPreparationEvidence: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -979,11 +1049,6 @@ def prepare_authoritative_resources(
     topology = resolve_formal_compose_topology(store, preparation_id, repository_root)
     docker_authority = resolve_preparation_docker_authority(
         store, preparation_id, repository_root)
-    if not callable(getattr(docker_operations, "create_exact", None)):
-        raise TypeError("typed preparation Docker operations are required")
-    docker_operations.create_exact(docker_authority, topology)
-
-    child = verify_prepared_real_rag_child(store, preparation_id, repository_root)
     _, target = _child_paths(store, prepared, Path(repository_root).resolve())
     from knowledge_index import admit_production_manifest
     rag_profile = yaml.safe_load((
@@ -993,23 +1058,125 @@ def prepare_authoritative_resources(
         Path(repository_root).resolve()
         / rag_profile["knowledge"]["manifest_path"],
         repository_root=Path(repository_root).resolve())
-    from .container_wiring import resolve_formal_container_wiring
-    wiring = resolve_formal_container_wiring(
-        store, preparation_id, repository_root, candidate_c_authority=None,
-        _environment={})
-    request = CandidateCPreparationRequest(
+    raw_child = prepared["real_rag_child"]
+    recovery_request = CandidateCPreparationRequest(
         preparation_id, prepared["planned_lineage"]["planned_run_identity"],
-        child["child_identity"], str(target), child["profile_identity"],
+        raw_child["child_identity"], str(target), raw_child["profile_identity"],
         manifest.manifest_commitment, manifest.manifest.corpus_id,
         manifest.manifest.canonical_release_reference,
         manifest.manifest.source_revision,
         "text-embedding-004", "spec014-google-document-query-v1",
         "spec014-chroma-l2-v2", "l2", "spec014-retrieval-v1",
-        child["profile_identity"], wiring.mounts)
+        raw_child["profile_identity"])
+    recovered_evidence: CandidateCPreparationEvidence | None = None
+    try:
+        child = verify_prepared_real_rag_child(
+            store, preparation_id, repository_root)
+    except ValueError:
+        recover = getattr(candidate_c_operations, "recover_exact", None)
+        if not callable(recover):
+            raise
+        recovered_evidence = recover(recovery_request)
+        if type(recovered_evidence) is not CandidateCPreparationEvidence:
+            raise TypeError("Candidate-C recovery must return public typed evidence")
+        recovered_evidence.validate()
+        if (recovered_evidence.preparation_id != preparation_id
+                or recovered_evidence.child_identity != raw_child["child_identity"]
+                or recovered_evidence.manifest_commitment !=
+                    manifest.manifest_commitment
+                or recovered_evidence.corpus_identity != manifest.manifest.corpus_id):
+            raise ValueError("Candidate-C recovery evidence is contradictory")
+        child = verify_prepared_real_rag_child(
+            store, preparation_id, repository_root,
+            _preparation_artifacts=dict(recovered_evidence.artifacts))
+
+    from .container_wiring import resolve_formal_container_wiring
+    wiring = resolve_formal_container_wiring(
+        store, preparation_id, repository_root,
+        candidate_c_authority=(candidate_c_authority
+                               if recovered_evidence is not None else None),
+        _environment={},
+        _preparation_artifacts=(dict(recovered_evidence.artifacts)
+                                if recovered_evidence is not None else None))
+    request = CandidateCPreparationRequest(
+        recovery_request.preparation_id, recovery_request.planned_run_identity,
+        recovery_request.child_identity, recovery_request.child_path,
+        recovery_request.profile_identity, recovery_request.manifest_commitment,
+        recovery_request.corpus_identity, recovery_request.corpus_release,
+        recovery_request.source_revision, recovery_request.embedding_model,
+        recovery_request.embedding_profile_identity,
+        recovery_request.index_schema_identity, recovery_request.distance_metric,
+        recovery_request.retrieval_profile_identity,
+        recovery_request.gate_profile_identity, wiring.mounts)
+    if not callable(getattr(docker_operations, "create_exact", None)):
+        raise TypeError("typed preparation Docker operations are required")
+    docker_phase = docker_operations.create_exact(
+        docker_authority, topology, evidence=recovered_evidence,
+        candidate_c_authority=(candidate_c_authority
+                               if recovered_evidence is not None else None))
+    if type(docker_phase) is not DockerPreparationPhase:
+        raise TypeError("Docker Phase 1 must return its supported typed result")
+    docker_phase.validate()
+    if (docker_phase.preparation_id != preparation_id
+            or docker_phase.topology_commitment != topology.topology_commitment
+            or docker_phase.project_names != docker_authority.project_names):
+        raise ValueError("Docker Phase 1 result contradicts exact authority")
+
+    from .formal_docker_lifecycle import (
+        DockerResourceKind, DockerResourceState, OperationalState,
+        assess_exact_ownership,
+    )
+    for envelope in topology.envelopes:
+        inspection = docker_state_inspector.inspect(envelope)
+        ownership = assess_exact_ownership(envelope, inspection)
+        if ownership.state is not OperationalState.AVAILABLE:
+            raise ValueError("Docker Phase 1 exact ownership is not established")
+        runtime = tuple(
+            item for item in inspection.resources
+            if item.kind is DockerResourceKind.CONTAINER
+            and item.service == "runtime")
+        if (len(runtime) != 1
+                or (runtime[0].state is DockerResourceState.RUNNING
+                    and recovered_evidence is None)):
+            raise ValueError("Runtime process is running before Candidate-C authority")
     if not callable(getattr(candidate_c_operations, "prepare_exact", None)):
         raise TypeError("typed Candidate-C preparation operations are required")
-    candidate_c_operations.prepare_exact(request)
-    artifacts = _artifact_manifest(target)
+    evidence = (recovered_evidence if recovered_evidence is not None
+                else candidate_c_operations.prepare_exact(request))
+    if type(evidence) is not CandidateCPreparationEvidence:
+        raise TypeError("Candidate-C preparation must return public typed evidence")
+    evidence.validate()
+    if (evidence.preparation_id != preparation_id
+            or evidence.child_identity != child["child_identity"]
+            or evidence.manifest_commitment != request.manifest_commitment
+            or evidence.corpus_identity != request.corpus_identity):
+        raise ValueError("Candidate-C evidence contradicts the preparation request")
+    artifacts = dict(evidence.artifacts)
+    if artifacts != _artifact_manifest(target):
+        raise ValueError("Candidate-C evidence contradicts prepared artifacts")
+
+    from .readiness import ReadinessFactState, resolve_candidate_c_build
+    from knowledge_index import load_knowledge_config
+    config = load_knowledge_config(
+        Path(repository_root).resolve() / "configs/knowledge_index.yaml")
+    build, activation = resolve_candidate_c_build(
+        candidate_c_authority, config,
+        expected_manifest_commitment=request.manifest_commitment,
+        expected_corpus_identity=request.corpus_identity)
+    if (build.state is not ReadinessFactState.RESOLVED
+            or activation.state is not ReadinessFactState.RESOLVED
+            or build.value != evidence.build_identity
+            or commitment(activation.value) != evidence.activation_identity):
+        raise ValueError("Candidate-C public authority contradicts preparation evidence")
+    verify_prepared_real_rag_child(
+        store, preparation_id, repository_root,
+        _preparation_artifacts=artifacts)
+
+    if not callable(getattr(docker_operations, "start_exact", None)):
+        raise TypeError("typed preparation Docker runtime start is required")
+    docker_operations.start_exact(
+        docker_phase, docker_authority, topology, evidence,
+        candidate_c_authority)
 
     facts = observe_authoritative_preparation_facts(
         store=store, preparation_id=preparation_id,

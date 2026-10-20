@@ -40,9 +40,11 @@ from .formal_docker_lifecycle import (
     expected_ownership_labels,
 )
 from .preparation import (
-    CandidateCPreparationRequest, PREPARED_CHILD_MARKER,
-    PreparationResourceFacts, prepare_authoritative_resources,
+    CandidateCPreparationEvidence, CandidateCPreparationRequest,
+    DockerPreparationPhase, PREPARED_CHILD_MARKER, PreparationResourceFacts,
+    _artifact_manifest, prepare_authoritative_resources,
 )
+from .identity import commitment
 from .runtime_image_readiness import RuntimeImageSourceIdentity
 from .sqlite_store import SqliteEvaluationStore
 
@@ -138,10 +140,10 @@ class ComposePreparationDockerOperations:
         self._executor = executor or SubprocessCommandExecutor()
         self._timeout = timeout_seconds
 
-    def create_exact(
+    def _validate_phase(
         self, authority: PreparationDockerAuthority,
         topology: FormalComposeCampaignTopology,
-    ) -> None:
+    ) -> tuple[str, ...]:
         if type(authority) is not PreparationDockerAuthority:
             raise TypeError("typed preparation Docker authority is required")
         if type(topology) is not FormalComposeCampaignTopology:
@@ -154,6 +156,22 @@ class ComposePreparationDockerOperations:
                 or authority.project_names != projects
                 or authority.topology_commitment != topology.topology_commitment):
             raise ValueError("Docker creation authority contradicts exact topology")
+        return projects
+
+    def create_exact(
+        self, authority: PreparationDockerAuthority,
+        topology: FormalComposeCampaignTopology,
+        *, evidence: CandidateCPreparationEvidence | None = None,
+        candidate_c_authority: object | None = None,
+    ) -> DockerPreparationPhase:
+        projects = self._validate_phase(authority, topology)
+        if evidence is not None:
+            if type(evidence) is not CandidateCPreparationEvidence:
+                raise TypeError("typed Candidate-C recovery evidence is required")
+            evidence.validate()
+            if (evidence.preparation_id != self._preparation_id
+                    or candidate_c_authority is None):
+                raise ValueError("Candidate-C recovery evidence is contradictory")
         compose = (self._root / FORMAL_COMPOSE_PATH).resolve()
         compose.relative_to(self._root)
         if not compose.is_file():
@@ -163,9 +181,17 @@ class ComposePreparationDockerOperations:
             for index, envelope in enumerate(topology.envelopes):
                 override = temporary_root / f"ownership-{index:02d}.yaml"
                 override.write_text(_ownership_override(envelope), encoding="utf-8")
-                environment = materialize_formal_compose_environment(
-                    self._store, self._preparation_id,
-                    envelope.planned_execution_identity, self._root)
+                environment = (
+                    materialize_formal_compose_environment(
+                        self._store, self._preparation_id,
+                        envelope.planned_execution_identity, self._root)
+                    if evidence is None else
+                    materialize_formal_compose_environment(
+                        self._store, self._preparation_id,
+                        envelope.planned_execution_identity, self._root,
+                        candidate_c_authority=candidate_c_authority,
+                        preparation_artifacts=dict(evidence.artifacts),
+                        require_candidate_c=True))
                 child_source = Path(
                     environment["SPEC017_REAL_RAG_CHILD_SOURCE"]).resolve()
                 isolated_root = (self._store.path.parent / "real_rag").resolve()
@@ -174,11 +200,55 @@ class ComposePreparationDockerOperations:
                 argv = (
                     "docker", "compose", "--file", str(compose), "--file",
                     str(override), "--project-name",
-                    envelope.compose_project_identity, "up", "--detach",
+                    envelope.compose_project_identity, "create",
                     "--no-build", "--pull", "never", *envelope.services,
                 )
                 _run(self._executor, argv, self._root,
                      "exact Formal Compose creation", environment=environment,
+                     timeout=self._timeout)
+        phase = DockerPreparationPhase(
+            self._preparation_id, topology.topology_commitment, projects)
+        phase.validate()
+        return phase
+
+    def start_exact(
+        self, phase: DockerPreparationPhase,
+        authority: PreparationDockerAuthority,
+        topology: FormalComposeCampaignTopology,
+        evidence: CandidateCPreparationEvidence,
+        candidate_c_authority: object,
+    ) -> None:
+        projects = self._validate_phase(authority, topology)
+        if type(phase) is not DockerPreparationPhase:
+            raise TypeError("typed Docker Phase 1 result is required")
+        if type(evidence) is not CandidateCPreparationEvidence:
+            raise TypeError("typed Candidate-C preparation evidence is required")
+        phase.validate()
+        evidence.validate()
+        if (phase.preparation_id != self._preparation_id
+                or phase.topology_commitment != topology.topology_commitment
+                or phase.project_names != projects
+                or evidence.preparation_id != self._preparation_id):
+            raise ValueError("runtime start continuation identity is contradictory")
+        compose = (self._root / FORMAL_COMPOSE_PATH).resolve()
+        artifacts = dict(evidence.artifacts)
+        with tempfile.TemporaryDirectory(prefix="spec017-compose-") as temporary:
+            temporary_root = Path(temporary)
+            for index, envelope in enumerate(topology.envelopes):
+                override = temporary_root / f"ownership-{index:02d}.yaml"
+                override.write_text(_ownership_override(envelope), encoding="utf-8")
+                environment = materialize_formal_compose_environment(
+                    self._store, self._preparation_id,
+                    envelope.planned_execution_identity, self._root,
+                    candidate_c_authority=candidate_c_authority,
+                    preparation_artifacts=artifacts, require_candidate_c=True)
+                argv = (
+                    "docker", "compose", "--file", str(compose), "--file",
+                    str(override), "--project-name",
+                    envelope.compose_project_identity, "start", *envelope.services,
+                )
+                _run(self._executor, argv, self._root,
+                     "exact Formal Compose runtime start", environment=environment,
                      timeout=self._timeout)
 
 
@@ -526,7 +596,7 @@ class KnowledgeIndexCandidateCPreparationOperations:
                 or generated_root.parent.name != "rca_evaluation"
                 or child == production_root or child.is_relative_to(production_root)):
             raise ValueError("Candidate-C child is outside the isolated evaluation root")
-        (child / "candidate-c").mkdir()
+        (child / "candidate-c").mkdir(exist_ok=True)
         store = SqliteKnowledgeStore(child / "candidate-c" / "knowledge.sqlite3")
         index = ChromaIndexAdapter(
             child / "candidate-c" / "chroma",
@@ -538,7 +608,57 @@ class KnowledgeIndexCandidateCPreparationOperations:
         self._closeable = store
         return KnowledgeBuildService(store, provider, index), store, config
 
-    def prepare_exact(self, request: CandidateCPreparationRequest) -> None:
+    def recover_exact(
+        self, request: CandidateCPreparationRequest,
+    ) -> CandidateCPreparationEvidence:
+        """Recover only Candidate-C public authority after a lost response."""
+        from knowledge_index import (
+            KnowledgeLocalReadiness, KnowledgeReadStatus, load_knowledge_config,
+        )
+        if type(request) is not CandidateCPreparationRequest:
+            raise TypeError("typed Candidate-C recovery request is required")
+        child = Path(request.child_path).resolve()
+        candidate_root = child / "candidate-c"
+        if not candidate_root.is_dir():
+            raise ValueError("Candidate-C public preparation is absent")
+        service, authority, config = self._factory(request)
+        expected_config = load_knowledge_config(
+            self._root / "configs/knowledge_index.yaml")
+        for field in ("capability", "limits", "chunking", "normalization_semantics",
+                      "index_schema_identity", "distance_metric"):
+            if getattr(config, field) != getattr(expected_config, field):
+                raise ValueError("Candidate-C recovery configuration is contradictory")
+        activation = authority.read_activation()
+        if activation.status is not KnowledgeReadStatus.FOUND:
+            raise ValueError("Candidate-C public activation authority is absent")
+        staged = authority.get_staged_build(activation.value.active_build_identity)
+        readiness = service.recover_active()
+        if (staged.status is not KnowledgeReadStatus.FOUND
+                or readiness.status is not KnowledgeLocalReadiness.READY
+                or readiness.active_build_identity !=
+                    activation.value.active_build_identity
+                or readiness.generation != activation.value.generation):
+            raise ValueError("Candidate-C public recovery authority is contradictory")
+        self.authority.bind(authority)
+        activation_value = {
+            "generation": activation.value.generation,
+            "operation_identity": activation.value.operation_key.value,
+            "validated_build_commitment":
+                activation.value.validated_build_commitment,
+        }
+        evidence = CandidateCPreparationEvidence(
+            request.preparation_id, request.child_identity,
+            request.manifest_commitment, request.corpus_identity,
+            activation.value.active_build_identity, commitment(activation_value),
+            activation.value.validated_build_commitment,
+            staged.value.artifact.artifact_commitment,
+            tuple(sorted(_artifact_manifest(child).items())))
+        evidence.validate()
+        return evidence
+
+    def prepare_exact(
+        self, request: CandidateCPreparationRequest,
+    ) -> CandidateCPreparationEvidence:
         from knowledge_index import (
             ActivationOperationKey, BuildActivationRequest, BuildIdentityInput,
             BuildOperationKey, BuildValidationState, KnowledgeLocalReadiness,
@@ -639,7 +759,20 @@ class KnowledgeIndexCandidateCPreparationOperations:
             execution.relative_to(child)
             filesystem_execution = _fs_path(execution)
             if filesystem_execution.exists() and any(filesystem_execution.iterdir()):
-                raise ValueError("Candidate-C execution child contains unknown state")
+                expected = {PREPARED_CHILD_MARKER, *(
+                    item.name for item in source.iterdir())}
+                if ({item.name for item in filesystem_execution.iterdir()} != expected
+                        or json.loads((filesystem_execution / PREPARED_CHILD_MARKER).read_text(
+                            encoding="utf-8")) != mount.expected_marker()
+                        or any(
+                            item.is_file() and (
+                                not (filesystem_execution / item.name).is_file()
+                                or hashlib.sha256(item.read_bytes()).digest()
+                                != hashlib.sha256((filesystem_execution / item.name).read_bytes()).digest())
+                            for item in source.iterdir())):
+                    raise ValueError(
+                        "Candidate-C execution child contains unknown state")
+                continue
             filesystem_execution.mkdir(parents=True, exist_ok=True)
             for item in source.iterdir():
                 destination = filesystem_execution / item.name
@@ -650,6 +783,26 @@ class KnowledgeIndexCandidateCPreparationOperations:
             (filesystem_execution / PREPARED_CHILD_MARKER).write_text(
                 json.dumps(mount.expected_marker(), sort_keys=True,
                            separators=(",", ":")), encoding="utf-8")
+        public_activation = self.authority.read_activation()
+        if (public_activation.status is not KnowledgeReadStatus.FOUND
+                or public_activation.value.active_build_identity !=
+                    staged.record.build_identity):
+            raise RuntimeError("Candidate-C public activation authority is unavailable")
+        activation_value = {
+            "generation": public_activation.value.generation,
+            "operation_identity": public_activation.value.operation_key.value,
+            "validated_build_commitment":
+                public_activation.value.validated_build_commitment,
+        }
+        artifacts = tuple(sorted(_artifact_manifest(child).items()))
+        evidence = CandidateCPreparationEvidence(
+            request.preparation_id, request.child_identity,
+            request.manifest_commitment, request.corpus_identity,
+            staged.record.build_identity, commitment(activation_value),
+            validated.validation_commitment,
+            staged.record.artifact.artifact_commitment, artifacts)
+        evidence.validate()
+        return evidence
 
     def close(self) -> None:
         close = getattr(self._closeable, "close", None)

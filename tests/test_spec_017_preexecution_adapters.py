@@ -27,7 +27,8 @@ from rca_evaluation.formal_docker_lifecycle import (
 )
 from rca_evaluation.formal_compose import resolve_formal_compose_topology
 from rca_evaluation.preparation import (
-    CandidateCPreparationRequest, PREPARED_CHILD_MARKER,
+    CandidateCPreparationEvidence, CandidateCPreparationRequest,
+    DockerPreparationPhase, PREPARED_CHILD_MARKER,
     PreparationResourceDomain, _artifact_manifest, _prepared_resources_payload,
     verify_prepared_real_rag_child,
 )
@@ -117,21 +118,68 @@ def test_compose_creation_binds_every_exact_project_and_never_defaults(
                     evaluation / "real_rag" / "child"),
                 "SPEC017_REAL_RAG_CORPUS_SOURCE": str(ROOT / "docs/knowledge"),
             })
-        adapters.ComposePreparationDockerOperations(
+        phase = adapters.ComposePreparationDockerOperations(
             store, report.preparation_id, ROOT,
             executor=executor).create_exact(authority, topology)
+        assert type(phase) is DockerPreparationPhase
     assert len(executor.calls) == 30
     observed_projects = []
     for argv, _, environment, _ in executor.calls:
         assert argv[:2] == ("docker", "compose")
         assert "--file" in argv and str(ROOT / "docker-compose.formal.yml") in argv
         assert "--project-name" in argv and "--no-build" in argv
+        assert "create" in argv and "up" not in argv and "start" not in argv
         project = argv[argv.index("--project-name") + 1]
         assert project and project != "default"
         observed_projects.append(project)
         assert set(environment) == {
             "SPEC017_REAL_RAG_CHILD_SOURCE", "SPEC017_REAL_RAG_CORPUS_SOURCE"}
     assert tuple(observed_projects) == authority.project_names
+
+
+def test_compose_runtime_start_reuses_phase_and_requires_candidate_evidence(
+    tmp_path, monkeypatch,
+):
+    report, evaluation = _prepare(tmp_path)
+    executor = RecordingExecutor()
+    with SqliteEvaluationStore(evaluation / "evaluation.db") as store:
+        topology = resolve_formal_compose_topology(
+            store, report.preparation_id, ROOT)
+        authority = resolve_preparation_docker_authority(
+            store, report.preparation_id, ROOT)
+        prepared = store.get_preparation(report.preparation_id)
+        manifest = admit_production_manifest(
+            ROOT / "configs/knowledge_manifest.json", repository_root=ROOT)
+        phase = DockerPreparationPhase(
+            report.preparation_id, topology.topology_commitment,
+            authority.project_names)
+        evidence = CandidateCPreparationEvidence(
+            report.preparation_id,
+            prepared["real_rag_child"]["child_identity"],
+            manifest.manifest_commitment, manifest.manifest.corpus_id,
+            "kbld_" + "a" * 64, "sha256:" + "b" * 64,
+            "sha256:" + "c" * 64, "sha256:" + "d" * 64,
+            (("candidate-c/index.bin", "sha256:" + "e" * 64),))
+        observed = []
+
+        def materialize(*args, **kwargs):
+            observed.append(kwargs)
+            return {
+                "SPEC017_REAL_RAG_CHILD_SOURCE": str(
+                    evaluation / "real_rag" / "child"),
+                "SPEC017_REAL_RAG_CORPUS_SOURCE": str(ROOT / "docs/knowledge"),
+            }
+
+        monkeypatch.setattr(
+            adapters, "materialize_formal_compose_environment", materialize)
+        adapters.ComposePreparationDockerOperations(
+            store, report.preparation_id, ROOT,
+            executor=executor).start_exact(
+                phase, authority, topology, evidence, object())
+    assert len(executor.calls) == 30
+    assert all("start" in argv and "create" not in argv and "up" not in argv
+               for argv, _, _, _ in executor.calls)
+    assert all(item["require_candidate_c"] is True for item in observed)
 
 
 def test_compose_creation_failure_never_becomes_success(tmp_path, monkeypatch):
@@ -420,8 +468,9 @@ def test_docker_network_mismatch_is_decided_by_existing_authority(tmp_path):
 
 
 class FakeCandidateService:
-    def __init__(self, child, *, validation_ok=True):
+    def __init__(self, child, authority=None, *, validation_ok=True):
         self.child = child
+        self.authority = authority
         self.validation_ok = validation_ok
         self.build = "kbld_" + "a" * 64
 
@@ -429,18 +478,30 @@ class FakeCandidateService:
         artifact = self.child / "candidate-c" / "index.bin"
         artifact.parent.mkdir(parents=True, exist_ok=True)
         artifact.write_bytes(b"candidate-c-authoritative-output")
-        return SimpleNamespace(
-            record=SimpleNamespace(build_identity=self.build), failures=())
+        result = SimpleNamespace(
+            record=SimpleNamespace(
+                build_identity=self.build,
+                artifact=SimpleNamespace(artifact_commitment="sha256:" + "b" * 64)),
+            failures=())
+        if self.authority is not None:
+            self.authority.staged = result.record
+        return result
 
     def validate(self, *args, **kwargs):
         return SimpleNamespace(
             state=(BuildValidationState.VALIDATED if self.validation_ok
                    else BuildValidationState.FAILED),
-            findings=(() if self.validation_ok else ("invalid",)))
+            findings=(() if self.validation_ok else ("invalid",)),
+            validation_commitment="sha256:" + "c" * 64)
 
     def activate(self, request):
-        return SimpleNamespace(authority=SimpleNamespace(
-            active_build_identity=self.build, generation=1))
+        active = SimpleNamespace(
+            active_build_identity=self.build, generation=1,
+            operation_key=request.operation_key,
+            validated_build_commitment="sha256:" + "c" * 64)
+        if self.authority is not None:
+            self.authority.active = active
+        return SimpleNamespace(authority=active)
 
     def recover_active(self):
         return SimpleNamespace(
@@ -449,14 +510,21 @@ class FakeCandidateService:
 
 
 class FakeCandidateAuthority:
+    def __init__(self):
+        self.active = None
+        self.staged = None
+
     def read_activation(self):
-        return SimpleNamespace(status=KnowledgeReadStatus.NOT_FOUND, value=None)
+        return SimpleNamespace(
+            status=(KnowledgeReadStatus.FOUND if self.active is not None
+                    else KnowledgeReadStatus.NOT_FOUND), value=self.active)
 
     def local_readiness(self, **kwargs):
         return SimpleNamespace(status=KnowledgeLocalReadiness.READY)
 
     def get_staged_build(self, build_identity):
-        return SimpleNamespace(status=KnowledgeReadStatus.FOUND)
+        return SimpleNamespace(status=KnowledgeReadStatus.FOUND,
+                               value=self.staged)
 
 
 def _candidate_request(tmp_path):
@@ -482,12 +550,12 @@ def test_candidate_c_bridge_uses_stage_validate_activate_and_exact_children(tmp_
     store, child, request = _candidate_request(tmp_path)
     authority = FakeCandidateAuthority()
     config = load_knowledge_config(ROOT / "configs/knowledge_index.yaml")
-    service = FakeCandidateService(child)
+    service = FakeCandidateService(child, authority)
     adapter = adapters.KnowledgeIndexCandidateCPreparationOperations(
         ROOT, factory=lambda _: (service, authority, config))
     try:
-        adapter.prepare_exact(request)
-        assert adapter.authority.read_activation().status is KnowledgeReadStatus.NOT_FOUND
+        evidence = adapter.prepare_exact(request)
+        assert adapter.authority.read_activation().status is KnowledgeReadStatus.FOUND
         for mount in request.execution_mounts:
             execution = adapters._fs_path(
                 child.parent.parent / mount.child_source_reference)
@@ -502,6 +570,7 @@ def test_candidate_c_bridge_uses_stage_validate_activate_and_exact_children(tmp_
             "candidate-c/index.bin":
                 "sha256:" + hashlib.sha256(
                     b"candidate-c-authoritative-output").hexdigest()}
+        assert adapter.recover_exact(request) == evidence
         assert resolve_formal_container_wiring(
             store, request.preparation_id, ROOT, _environment={},
             _preparation_artifacts=artifacts).mounts

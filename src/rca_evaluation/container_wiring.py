@@ -459,10 +459,20 @@ def resolve_formal_container_wiring(
 def materialize_formal_compose_environment(
     store: SqliteEvaluationStore, preparation_id: str,
     planned_execution_identity: str, repository_root: str | Path,
+    *, candidate_c_authority: object | None = None,
+    preparation_artifacts: Mapping[str, str] | None = None,
+    require_candidate_c: bool = False,
 ) -> dict[str, str]:
     """Return only governed non-secret bind inputs for one exact execution."""
     wiring = resolve_formal_container_wiring(
-        store, preparation_id, repository_root)
+        store, preparation_id, repository_root,
+        candidate_c_authority=candidate_c_authority,
+        _preparation_artifacts=preparation_artifacts)
+    if (require_candidate_c
+            and (wiring.build_fact.state is not ReadinessFactState.RESOLVED
+                 or wiring.activation_fact.state is not ReadinessFactState.RESOLVED)):
+        raise ValueError(
+            "Formal Compose runtime requires authoritative Candidate-C evidence")
     matching = [item for item in wiring.mounts
                 if item.planned_execution_identity == planned_execution_identity]
     if len(matching) != 1:

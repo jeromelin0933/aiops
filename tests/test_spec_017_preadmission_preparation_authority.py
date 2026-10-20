@@ -4,21 +4,31 @@ import copy
 from dataclasses import fields, replace
 import hashlib
 import inspect
+import json
 from pathlib import Path
 
 import pytest
 
 import rca_evaluation.formal_admission as formal_admission_module
+import rca_evaluation.formal_docker_lifecycle as docker_lifecycle_module
 import rca_evaluation.preparation as preparation_module
+import rca_evaluation.readiness as readiness_module
+from rca_evaluation.formal_docker_lifecycle import (
+    DockerProjectInspection, DockerResourceKind, DockerResourceState,
+    InspectedDockerResource, OperationalState, OwnershipAssessment,
+    expected_ownership_labels,
+)
 from rca_evaluation.formal_evidence import authorize_formal_execution
 from rca_evaluation.identity import commitment
 from rca_evaluation.preparation import (
-    CandidateCPreparationRequest, PreparationResourceDomain,
+    CandidateCPreparationEvidence, CandidateCPreparationRequest,
+    DockerPreparationPhase, PREPARED_CHILD_MARKER, PreparationResourceDomain,
     PreparationResourceFact, PreparationResourceFacts,
     _prepared_resources_payload, prepare_authoritative_resources,
     prepared_resource_semantic_identity,
     validate_prepared_resource_freshness,
 )
+from rca_evaluation.readiness import ReadinessFactState, RequiredFact
 from rca_evaluation.runner import CampaignRunner
 from rca_evaluation.runtime_image_readiness import PreparedRuntimeImage
 from rca_evaluation.sqlite_store import SqliteEvaluationStore
@@ -135,9 +145,45 @@ def test_fake_authoritative_adapters_drive_typed_deterministic_preparation(
 
         class DockerOperations:
             def __init__(self): self.calls = []
-            def create_exact(self, authority, topology):
-                self.calls.append((authority.preparation_id,
-                                   topology.topology_commitment))
+            def create_exact(self, authority, topology, **kwargs):
+                self.calls.append("create")
+                return DockerPreparationPhase(
+                    authority.preparation_id, topology.topology_commitment,
+                    authority.project_names)
+            def start_exact(self, phase, authority, topology, evidence,
+                            candidate_c_authority):
+                self.calls.append("start")
+
+        class Inspector:
+            def inspect(self, envelope):
+                labels = expected_ownership_labels(envelope)
+                resources = [InspectedDockerResource(
+                    DockerResourceKind.CONTAINER,
+                    envelope.container_name_prefixes[index] + "1",
+                    DockerResourceState.PRESENT, labels, service=service,
+                    image_profile="spec011-runtime-formal-v1",
+                    image_identity=_sha("9"),
+                    mounts=tuple(sorted(
+                        (mount.volume_identity, mount.target)
+                        for mount in envelope.volume_mounts
+                        if service == "runtime" and mount.role in {
+                            "formal-logs", "runtime-events",
+                            "runtime-knowledge", "runtime-state"})),
+                    networks=(envelope.network_identity,),
+                    observed_status="created")
+                    for index, service in enumerate(envelope.services)]
+                resources.append(InspectedDockerResource(
+                    DockerResourceKind.NETWORK, envelope.network_identity,
+                    DockerResourceState.PRESENT, labels))
+                resources.extend(InspectedDockerResource(
+                    DockerResourceKind.VOLUME, mount.volume_identity,
+                    DockerResourceState.PRESENT, labels)
+                    for mount in envelope.volume_mounts)
+                resources.append(InspectedDockerResource(
+                    DockerResourceKind.WORKSPACE, envelope.workspace_identity,
+                    DockerResourceState.PRESENT, ()))
+                return DockerProjectInspection.create(
+                    envelope, tuple(resources), inspected_at="phase-1")
 
         class CandidateOperations:
             def __init__(self): self.calls = []
@@ -146,23 +192,55 @@ def test_fake_authoritative_adapters_drive_typed_deterministic_preparation(
                 artifact = Path(request.child_path) / "candidate-c" / "index.bin"
                 artifact.parent.mkdir()
                 artifact.write_bytes(b"adapter-output")
+                digest = "sha256:" + hashlib.sha256(
+                    artifact.read_bytes()).hexdigest()
+                for mount in request.execution_mounts:
+                    execution = (Path(request.child_path).parent.parent
+                                 / mount.child_source_reference)
+                    execution = preparation_module._filesystem_path(execution)
+                    execution.mkdir(parents=True, exist_ok=True)
+                    (execution / "index.bin").write_bytes(artifact.read_bytes())
+                    (execution / PREPARED_CHILD_MARKER).write_text(
+                        json.dumps(mount.expected_marker(), sort_keys=True,
+                                   separators=(",", ":")), encoding="utf-8")
+                return CandidateCPreparationEvidence(
+                    request.preparation_id, request.child_identity,
+                    request.manifest_commitment, request.corpus_identity,
+                    "kbld_" + "e" * 64, evidence_activation,
+                    _sha("c"), _sha("d"),
+                    (("candidate-c/index.bin", digest),))
 
         monkeypatch.setattr(
             preparation_module, "observe_authoritative_preparation_facts",
             lambda **_: facts)
+        activation = {"generation": 1, "operation_identity": "activation",
+                      "validated_build_commitment": _sha("c")}
+        evidence_activation = commitment(activation)
+        monkeypatch.setattr(
+            readiness_module, "resolve_candidate_c_build",
+            lambda *args, **kwargs: (
+                RequiredFact("real_rag_build", ReadinessFactState.RESOLVED,
+                             "kbld_" + "e" * 64, "Candidate-C public API", "ok"),
+                RequiredFact("real_rag_activation", ReadinessFactState.RESOLVED,
+                             activation, "Candidate-C public API", "ok")))
+        monkeypatch.setattr(
+            docker_lifecycle_module, "assess_exact_ownership",
+            lambda envelope, inspection:
+                OwnershipAssessment(OperationalState.AVAILABLE, None, ()))
         image_ops, docker_ops, candidate_ops = (
             ImageOperations(), DockerOperations(), CandidateOperations())
         result = prepare_authoritative_resources(
             store=store, preparation_id=report.preparation_id,
             repository_root=ROOT, runtime_authority=Runtime(),
             runtime_image_operations=image_ops, docker_operations=docker_ops,
-            docker_state_inspector=object(),
+            docker_state_inspector=Inspector(),
             candidate_c_operations=candidate_ops,
             candidate_c_authority=object(),
             container_real_rag_inspector=object())
         assert result == facts
         assert image_ops.calls == ["image"]
-        assert len(docker_ops.calls) == 1 and len(candidate_ops.calls) == 1
+        assert docker_ops.calls == ["create", "start"]
+        assert len(candidate_ops.calls) == 1
         assert store.get_preparation(report.preparation_id)[
             "resource_facts"]["facts_commitment"] == facts.facts_commitment
 
