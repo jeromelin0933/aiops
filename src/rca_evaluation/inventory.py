@@ -58,7 +58,7 @@ _GOVERNED_ROOTS = (
     "src/shadow_management",
     "src/rca_integration",
 )
-_MANIFEST_SHA256 = "4c53cccb04db4ef4709919e4afbbbc62e677eba9a621fe788d59d062321b5e02"
+_MANIFEST_SHA256 = "8afae90253d2e2faec4537813670fe3b8088b07818cf70a0d7e8e67433e9718d"
 _MANIFEST_PATH = Path(__file__).with_name("production_sensitive_inventory.json")
 
 

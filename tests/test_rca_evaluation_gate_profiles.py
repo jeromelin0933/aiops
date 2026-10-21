@@ -19,7 +19,7 @@ from knowledge_index import (
     KnowledgeProvenanceProjection, KnowledgeRetrievalService,
     KnowledgeReadinessFact, KnowledgeReadResult, KnowledgeReadStatus,
     KnowledgeSnapshotService, RetrievalOperationKey, RetrievalResolution,
-    SqliteKnowledgeStore, load_knowledge_config,
+    SqliteKnowledgeStore, admit_production_manifest, load_knowledge_config,
 )
 from llm_generation.contracts import (
     GenerationPin, LocalReadStatus, ValidatedGenerationResult,
@@ -53,7 +53,7 @@ from rca_evaluation.oracle import EvaluationPlan, OracleRevision
 from rca_evaluation.sqlite_store import SqliteEvaluationStore
 from rca_evaluation.readiness import (
     RagChildAllocation, ReadinessFactState, allocate_real_rag_child,
-    resolve_environment_credential,
+    resolve_environment_credential, resolve_repository_identity,
 )
 from rca_evaluation.real_gate_provenance import (
     ActualInvocationReceipt, DockerProbeEvidence, actual_invocation_status,
@@ -111,6 +111,7 @@ _EXECUTION = LedgerRecord.create(
 EXECUTION_ID = _EXECUTION.record_id
 _RAG_AUTHORITIES = {}
 _RAG_CHILDREN = {}
+_RAG_REPOSITORY_ROOTS = {}
 
 
 class _ExactCandidateCAuthority:
@@ -194,34 +195,80 @@ def _open_store(path):
 
 
 @pytest.fixture
-def authority(tmp_path):
-    path = tmp_path / "rca_evaluation" / "evaluation.db"
+def authority(tmp_path, monkeypatch):
+    isolation_root = tmp_path / "authority"
+    repository_root = isolation_root / "repository"
+    (repository_root / "configs").mkdir(parents=True)
+    shutil.copy2(ROOT / "configs" / "knowledge_index.yaml",
+                 repository_root / "configs" / "knowledge_index.yaml")
+
+    def admit_isolated_manifest(path, *, repository_root: Path):
+        resolved_repository_root = Path(repository_root).resolve()
+        if resolved_repository_root == ROOT.resolve():
+            return admit_production_manifest(path, repository_root=repository_root)
+        assert resolved_repository_root == isolation_repository_root
+        assert Path(path).resolve() == (
+            isolation_repository_root / "configs" / "knowledge_manifest.json"
+        ).resolve()
+        return admit_production_manifest(
+            ROOT / "configs" / "knowledge_manifest.json", repository_root=ROOT)
+
+    def resolve_isolated_repository_identity(repository_root: Path):
+        resolved_repository_root = Path(repository_root).resolve()
+        assert resolved_repository_root in {
+            isolation_repository_root, ROOT.resolve(),
+        }
+        return resolve_repository_identity(ROOT)
+
+    isolation_repository_root = repository_root.resolve()
+    monkeypatch.setattr(
+        "rca_evaluation.gates.admit_production_manifest",
+        admit_isolated_manifest,
+    )
+    monkeypatch.setattr(
+        "rca_evaluation.gates.resolve_repository_identity",
+        resolve_isolated_repository_identity,
+    )
+    path = isolation_root / "rca_evaluation" / "evaluation.db"
     store = _open_store(path)
-    store.admit_oracle(_ORACLE)
-    store.admit_plan(_PLAN)
-    store.append(_RUN)
-    store.append(_EXECUTION)
-    candidate_root = tmp_path / "candidate-c-readiness"
-    candidate_root.mkdir()
-    candidate_c, staged, _, _, _ = knowledge_environment(candidate_root)
-    _RAG_AUTHORITIES[store] = _ExactCandidateCAuthority(candidate_c, staged)
-    _RAG_CHILDREN[store] = allocate_real_rag_child(
-        store, repository_root=ROOT,
-        isolated_root="var/rca_evaluation/real_rag",
-        production_root="var/knowledge_index/chroma",
-        evaluation_run_id=RUN_ID, execution_id=EXECUTION_ID,
-        environment_identity="pytest",
-        profile_identity="spec017-real-rag-gate-v1")
-    yield store, path
+    candidate_c = None
     try:
-        child = _RAG_CHILDREN.pop(store, None)
-        if child is not None:
-            shutil.rmtree(ROOT / child.relative_path)
-        store.close()
-        candidate_c.close()
+        store.admit_oracle(_ORACLE)
+        store.admit_plan(_PLAN)
+        store.append(_RUN)
+        store.append(_EXECUTION)
+        candidate_root = isolation_root / "candidate-c-readiness"
+        candidate_root.mkdir()
+        candidate_c, staged, _, _, _ = knowledge_environment(candidate_root)
+        _RAG_AUTHORITIES[store] = _ExactCandidateCAuthority(candidate_c, staged)
+        _RAG_REPOSITORY_ROOTS[store] = repository_root
+        child = allocate_real_rag_child(
+            store, repository_root=repository_root,
+            isolated_root="var/rca_evaluation/real_rag",
+            production_root="var/knowledge_index/chroma",
+            evaluation_run_id=RUN_ID, execution_id=EXECUTION_ID,
+            environment_identity="pytest",
+            profile_identity="spec017-real-rag-gate-v1")
+        _RAG_CHILDREN[store] = child
+        resolved_child = (repository_root / child.relative_path).resolve()
+        resolved_isolated_root = (
+            repository_root / "var" / "rca_evaluation" / "real_rag"
+        ).resolve()
+        resolved_child.relative_to(resolved_isolated_root)
+        try:
+            resolved_child.relative_to((ROOT / "var" / "rca_evaluation").resolve())
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("pytest RAG child reached the durable evaluation root")
+        yield store, path
+    finally:
+        _RAG_CHILDREN.pop(store, None)
+        _RAG_REPOSITORY_ROOTS.pop(store, None)
         _RAG_AUTHORITIES.pop(store, None)
-    except Exception:
-        pass
+        if candidate_c is not None:
+            candidate_c.close()
+        store.close()
 
 
 def _profile(gate):
@@ -291,8 +338,9 @@ def _ready_llm(store, *, run_id=RUN_ID, execution_id=EXECUTION_ID,
         evaluation_run_id=run_id, execution_id=execution_id)
 
 
-def _ready_rag(store, *, overrides=None, profile=None, root=ROOT):
+def _ready_rag(store, *, overrides=None, profile=None, root=None):
     profile = profile or _profile(GateKind.REAL_RAG)
+    root = _RAG_REPOSITORY_ROOTS[store] if root is None else root
     authorization = _issue(store, profile, GateKind.REAL_RAG)
     candidate_c = _RAG_AUTHORITIES[store]
     merged = {
@@ -960,17 +1008,19 @@ def test_real_llm_actual_receipt_wrong_pin_rejected(authority, field):
 def test_real_rag_harness_rejects_fake_adapters(authority):
     store, _ = authority
     ready = _ready_rag(store)
+    repository_root = _RAG_REPOSITORY_ROOTS[store]
     with pytest.raises(ValueError, match="existing Google/Chroma adapters"):
         execute_real_rag_invocation(
             store, ready, _profile(GateKind.REAL_RAG),
             knowledge_store=object(), provider=object(), index=object(),
-            request=object(), limits=object(), repository_root=ROOT)
+            request=object(), limits=object(), repository_root=repository_root)
 
 
 def test_real_rag_readiness_fresh_reads_and_start_pins_exact_build(authority):
     store, _ = authority
     ready = _ready_rag(store)
     candidate_c = _RAG_AUTHORITIES[store]
+    repository_root = _RAG_REPOSITORY_ROOTS[store]
 
     assert ready.status is GateExecutionStatus.READY_NOT_EXECUTED
     assert ready.real_rag_build_context is not None
@@ -986,7 +1036,7 @@ def test_real_rag_readiness_fresh_reads_and_start_pins_exact_build(authority):
     )
     pins = _real_rag_invocation_pins(
         profile, request,
-        ROOT / "var" / "rca_evaluation" / "real_rag" / "run-1" / "chroma",
+        repository_root / _RAG_CHILDREN[store].relative_path,
         ready.real_rag_build_context,
     )
     start = _record_start(store, ready, pins)
@@ -1144,12 +1194,13 @@ def test_real_rag_index_and_build_commitment_mismatch_rejected(
 def test_real_rag_harness_rejects_fake_clients_behind_real_adapter_types(authority):
     store, _ = authority
     ready = _ready_rag(store)
+    repository_root = _RAG_REPOSITORY_ROOTS[store]
     provider = object.__new__(GoogleEmbeddingAdapter)
     object.__setattr__(provider, "_client", object())
     index = object.__new__(ChromaIndexAdapter)
     object.__setattr__(index, "_client", object())
     object.__setattr__(index, "storage_path",
-                      ROOT / "var" / "rca_evaluation" / "real_rag" / "run-1")
+                      repository_root / _RAG_CHILDREN[store].relative_path)
     object.__setattr__(index, "distance_metric", "l2")
     config = load_knowledge_config(ROOT / "configs" / "knowledge_index.yaml")
     request = replace(
@@ -1162,7 +1213,7 @@ def test_real_rag_harness_rejects_fake_clients_behind_real_adapter_types(authori
         execute_real_rag_invocation(
             store, ready, _profile(GateKind.REAL_RAG),
             knowledge_store=object(), provider=provider, index=index,
-            request=request, limits=object(), repository_root=ROOT)
+            request=request, limits=object(), repository_root=repository_root)
 
 
 def test_real_rag_caller_cannot_mint_stale_or_unbound_result_receipt(authority):
@@ -1799,13 +1850,10 @@ def test_wrong_or_unknown_candidate_c_physical_metric_cannot_be_ready(
 
 def test_rag_symlink_escape_preserved(authority, tmp_path, monkeypatch):
     store, _ = authority
-    (tmp_path / "configs").mkdir(); (tmp_path / "docs").mkdir()
-    shutil.copy(ROOT / "configs" / "knowledge_index.yaml", tmp_path / "configs")
-    shutil.copy(ROOT / "configs" / "knowledge_manifest.json", tmp_path / "configs")
-    shutil.copytree(ROOT / "docs" / "knowledge", tmp_path / "docs" / "knowledge")
-    isolated = tmp_path / "var" / "rca_evaluation" / "real_rag"
+    repository_root = _RAG_REPOSITORY_ROOTS[store]
+    isolated = repository_root / "var" / "rca_evaluation" / "real_rag"
     outside = tmp_path / "outside"
-    isolated.mkdir(parents=True); outside.mkdir()
+    isolated.mkdir(parents=True, exist_ok=True); outside.mkdir()
     link = isolated / "escape"
     try:
         os.symlink(outside, link, target_is_directory=True)
@@ -1820,7 +1868,7 @@ def test_rag_symlink_escape_preserved(authority, tmp_path, monkeypatch):
 
         monkeypatch.setattr(Path, "resolve", resolve)
     assert _ready_rag(
-        store, root=tmp_path,
+        store, root=repository_root,
         overrides={"chroma_path": str(link / "chroma")}
     ).status is GateExecutionStatus.NOT_READY
 

@@ -1823,8 +1823,10 @@
       "allowed_defensive_terms": [],
       "allowed_dependencies": [
         "__future__",
+        "enum",
         "google",
         "knowledge_index",
+        "math",
         "typing"
       ],
       "allowed_fields": [
@@ -1843,7 +1845,7 @@
         "GoogleEmbeddingAdapter"
       ],
       "path": "src/knowledge_index/google_embedding_adapter.py",
-      "source_commitment": "8537c3413400949bc7d28cdf465c2701677b8e96e14c4373f5d51256919a7d66",
+      "source_commitment": "69521305cdc52bbd833df03621fccb25885fea7bcf972b66bb317d65733f9562",
       "surfaces": [
         "KNOWLEDGE_QUERY"
       ]
