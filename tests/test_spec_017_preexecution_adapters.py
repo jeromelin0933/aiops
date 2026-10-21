@@ -22,8 +22,9 @@ from rca_evaluation.external_commands import (
     CommandExecutionError, CommandResult,
 )
 from rca_evaluation.formal_docker_lifecycle import (
-    DockerResourceKind, assess_exact_ownership, project_health,
-    resolve_preparation_docker_authority,
+    DockerProjectInspection, DockerResourceKind, DockerResourceState,
+    InspectedDockerResource, assess_exact_ownership,
+    expected_ownership_labels, project_health, resolve_preparation_docker_authority,
 )
 from rca_evaluation.formal_compose import resolve_formal_compose_topology
 from rca_evaluation.preparation import (
@@ -50,6 +51,73 @@ class RecordingExecutor:
         if isinstance(self.result, Exception):
             raise self.result
         return self.result
+
+
+def _phase_one_resources(envelope, *, running=False, partial=False,
+                         foreign=False, wrong_image=False, wrong_mount=False):
+    labels = dict(expected_ownership_labels(envelope))
+    if foreign:
+        labels["com.docker.compose.project"] = "foreign-project"
+    owned = tuple(sorted(labels.items()))
+    runtime_mounts = tuple(sorted(
+        (item.volume_identity, item.target) for item in envelope.volume_mounts
+        if item.role in {"formal-logs", "runtime-events", "runtime-knowledge",
+                         "runtime-state"}))
+    services = envelope.services[:-1] if partial else envelope.services
+    containers = tuple(InspectedDockerResource(
+        DockerResourceKind.CONTAINER,
+        f"{envelope.compose_project_identity}-{service}-1",
+        DockerResourceState.RUNNING if running else DockerResourceState.PRESENT,
+        owned, service=service, image_profile=envelope.runtime_image_profile,
+        image_identity="sha256:" + ("0" if wrong_image else "9") * 64,
+        mounts=((runtime_mounts[:-1] if wrong_mount else runtime_mounts)
+                if service == "runtime" else ()),
+        image_reference=("foreign/runtime:wrong" if wrong_image
+                         and service == "runtime" else {
+                             "runtime": envelope.runtime_image_tag,
+                             "prometheus": "prom/prometheus:v2.51.0",
+                             "loki": "grafana/loki:2.9.0",
+                         }[service]),
+        networks=(envelope.network_identity,),
+        observed_status="running" if running else "created")
+        for service in services)
+    return containers + (
+        InspectedDockerResource(
+            DockerResourceKind.NETWORK, envelope.network_identity,
+            DockerResourceState.PRESENT, owned),
+    ) + tuple(InspectedDockerResource(
+        DockerResourceKind.VOLUME, item.volume_identity,
+        DockerResourceState.PRESENT, owned) for item in envelope.volume_mounts)
+
+
+class PhaseOneInspector:
+    def __init__(self, states=None):
+        self.states = states or {}
+        self.calls = []
+
+    def inspect(self, envelope):
+        self.calls.append(envelope.planned_execution_identity)
+        state = self.states.get(envelope.planned_execution_identity, "absent")
+        if state == "ambiguous":
+            raise ValueError("Docker observation is ambiguous")
+        resources = () if state == "absent" else _phase_one_resources(
+            envelope, running=state == "running", partial=state == "partial",
+            foreign=state == "foreign", wrong_image=state == "wrong_image",
+            wrong_mount=state == "wrong_mount")
+        inspection = DockerProjectInspection.create(
+            envelope, resources, inspected_at="2026-10-21T00:00:00Z")
+        if state == "topology":
+            return replace(
+                inspection, topology_commitment="sha256:" + "0" * 64)
+        return inspection
+
+
+def _compose_test_root(tmp_path):
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    shutil.copy2(ROOT / "docker-compose.formal.yml",
+                 repository / "docker-compose.formal.yml")
+    return repository
 
 
 def _source():
@@ -118,16 +186,20 @@ def test_compose_creation_binds_every_exact_project_and_never_defaults(
                     evaluation / "real_rag" / "child"),
                 "SPEC017_REAL_RAG_CORPUS_SOURCE": str(ROOT / "docs/knowledge"),
             })
+        repository = _compose_test_root(tmp_path)
         phase = adapters.ComposePreparationDockerOperations(
-            store, report.preparation_id, ROOT,
-            executor=executor).create_exact(authority, topology)
+            store, report.preparation_id, repository,
+            executor=executor, state_inspector=PhaseOneInspector()).create_exact(
+                authority, topology)
         assert type(phase) is DockerPreparationPhase
     assert len(executor.calls) == 30
     observed_projects = []
     for argv, _, environment, _ in executor.calls:
         assert argv[:2] == ("docker", "compose")
-        assert "--file" in argv and str(ROOT / "docker-compose.formal.yml") in argv
+        assert "--file" in argv and str(
+            repository / "docker-compose.formal.yml") in argv
         assert "--project-name" in argv and "--no-build" in argv
+        assert "--no-recreate" in argv
         assert "create" in argv and "up" not in argv and "start" not in argv
         project = argv[argv.index("--project-name") + 1]
         assert project and project != "default"
@@ -197,10 +269,150 @@ def test_compose_creation_failure_never_becomes_success(tmp_path, monkeypatch):
                     evaluation / "real_rag" / "child"),
                 "SPEC017_REAL_RAG_CORPUS_SOURCE": str(ROOT / "docs/knowledge"),
             })
+        repository = _compose_test_root(tmp_path)
         with pytest.raises(CommandExecutionError, match="non-zero"):
             adapters.ComposePreparationDockerOperations(
-                store, report.preparation_id, ROOT,
-                executor=executor).create_exact(authority, topology)
+                store, report.preparation_id, repository,
+                executor=executor, state_inspector=PhaseOneInspector()).create_exact(
+                    authority, topology)
+
+
+@pytest.mark.parametrize("existing_indexes, expected_creates", [
+    ((), 30),
+    (tuple(range(27)), 3),
+    ((0, 2), 28),
+    (tuple(range(30)), 0),
+])
+def test_compose_phase_one_preflight_reuses_exact_and_creates_only_missing(
+    tmp_path, monkeypatch, existing_indexes, expected_creates,
+):
+    report, evaluation = _prepare(tmp_path)
+    executor = RecordingExecutor()
+    with SqliteEvaluationStore(evaluation / "evaluation.db") as store:
+        topology = resolve_formal_compose_topology(
+            store, report.preparation_id, ROOT)
+        authority = resolve_preparation_docker_authority(
+            store, report.preparation_id, ROOT)
+        states = {
+            topology.envelopes[index].planned_execution_identity: "exact"
+            for index in existing_indexes}
+        inspector = PhaseOneInspector(states)
+        monkeypatch.setattr(
+            adapters, "materialize_formal_compose_environment",
+            lambda *args: {
+                "SPEC017_REAL_RAG_CHILD_SOURCE": str(
+                    evaluation / "real_rag" / "child"),
+                "SPEC017_REAL_RAG_CORPUS_SOURCE": str(ROOT / "docs/knowledge"),
+            })
+        repository = _compose_test_root(tmp_path)
+        before = tuple(item.material() for item in topology.envelopes)
+        phase = adapters.ComposePreparationDockerOperations(
+            store, report.preparation_id, repository, executor=executor,
+            state_inspector=inspector).create_exact(authority, topology)
+        after = resolve_formal_compose_topology(
+            store, report.preparation_id, ROOT)
+
+    assert len(inspector.calls) == 30
+    assert len(executor.calls) == expected_creates
+    created = {
+        call[0][call[0].index("--project-name") + 1]
+        for call in executor.calls}
+    expected = {
+        envelope.compose_project_identity
+        for index, envelope in enumerate(topology.envelopes)
+        if index not in existing_indexes}
+    assert created == expected
+    assert phase.preparation_id == report.preparation_id
+    assert phase.topology_commitment == topology.topology_commitment
+    assert phase.project_names == authority.project_names
+    assert tuple(item.material() for item in after.envelopes) == before
+    assert all((repository / item.workspace_identity).is_dir()
+               for item in topology.envelopes)
+
+
+@pytest.mark.parametrize("state", [
+    "partial", "running", "foreign", "ambiguous", "topology",
+    "wrong_image", "wrong_mount",
+])
+def test_compose_phase_one_contradiction_fails_before_any_create(
+    tmp_path, monkeypatch, state,
+):
+    report, evaluation = _prepare(tmp_path)
+    executor = RecordingExecutor()
+    with SqliteEvaluationStore(evaluation / "evaluation.db") as store:
+        topology = resolve_formal_compose_topology(
+            store, report.preparation_id, ROOT)
+        authority = resolve_preparation_docker_authority(
+            store, report.preparation_id, ROOT)
+        states = {
+            topology.envelopes[-1].planned_execution_identity: state}
+        repository = _compose_test_root(tmp_path)
+        with pytest.raises(ValueError):
+            adapters.ComposePreparationDockerOperations(
+                store, report.preparation_id, repository, executor=executor,
+                state_inspector=PhaseOneInspector(states)).create_exact(
+                    authority, topology)
+    assert executor.calls == []
+    assert not (repository / topology.envelopes[0].workspace_identity).exists()
+
+
+def test_compose_phase_one_retry_reuses_materialized_project(
+    tmp_path, monkeypatch,
+):
+    report, evaluation = _prepare(tmp_path)
+
+    class FailOnceExecutor(RecordingExecutor):
+        def __init__(self):
+            super().__init__()
+            self.exact = set()
+            self.failed = False
+
+        def execute(self, argv, *, cwd, environment=None, timeout_seconds=30.0):
+            self.calls.append((tuple(argv), Path(cwd), environment, timeout_seconds))
+            project = argv[argv.index("--project-name") + 1]
+            self.exact.add(project)
+            if not self.failed:
+                self.failed = True
+                return CommandResult(7, "", "private failure")
+            return CommandResult(0, "")
+
+    class DynamicInspector(PhaseOneInspector):
+        def __init__(self, executor):
+            super().__init__()
+            self.executor = executor
+
+        def inspect(self, envelope):
+            self.states[envelope.planned_execution_identity] = (
+                "exact" if envelope.compose_project_identity in self.executor.exact
+                else "absent")
+            return super().inspect(envelope)
+
+    executor = FailOnceExecutor()
+    inspector = DynamicInspector(executor)
+    with SqliteEvaluationStore(evaluation / "evaluation.db") as store:
+        topology = resolve_formal_compose_topology(
+            store, report.preparation_id, ROOT)
+        authority = resolve_preparation_docker_authority(
+            store, report.preparation_id, ROOT)
+        monkeypatch.setattr(
+            adapters, "materialize_formal_compose_environment",
+            lambda *args: {
+                "SPEC017_REAL_RAG_CHILD_SOURCE": str(
+                    evaluation / "real_rag" / "child"),
+                "SPEC017_REAL_RAG_CORPUS_SOURCE": str(ROOT / "docs/knowledge"),
+            })
+        operation = adapters.ComposePreparationDockerOperations(
+            store, report.preparation_id, _compose_test_root(tmp_path),
+            executor=executor, state_inspector=inspector)
+        with pytest.raises(CommandExecutionError):
+            operation.create_exact(authority, topology)
+        phase = operation.create_exact(authority, topology)
+
+    projects = [call[0][call[0].index("--project-name") + 1]
+                for call in executor.calls]
+    assert len(projects) == 30
+    assert len(set(projects)) == 30
+    assert phase.project_names == authority.project_names
 
 
 class DockerInspectionExecutor:
@@ -208,7 +420,9 @@ class DockerInspectionExecutor:
                  unhealthy=False, wrong_image=False, extra=False,
                  runtime_status="running", wrong_network=False,
                  duplicate_id=False, duplicate_name=False,
-                 malformed_mount=False, malformed_health=False):
+                 malformed_mount=False, malformed_health=False,
+                 network_alias_conflict=False,
+                 malformed_network_payload=False):
         self.envelope = envelope
         self.malformed = malformed
         self.foreign = foreign
@@ -221,6 +435,8 @@ class DockerInspectionExecutor:
         self.duplicate_name = duplicate_name
         self.malformed_mount = malformed_mount
         self.malformed_health = malformed_health
+        self.network_alias_conflict = network_alias_conflict
+        self.malformed_network_payload = malformed_network_payload
         self.calls = []
         self.labels = dict(adapters.expected_ownership_labels(envelope))
         if foreign:
@@ -241,6 +457,13 @@ class DockerInspectionExecutor:
         if key[2] == "inspect" and len(key) == 4 and key[3] in {
                 self.envelope.network_identity,
                 *(mount.volume_identity for mount in self.envelope.volume_mounts)}:
+            if kind == "network":
+                network_id = ("n2" if self.network_alias_conflict else "n1")
+                value = {"Id": network_id,
+                         "Name": self.envelope.network_identity,
+                         "Labels": self.labels}
+                values = [value, value] if self.malformed_network_payload else [value]
+                return CommandResult(0, json.dumps(values))
             return CommandResult(1, "")
         if key[2] != "inspect":
             raise AssertionError(key)
@@ -352,17 +575,13 @@ def test_docker_inspector_malformed_output_fails_closed(tmp_path):
         store.close()
 
 
-def test_docker_inspector_wrong_image_is_observed_for_semantic_authority(tmp_path):
+def test_docker_inspector_wrong_image_identity_fails_closed(tmp_path):
     store, envelope = _one_envelope(tmp_path)
     try:
-        inspected = adapters.DockerCliStateInspector(
-            ROOT, executor=DockerInspectionExecutor(
-                envelope, wrong_image=True)).inspect(envelope)
-        runtime = next(item for item in inspected.resources
-                       if item.service == "runtime")
-        assert runtime.image_reference == "foreign/runtime:wrong"
-        assert assess_exact_ownership(
-            envelope, inspected).state.value == "CONTRADICTORY"
+        with pytest.raises(ValueError, match="image identity mismatch"):
+            adapters.DockerCliStateInspector(
+                ROOT, executor=DockerInspectionExecutor(
+                    envelope, wrong_image=True)).inspect(envelope)
     finally:
         store.close()
 
@@ -382,6 +601,49 @@ def test_docker_inspector_missing_resources_stays_unresolved(tmp_path):
             ROOT, executor=Missing()).inspect(envelope)
         assert not inspected.resources
         assert assess_exact_ownership(envelope, inspected).state.value == "UNRESOLVED"
+    finally:
+        store.close()
+
+
+def test_docker_inspector_normalizes_network_id_and_name_alias(tmp_path):
+    store, envelope = _one_envelope(tmp_path)
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    shutil.copy2(ROOT / "docker-compose.formal.yml",
+                 repository / "docker-compose.formal.yml")
+    (repository / envelope.workspace_identity).mkdir(parents=True)
+    try:
+        inspected = adapters.DockerCliStateInspector(
+            repository, executor=DockerInspectionExecutor(envelope)).inspect(envelope)
+        networks = [item for item in inspected.resources
+                    if item.kind is DockerResourceKind.NETWORK]
+        assert len(networks) == 1
+        assert networks[0].identity == envelope.network_identity
+        assert assess_exact_ownership(envelope, inspected).state.value == "AVAILABLE"
+    finally:
+        store.close()
+
+
+def test_docker_inspector_distinct_networks_with_same_name_fail_closed(tmp_path):
+    store, envelope = _one_envelope(tmp_path)
+    try:
+        with pytest.raises(ValueError, match="duplicate resource identity"):
+            adapters.DockerCliStateInspector(
+                ROOT, executor=DockerInspectionExecutor(
+                    envelope, network_alias_conflict=True)).inspect(envelope)
+    finally:
+        store.close()
+
+
+def test_docker_inspector_malformed_duplicate_network_payload_fails_closed(
+    tmp_path,
+):
+    store, envelope = _one_envelope(tmp_path)
+    try:
+        with pytest.raises(ValueError, match="malformed resources"):
+            adapters.DockerCliStateInspector(
+                ROOT, executor=DockerInspectionExecutor(
+                    envelope, malformed_network_payload=True)).inspect(envelope)
     finally:
         store.close()
 
@@ -447,7 +709,8 @@ def test_docker_inspector_observes_workspace_only_from_filesystem_evidence(
         workspace = next(item for item in present.resources
                          if item.kind is DockerResourceKind.WORKSPACE)
         assert workspace.state.value == "PRESENT"
-        assert workspace.ownership_labels == ()
+        assert workspace.ownership_labels == expected_ownership_labels(envelope)
+        assert assess_exact_ownership(envelope, present).state.value == "AVAILABLE"
     finally:
         store.close()
 

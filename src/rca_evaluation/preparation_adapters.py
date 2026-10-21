@@ -36,8 +36,8 @@ from .formal_compose import (
 )
 from .formal_docker_lifecycle import (
     DockerProjectInspection, DockerResourceKind, DockerResourceState,
-    InspectedDockerResource, PreparationDockerAuthority,
-    expected_ownership_labels,
+    InspectedDockerResource, OperationalState, PreparationDockerAuthority,
+    assess_exact_ownership, expected_ownership_labels,
 )
 from .preparation import (
     CandidateCPreparationEvidence, CandidateCPreparationRequest,
@@ -132,13 +132,72 @@ class ComposePreparationDockerOperations:
     def __init__(
         self, store: SqliteEvaluationStore, preparation_id: str,
         repository_root: str | Path, *, executor: CommandExecutor | None = None,
+        state_inspector: object | None = None,
         timeout_seconds: float = 300.0,
     ) -> None:
         self._store = store
         self._preparation_id = preparation_id
         self._root = Path(repository_root).resolve()
         self._executor = executor or SubprocessCommandExecutor()
+        self._state_inspector = state_inspector
         self._timeout = timeout_seconds
+
+    def _inspector(self) -> object:
+        if self._state_inspector is None:
+            self._state_inspector = DockerCliStateInspector(
+                self._root, executor=self._executor)
+        if not callable(getattr(self._state_inspector, "inspect", None)):
+            raise TypeError("typed Docker state inspector is required")
+        return self._state_inspector
+
+    def _classify_phase_one(
+        self, envelope: FormalComposeEnvelope,
+        inspection: DockerProjectInspection,
+    ) -> str:
+        if type(inspection) is not DockerProjectInspection:
+            raise TypeError("typed Docker project inspection is required")
+        inspection.validate()
+        docker_resources = tuple(
+            item for item in inspection.resources
+            if item.kind is not DockerResourceKind.WORKSPACE)
+        workspaces = tuple(
+            item for item in inspection.resources
+            if item.kind is DockerResourceKind.WORKSPACE)
+        if not docker_resources:
+            if (len(workspaces) <= 1
+                    and all(item.identity == envelope.workspace_identity
+                            and item.state is DockerResourceState.PRESENT
+                            and item.ownership_labels ==
+                                expected_ownership_labels(envelope)
+                            for item in workspaces)):
+                return "ABSENT"
+            raise ValueError("Docker Phase 1 workspace observation is ambiguous")
+
+        if not workspaces:
+            inspection = DockerProjectInspection.create(
+                envelope,
+                inspection.resources + (InspectedDockerResource(
+                    DockerResourceKind.WORKSPACE, envelope.workspace_identity,
+                    DockerResourceState.PRESENT,
+                    expected_ownership_labels(envelope)),),
+                inspected_at=inspection.inspected_at)
+        ownership = assess_exact_ownership(envelope, inspection)
+        if ownership.state is not OperationalState.AVAILABLE:
+            raise ValueError(
+                "Docker Phase 1 resources are partial, foreign, or ambiguous: "
+                + ";".join(ownership.details))
+        containers = tuple(
+            item for item in inspection.resources
+            if item.kind is DockerResourceKind.CONTAINER)
+        if any(item.state is DockerResourceState.RUNNING
+               or item.observed_status == "running" for item in containers):
+            raise ValueError("Docker Phase 1 contains an unexpected running resource")
+        if any(item.state not in {
+                DockerResourceState.PRESENT, DockerResourceState.STOPPED}
+               or item.observed_status not in {None, "created", "exited"}
+               for item in containers):
+            raise ValueError("Docker Phase 1 container state is contradictory")
+        return "EXACT_CREATED_STOPPED"
 
     def _validate_phase(
         self, authority: PreparationDockerAuthority,
@@ -176,9 +235,23 @@ class ComposePreparationDockerOperations:
         compose.relative_to(self._root)
         if not compose.is_file():
             raise ValueError("Formal Compose artifact is unavailable")
+        inspector = self._inspector()
+        dispositions = tuple(
+            self._classify_phase_one(envelope, inspector.inspect(envelope))
+            for envelope in topology.envelopes)
+
+        # The deterministic workspace is part of the existing ownership contract.
+        # Establish it only after every envelope has passed read-only preflight.
+        for envelope in topology.envelopes:
+            workspace = (self._root / envelope.workspace_identity).resolve()
+            workspace.relative_to(self._root)
+            workspace.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="spec017-compose-") as temporary:
             temporary_root = Path(temporary)
-            for index, envelope in enumerate(topology.envelopes):
+            for index, (envelope, disposition) in enumerate(zip(
+                    topology.envelopes, dispositions, strict=True)):
+                if disposition == "EXACT_CREATED_STOPPED":
+                    continue
                 override = temporary_root / f"ownership-{index:02d}.yaml"
                 override.write_text(_ownership_override(envelope), encoding="utf-8")
                 environment = (
@@ -201,7 +274,8 @@ class ComposePreparationDockerOperations:
                     "docker", "compose", "--file", str(compose), "--file",
                     str(override), "--project-name",
                     envelope.compose_project_identity, "create",
-                    "--no-build", "--pull", "never", *envelope.services,
+                    "--no-build", "--no-recreate", "--pull", "never",
+                    *envelope.services,
                 )
                 _run(self._executor, argv, self._root,
                      "exact Formal Compose creation", environment=environment,
@@ -401,6 +475,31 @@ class DockerCliStateInspector:
             unique[key] = item
         return list(unique.values())
 
+    def _inspect_networks(
+        self, identities: set[str],
+    ) -> list[Mapping[str, object]]:
+        """Resolve ID/name aliases once while preserving real conflicts."""
+        unique: dict[str, Mapping[str, object]] = {}
+        for identity in sorted(identities):
+            output = _run(self._executor, (
+                "docker", "network", "inspect", identity,
+            ), self._root, "Docker network inspection", timeout=self._timeout)
+            values = _json_list(output, "Docker network inspection")
+            if (len(values) != 1 or not isinstance(values[0], Mapping)):
+                raise ValueError(
+                    "Docker network inspection returned malformed resources")
+            item = values[0]
+            key = item.get("Id") or item.get("ID")
+            if not isinstance(key, str) or not key:
+                raise ValueError(
+                    "Docker network inspection returned an unidentified resource")
+            previous = unique.get(key)
+            if previous is not None and previous != item:
+                raise ValueError(
+                    "Docker network inspection returned duplicate identity")
+            unique[key] = item
+        return list(unique.values())
+
     def _expected_if_present(self, kind: str, names: set[str]) -> set[str]:
         present: set[str] = set()
         for name in sorted(names):
@@ -433,6 +532,7 @@ class DockerCliStateInspector:
                 or not isinstance(runtime_image_items[0], Mapping)
                 or not str(runtime_image_items[0].get("Id", "")).startswith(_SHA256)):
             raise ValueError("Docker Runtime image identity is malformed")
+        runtime_image_identity = str(runtime_image_items[0]["Id"])
         container_ids = set(self._query_ids("container", envelope))
         for prefix in envelope.container_name_prefixes:
             output = _run(self._executor, (
@@ -474,6 +574,9 @@ class DockerCliStateInspector:
             if (not isinstance(image_reference, str) or not image_reference
                     or not isinstance(image_identity, str) or not image_identity):
                 raise ValueError("Docker container image observation is malformed")
+            if (service == "runtime"
+                    and image_identity != runtime_image_identity):
+                raise ValueError("Docker Runtime container image identity mismatch")
             status = state.get("Status")  # type: ignore[union-attr]
             if status not in {"running", "exited", "created", "dead", "paused",
                               "restarting", "removing"}:
@@ -513,7 +616,7 @@ class DockerCliStateInspector:
                            if item.kind is DockerResourceKind.CONTAINER
                            for network in item.networks)
         network_ids.update(self._expected_if_present("network", expected_networks))
-        for item in self._inspect("network", network_ids):
+        for item in self._inspect_networks(network_ids):
             resources.append(InspectedDockerResource(
                 DockerResourceKind.NETWORK, str(item.get("Name", "")),
                 DockerResourceState.PRESENT, _labels(item)))
@@ -534,7 +637,8 @@ class DockerCliStateInspector:
         if workspace.is_dir():
             resources.append(InspectedDockerResource(
                 DockerResourceKind.WORKSPACE, envelope.workspace_identity,
-                DockerResourceState.PRESENT, ()))
+                DockerResourceState.PRESENT,
+                expected_ownership_labels(envelope)))
         resource_keys = [(item.kind, item.identity) for item in resources]
         if len(resource_keys) != len(set(resource_keys)):
             raise ValueError("Docker inspection returned duplicate resource identity")
@@ -1003,6 +1107,7 @@ def prepare_production_resources(
 
     runtime = RuntimeImageReadinessResolver(root, _command_runner=readiness_runner)
     candidate = KnowledgeIndexCandidateCPreparationOperations(root)
+    docker_inspector = DockerCliStateInspector(root, executor=commands)
     container = DockerContainerRealRagInspector(
         root, candidate.authority, executor=commands)
     try:
@@ -1012,9 +1117,9 @@ def prepare_production_resources(
             runtime_image_operations=DockerRuntimeImagePreparationOperations(
                 root, executor=commands),
             docker_operations=ComposePreparationDockerOperations(
-                store, preparation_id, root, executor=commands),
-            docker_state_inspector=DockerCliStateInspector(
-                root, executor=commands),
+                store, preparation_id, root, executor=commands,
+                state_inspector=docker_inspector),
+            docker_state_inspector=docker_inspector,
             candidate_c_operations=candidate,
             candidate_c_authority=candidate.authority,
             container_real_rag_inspector=container)
