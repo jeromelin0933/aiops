@@ -1,6 +1,6 @@
 # PRD-004 — Evidence-Grounded LLM + RAG Root Cause Analysis
 
-## 產品需求文件（PRD）v1.0
+## 產品需求文件（PRD）v1.1
 
 ---
 
@@ -11,9 +11,11 @@
 | Document ID | PRD-004 |
 | Document Name | Evidence-Grounded LLM + RAG Root Cause Analysis |
 | 中文名稱 | 證據驅動 LLM + RAG 根因分析與可稽核 RCA |
-| Version | 1.0 |
+| Version | 1.1 |
 | Status | Approved |
-| Date | 2026-09-18 |
+| Date | 2026-10-22 |
+| Amendment Authority | AIOps Project PM — PM-RAG-EMBEDDING-MIGRATION-20261022 |
+| Amendment Owner | SPEC Lead 富裕 |
 | Author | 林子豪（PM） |
 | Upstream Requirement Authority | PRD-001、PRD-002、PRD-003 |
 | Relevant Upstream Engineering Contracts | SPEC-001～004、SPEC-006～011 current approved contracts |
@@ -23,8 +25,11 @@
 
 ### Version History
 
+Current authority為v1.1。本節原v1.0 Status Honesty及§21.1 implementation ledger保留其歷史scope；其中「不升版」與Implemented描述只適用當時reconciliation，不適用本次新增migration。本次Contract amendment已獲PM批准；新模型Implementation Pending，Provider／Calibration／Four-member／Activation／Formal Evaluation均未由本amendment宣稱PASS。
+
 | Version | Date | Status | Change |
 |---|---|---|---|
+| 1.1 | 2026-10-22 | Approved — Scoped Compatibility Migration | PM-RAG-EMBEDDING-MIGRATION-20261022核准gemini-embedding-2方向、新AC-014-X四人驗證與既有Formal Scope保留。§13.5記錄narrow-scope amendment；v1.0 approval、產品語意及歷史implementation evidence保留。新模型implementation／validation／activation未完成。 |
 | 0.1 | 2026-09-18 | Working Draft | PM D1～D10 decision baseline；未進Repository。 |
 | 0.2 | 2026-09-18 | Draft — PM Review Pending | 正式Repository Draft；整合current authority、D1～D10與PM-approved Revision Round 1。 |
 | 0.3 | 2026-09-18 | Draft — PM Final Approval Candidate | Narrow PM Final Review patch：釐清authority hierarchy、加入`INITIAL_PENDING` downstream projection、封閉Incident `rca_status` refresh semantics。 |
@@ -596,11 +601,11 @@ Provider invocation及可能duplicate cost須可觀察且受第15章bounds治理
 
 ```text
 LLM:          Gemini 2.5 Flash
-Embedding:    Google text-embedding-004
+Embedding:    Google gemini-embedding-2 (Stable Model)
 Vector Store: ChromaDB
 ```
 
-這是current approved PoC direction。Provider／model family變更須governance review，不得silent replacement。
+這是current approved PoC direction。Embedding由歷史text-embedding-004遷移的authority為`PM-RAG-EMBEDDING-MIGRATION-20261022`（§13.5）；LLM direction不變。後續Provider／model family變更仍須governance review，不得silent replacement。
 
 ## 13.2 Provider Abstraction與Prompt
 
@@ -627,6 +632,22 @@ RCA contract不得耦合Gemini-specific response shape。PoC不要求multiple pr
 Default regression不依賴live API。Domain／orchestration tests可用Fake adapters；provider contract tests用mocked／sanitized response；live integration explicit opt-in且需credential。正式Demo／Evaluation必須使用real configured LLM及real RAG，不得以Fake output冒充。Regression count是Engineering Confidence Evidence，不是accuracy。
 
 ---
+
+## 13.5 PM-approved Embedding Compatibility Migration（Additive）
+
+Decision ID：`PM-RAG-EMBEDDING-MIGRATION-20261022`；Approval Date：`2026-10-22`；Approval Authority：AIOps Project PM；Decision：`APPROVED — Scoped Compatibility Migration`；Owner：SPEC Lead 富裕。此為既有RAG Scope的narrow-scope amendment，不重新設計RCA。原v1.0 approval、D1～D10及AC-004-A～X的產品語意完整保留。
+
+本amendment補充§8、§13.4、§14.2～§14.4、§15～§16及§21.1：
+
+1. Incident-driven RCA、Evidence-grounded Generation、Candidate A～E Domain Ownership、SPEC-011 Singular Runtime Authority、LLM Generation Model Direction、Knowledge Snapshot／Build Identity／LKG／Activation Authority、Security／Ground Truth Isolation、SOP_BACKED與Human Knowledge Governance不變。六份Approved Knowledge Sources的內容、版本、分類與批准狀態、Manifest及Corpus Release均保留；不能只因模型遷移而改版。
+2. 新舊embedding space不得混用。新模型重新產生vectors並建立具有新compatibility-bound identity的獨立Chroma L2 collection；維持STAGED → VALIDATED → Explicit Activation，失敗不得破壞歷史build／snapshot／RCA references或LKG。
+3. SPEC-014規範stable v1、768 dimensions、provider normalization、versioned envelopes及單次同步request／30秒／no hidden retries。54→54 cardinality、逐筆identity/order、payload/token bounds、normalization與錯誤分類必須以實際對應evidence驗證；HTTP success或offline tests不構成Provider PASS。不相容須typed finding，不得降低要求以產生PASS。
+4. Calibration-only index在獨立namespace建立，不具有Candidate-C authoritative claim／validation／activation或Formal preparation權威。Retrieval／Applicability須重新calibrate並freeze；不得直接沿用舊threshold宣稱已驗證。Calibration開發資料與Formal Evaluation資料隔離，Ground Truth不得進production retrieval；不得為通過S1～S6反向調整門檻。§16.4原Conclusion Calibration語意不變。
+5. 新AC-014-X四名成員各自的independent rebuild、drift／mismatch、validation、explicit governed activation及retrieval／provenance evidence，為Migration Production Activation與正式Competition Readiness的必要Gate。各自隔離環境的驗證activation可為取得此evidence而執行，不以four-member PASS為前置條件，亦不等於shared Production Activation。歷史`NOT EXECUTED — PM-DIRECTED SKIP FOR CURRENT CLOSURE`完整保留，不延伸至新模型、不改寫為PASS。
+6. SPEC-017的Competition methodology、F1～F8、S1～S6 O1～O10、N／denominator／execution order、adjudication及refresh／restart acceptance均不變。必須fresh preregistration及source-bound preparation；production activation不是evaluation-only preparation／activation的必然前置條件，Final Admission仍須全部required facts fresh verification。
+7. SPEC Lead可依PM授權自主完成一般implementation choices、文件治理及authorized remediation；涉及改變production domain／ownership／security、無法滿足AC-014-X或Formal acceptance、降低安全／隔離／Knowledge Governance／測試要求，或provider compatibility需要未授權產品變更時，必須BLOCK並聯絡PM。
+
+PM Approval不等於Provider PASS、Four-member PASS、Production Activation PASS或Formal Evaluation PASS。本次Slice 0僅修改四份PRD／SPEC；其後execution另依各Slice授權與必要Gate執行。Git mutations由Human執行。`6589815`／`555ee83` historical preparation、claims、Chroma、Docker resources與evidence不重用、不修改、不清理、不rebind。
 
 # 14. ChromaDB與Multi-Member Portability
 

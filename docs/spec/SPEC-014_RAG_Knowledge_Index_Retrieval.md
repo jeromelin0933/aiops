@@ -1,6 +1,6 @@
 # SPEC-014 — RAG Knowledge Index & Retrieval
 
-## Software Design Specification v1.2
+## Software Design Specification v1.3
 
 ---
 
@@ -10,10 +10,11 @@
 |---|---|
 | Document ID | SPEC-014 |
 | Document Name | RAG Knowledge Index & Retrieval |
-| Version | 1.2 |
-| Status | Implemented |
-| Approval Date | 2026-09-26 |
-| Requirement Authority | PRD-004 v1.0 Approved |
+| Version | 1.3 |
+| Status | Approved — Migration Implementation Pending; historical v1.2 scope Implemented |
+| Approval Date | 2026-10-22（migration amendment；historical approvals保留） |
+| Requirement Authority | PRD-004 v1.1 Approved；PRD-001 v3.6 |
+| Migration Authority | PM-RAG-EMBEDDING-MIGRATION-20261022；SPEC Lead Slice 0 authorization |
 | Runtime Authority | SPEC-011 v1.2 |
 | Related Incident Contract | SPEC-008 v1.3 Implemented |
 | Implementation Owner | 富裕 |
@@ -22,6 +23,7 @@
 
 | Version | Date | Status | Change |
 |---|---|---|---|
+| 1.3 | 2026-10-22 | Approved — Migration Implementation Pending | PM-RAG-EMBEDDING-MIGRATION-20261022及SPEC Lead Slice 0授權；§24正式納入narrow-scope embedding compatibility contract及EMD-01～10 reconciliation。D1～D4、G1～G4及歷史v1.2 implementation／AC-014-X skip完整保留；新provider／calibration／four-member／activation evidence未取得。 |
 | 0.1 | 2026-09-25 | Draft | 將Phase 0 Repository Reality Audit及Frozen D1～D4 formalize為Candidate C Engineering Contract；未進行implementation。 |
 | 1.0 | 2026-09-25 | Approved — Implementation Pending | Phase 3 Re-review PASS；D1～D4 Engineering Contract frozen；F-014-01～F-014-06全部closed；正式核准進入implementation planning，implementation尚未開始。 |
 | 1.1 | 2026-09-26 | Draft — Governance Amendment Review Pending | Additive formalize Production Knowledge Governance G1～G4；保留v1.0 Approved engineering baseline及Frozen D1～D4。Slices 1～5已完成並通過各slice audit；Slice 6因production corpus governance gap暫停。本amendment尚待read-only semantic review。 |
@@ -29,6 +31,8 @@
 | 1.2 | 2026-09-26 | Implemented — Documentation-only Closure | Post-integration reconciliation：記錄approved six-document corpus、governed manifest、Google embedding／Chroma adapters、local lifecycle CLI、Knowledge Snapshot及public provenance已實作。AC-014-X未執行，依PM指示以explicit verification exception完成current repository closure；不修改Approved AC或Frozen D1～D4／G1～G4。 |
 
 ### Status Honesty
+
+**v1.3 current status：Approved — Migration Implementation Pending。** 下列v1.2狀態段落、§22及§23保留為historical scope/evidence；其Implemented與既有checkmarks不得套用到新模型。Current migration authority與未完成Gates以§24為準；本次只完成Contract文件amendment，independent audit仍待執行。
 
 > **Draft ≠ Approved；Approved ≠ Implemented；Slice implementation ≠ RCA E2E complete。**
 
@@ -47,7 +51,7 @@ Candidate C擁有Knowledge Corpus、Index、Retrieval、Applicability、Knowledg
 ## 0.2 Authority Hierarchy
 
 ```text
-PRD-004 v1.0 Approved
+PRD-004 v1.1 Approved (v1.0 semantics preserved; migration amendment added)
 >
 Approved active upstream SPECs
 >
@@ -60,7 +64,7 @@ DDS / README / runtime docs
 
 | Domain | Authority | SPEC-014 Boundary |
 |---|---|---|
-| RCA product requirements | PRD-004 v1.0 Approved | Candidate C實作其Knowledge semantics，不改寫Evidence、RCA或Runtime authority |
+| RCA product requirements | PRD-004 v1.1 Approved | Candidate C實作其Knowledge semantics，不改寫Evidence、RCA或Runtime authority |
 | Incident relationship | SPEC-008 v1.3 | Candidate C不得直接寫Incident persistence或`rca_ref` |
 | Runtime | SPEC-011 v1.2 | SPEC-011唯一擁有WHEN、ORDER、retry timing／budget、Runtime Clock、recovery execution與Startup Recovery |
 | Scenario／validation | SPEC-005 | 只屬test／evaluation；不得成為production Knowledge authority |
@@ -425,16 +429,18 @@ Restart或component reopen必須先讀single durable activation authority，再�
 
 ## 7.1 Approved PoC Technology Baseline
 
-PRD-004 v1.0的current Approved PoC technology direction為：
+PRD-004 v1.1依PM-RAG-EMBEDDING-MIGRATION-20261022修訂的current Approved PoC technology direction為：
 
 ```text
-Embedding baseline:   Google text-embedding-004
+Embedding baseline:   Google gemini-embedding-2 (Stable Model)
 Vector store baseline: ChromaDB
 ```
 
 Provider／model family substitution或vector-store technology substitution不得silent replacement，必須先經governance review。Adapter／class、SDK／client API、collection naming、filesystem layout、persistent directory naming及exact configuration key names不是本SPEC的Frozen implementation detail。
 
 ## 7.2 Shared Credential／Capability Boundary
+
+§7.1新baseline依`PM-RAG-EMBEDDING-MIGRATION-20261022`核准；歷史text-embedding-004 baseline及evidence不回溯改寫。Migration-specific API／SDK／envelope／bounds及evidence requirements見§24.2；baseline approval不代表compatibility PASS。
 
 Candidate C只消費approved shared non-secret Profile／capability reference。Candidate C不擁有credential registry、secret storage／resolution、key selection或Profile lifecycle authority，也不得猜測future shared-capability DTO、class或API。
 
@@ -1023,7 +1029,7 @@ Published RCA、materially relevant failed Attempt、outstanding Retrieval Opera
 
 ## AC-014-AG — Approved PoC Technology Baseline
 
-PoC implementation及real integration verification使用Google `text-embedding-004`與ChromaDB。Provider／model family或vector-store technology substitution在沒有governance approval時被拒絕；adapter、SDK API、collection及path命名不作為此AC的固定值。
+Migration PoC implementation及real integration verification使用Stable Google `gemini-embedding-2`與ChromaDB，依`PM-RAG-EMBEDDING-MIGRATION-20261022`及§24取得新compatibility evidence。歷史text-embedding-004 implementation不構成本AC新模型PASS。Provider／model family或vector-store technology substitution在沒有governance approval時被拒絕；migration profile的API／SDK及bounds受§24約束，collection及path命名仍為implementation choice。
 
 ---
 
@@ -1047,13 +1053,15 @@ Future implementation至少須提供：
 - scenario／ground-truth isolation tests；
 - all-four-member rebuild reproducibility test；
 - public port boundary及fake Candidate A／D／E／Runtime integration tests；
-- explicit opt-in Google `text-embedding-004`／ChromaDB validation，不納入credential-free default regression。
+- explicit opt-in Google `gemini-embedding-2`／ChromaDB migration validation，依§24取得新evidence，不納入credential-free default regression；historical text-embedding-004 validation不轉作新模型PASS。
 
 Default regression不得依賴live provider。Fake adapter evidence不得冒充real-RAG Demo成功。
 
 ---
 
 # 21. Implementation-deferred Choices
+
+v1.3 clarification：以下既有deferred choices仍受Frozen semantics約束；對本migration，§24明確固定的model／API target／SDK pin／dimension／envelopes／invocation／timeout優先適用，不得以本節自行放寬。未定threshold及numeric tolerance須versioned calibration／review；不構成預先PASS。
 
 以下不由本SPEC v1.1凍結：
 
@@ -1082,6 +1090,8 @@ Default regression不得依賴live provider。Fake adapter evidence不得冒充r
 ---
 
 # 22. Repository Reality與Implementation Gate
+
+本節及§23保留v1.2歷史closure scope；v1.3新migration implementation與execution gates見§24，尚未完成。現有source/config仍為舊模型hard pins，屬已識別的後續implementation reconciliation gap，不得依新Contract宣稱現有adapter已相容。
 
 Repository reality目前：
 
@@ -1119,3 +1129,85 @@ Repository reality目前：
 - [x] Slice 6 production corpus、adapter wiring及local lifecycle workflow已實作。
 - [ ] AC-014-X未執行；`NOT EXECUTED — PM-DIRECTED SKIP FOR CURRENT CLOSURE`，不是PASS，且沒有four-member evidence。
 - [ ] Live Google provider／real-provider validation未由本closure宣稱PASS；只有actual live execution evidence可支持該聲明。
+
+---
+
+# 24. PM-approved Embedding Compatibility Migration（v1.3 Additive Amendment）
+
+## 24.1 Authority、Scope與Decision Traceability
+
+Decision ID：`PM-RAG-EMBEDDING-MIGRATION-20261022`；Approval Date：`2026-10-22`；Approval Authority：AIOps Project PM；Decision：`APPROVED — Scoped Compatibility Migration`；Owner：SPEC Lead 富裕。Upstream為PRD-001 v3.6 §11.1、PRD-004 v1.1 §13.5；本工程條文依SPEC Lead Slice 0授權正式納入。
+
+本節僅amend embedding compatibility／verification要求，補充§4.3、§5～§7、§9～§10、§15、§17及AC-014-AG；D1～D4、G1～G4、single activation／LKG、immutable Snapshot、typed resolution、Runtime與Candidate A～E ownership不變。六份Approved Knowledge Sources、Manifest、Corpus Release及Human Knowledge Governance不變。Envelope屬embedding input transformation，不是source revision。
+
+以下EMD-01～10為本migration的決策主題對照；approval只涵蓋設計與必要Gate，並非execution結果：
+
+| Decision | Approved direction／required gate | Contract coverage |
+|---|---|---|
+| EMD-01 | Replacement Model：Stable gemini-embedding-2取代text-embedding-004；既有RAG Scope不變 | §7.1、AC-014-AG、§24.1 |
+| EMD-02 | API Version / SDK：Developer API stable v1及pinned SDK；HTTP compatibility仍待evidence | §24.2 |
+| EMD-03 | Dimension / Normalization：768 dimensions、provider normalization；結果須驗證 | §24.2 |
+| EMD-04 | Asymmetric Task Semantics / Envelopes：versioned asymmetric document/query envelopes；不傳task_type | §24.2 |
+| EMD-05 | Approved Document Title：Document envelope的title使用approved document_id | §24.2 |
+| EMD-06 | Multi-content Serialization / Cardinality：54個獨立types.Content→54 embeddings；逐筆identity/order驗證；單次同步、30秒、無hidden retry | §24.2 |
+| EMD-07 | Truncation / Payload / Token Bounds：完整envelope／serialized payload／token checks；不傳auto_truncate；fail closed | §24.2 |
+| EMD-08 | New Identities / Vector Isolation：新capability/profile/build identities、獨立collection，不混用新舊vectors | §24.3；downstream Build／Validate／Activation gates見§24.5 |
+| EMD-09 | Chroma L2 / Retrieval Calibration：保留Chroma L2；Retrieval／Applicability calibration、policy freeze與資料隔離 | §24.3～§24.4；downstream AC-014-X／Activation gates見§24.5 |
+| EMD-10 | Candidate-F Readiness / Fresh Lineage：fresh preregistration／source-bound preparation／Real-RAG readiness；Formal Scope不變 | §24.6、SPEC-017 §19；downstream readiness所需AC-014-X見§24.5 |
+
+## 24.2 Request Contract與Compatibility Evidence
+
+- Backend target為Gemini Developer API stable `v1`，model為`gemini-embedding-2`；使用pinned `google-genai==2.25.0`進行離線serialization verification。API target／SDK static support不等於實際HTTP相容；SDK升級不在本baseline內，須另行SPEC Lead engineering approval，不得silent upgrade。
+- 明確設定`output_dimensionality=768`，採新模型provider-side normalization semantics。每個vector須驗證dimension、finite values、nonzero norm及依已聲明numeric tolerance檢查normalization；不得以client-side renormalization掩蓋provider mismatch。Provider normalization結果尚未驗證，tolerance須版本化並在結果判讀前固定。
+- Document exact template：`title: {approved document_id} | text: {chunk_content}`。Query exact template：`task: search result | query: {canonical_query}`。先依§9.1 canonicalize query，再套固定envelope；兩者使用同一model/profile family。固定literal、空白、encoding及envelope revisions須commitment，不允許依scenario／Ground Truth改prefix。`task_type`與`auto_truncate`均不傳送。
+- 現有approved corpus目標為54個ordered chunks；每chunk使用獨立`types.Content`，在單次同步physical HTTP request取得54個embeddings。不得以`list[str]`可能聚合的serialization替代而未驗證。每筆output須一對一對應原chunk identity且order正確；count相等或HTTP success不足以證明mapping正確。
+- 單次invocation、30秒timeout、no hidden retries；維持現有128 units上限與1,000,000-byte request上限，不得以128為provider已支持item limit的證據。對timeout、rate/quota、request-too-large、unsupported contract、response shape/cardinality/order/dimension/normalization mismatch等產生typed findings；禁止silent retry、fallback、aggregation、truncation、omission或reordering。
+- Bounds檢查須計入完整envelope後的每item與aggregate UTF-8 bytes、實際serialized request payload（含JSON escaping與必要欄位），並驗證provider item／per-item token／aggregate token限制的適用範圍。Bytes不等於tokens；須有model-compatible local counting或可證明的保守上界。未有安全證據即fail closed，不得另加隱藏token API invocation；provider尚未證實的limits維持NOT VERIFIED，不捏造上限。
+- Offline tests須覆蓋獨立Content serialization、exact route/config、absence of task_type/auto_truncate、retry/timeout、bounds與malformed responses；受控provider diagnostic再驗證stable v1、54→54及逐筆mapping/order、768、normalization與實際request/response behavior。Order verification方法須事先定義，不能只檢查陣列長度。
+- 若實際provider無法滿足本contract，輸出typed incompatibility並STOP；不得自行拆批、增加invocation、放寬timeout、改backend／API、改用asynchronous Batch API或降低測試要求。需要變更未授權產品需求或降低驗收要求時BLOCK並聯絡PM。
+
+## 24.3 Versioned Identity與Physical Isolation
+
+新Provider Capability、Embedding Profile（含document/query envelope）、Retrieval Profile、Applicability Policy及Real-RAG Gate Profile必須建立新versioned identities，不得沿用舊名稱卻更換語意。Compatibility commitment至少涵蓋backend/API version、model、SDK compatibility baseline、dimension、normalization、envelope revisions及bounds/retry policy；Build Identity依§4.3 commitment實際build inputs，可透過profile commitment涵蓋。
+
+Chroma L2 physical schema保持；新模型重新embedding並建立獨立collection，不混用舊vectors、不複製generated DB冒充新evidence。New Build Identity由實際canonical inputs衍生，不預填虛構digest。Artifact revision不等於schema version；若schema shape／semantics未變，不為模型遷移任意升schema或改hash algorithm。
+
+`6589815`及`555ee83`相關historical preparation、claims、Chroma、Docker resources與evidence不重用、不修改、不清理、不rebind；原Build／Snapshot／RCA retention與lineage仍受§11.4及AC-014-AB／AF約束。新claim只能屬於明確新授權的authoritative workflow。
+
+## 24.4 Calibration Artifact與Policy Freeze
+
+Calibration Artifact為獨立namespace的vectors／可查詢L2 index及結果commitments，不是Candidate-C STAGED／VALIDATED record，沒有Active／LKG權威，亦不是Candidate-F preparation或Formal evidence。Calibration harness不得呼叫既有Candidate-C durable claim workflow，不掛載既有Candidate-C／Candidate-F stores，不建立production activation pointer；現有stage()會建立claim，不能直接當作此harness。
+
+Artifact須記錄source revision、manifest、ordered chunk identities、embedding/profile/API/SDK、vector/index、dataset/protocol及結果commitments。先以此artifact完成calibration與policy freeze，再獨立建立authoritative Candidate-C build；不得將calibration collection改名、rebind或直接升格為正式build。本baseline不授權vector import捷徑。
+
+Calibration protocol於結果判讀／政策選擇前固定development／held-out分割、positive/negative與knowledge-gap cases、metrics、selection及acceptance criteria。開發calibration資料與Formal Evaluation資料完全隔離；不得使用Formal results或為通過S1～S6調門檻，Ground Truth不得進production query／metadata／retrieval decision。可涵蓋approved operational scenario類別，但不以正式fixture／Oracle labels作為調參資料。
+
+舊`0.2 / 0.5 / 0.8`僅為historical policy，不自動繼承新模型驗證資格。新Retrieval／Applicability Policy須經calibration review後freeze並版本化；確認MATCH、NO_MATCH、SOP_BACKED與Knowledge Gap語意不退化。合法NO_MATCH不得為符合預期答案而改成MATCH；threshold calibration不取代Candidate-F Conclusion Calibration。
+
+## 24.5 Build、Four-member Gate與Activation
+
+Calibration freeze之後，Candidate C在新授權scope內建立新的immutable STAGED build，完成§5.3 validation，再依明確authority explicit activate；structural validation或bounded probe不取代retrieval quality calibration。Production activation前必須完成compatibility、calibration、regression／audit及新AC-014-X四人evidence，且fresh驗證target/profile相容性。
+
+新AC-014-X必須取得四名成員在相互隔離個人環境、相同repository revision／approved sources／manifest／config下各自獨立rebuild、drift／mismatch detection、staged validation、explicit governed activation、retrieval／provenance及reproducibility evidence；不得複製另一成員generated Chroma DB。各自的驗證activation屬取得AC evidence的測試步驟，不要求該AC預先PASS，不等於shared Production Activation。如此不形成activation／AC-014-X依賴循環。
+
+新AC-014-X為Migration Production Activation及正式Competition Readiness必要Gate。§19原AC-014-X與Current Closure Disposition逐字保留；historical `NOT EXECUTED — PM-DIRECTED SKIP FOR CURRENT CLOSURE`不是新模型例外。新的PASS必須是新的source/profile-bound四人evidence，不能改寫歷史。無法滿足時BLOCK並聯絡PM。
+
+## 24.6 Gate Sequence與Slice 0 Boundary
+
+```text
+PM Approval → Approved Contract
+→ Offline Implementation / Regression / Independent Audit / Human Checkpoint A
+→ Controlled Provider Diagnostic
+→ Isolated Calibration → Policy Freeze / Regression / Independent Audit / Human Checkpoint B
+→ New Candidate-C Build / Validate / AC-014-X four-member verification
+→ required final regression / audit / authorized remediation
+→ Production branch: explicit governed Production Activation
+→ Evaluation branch: Fresh Preregistration → fresh preparation-only build / validation / activation
+   → fresh Real-RAG / required readiness verification → Final Admission → ADMITTED
+```
+
+最後兩行為分支而非先後依賴；Production Activation不是Formal Preparation前置條件。Fresh Preregistration在首次preparation mutation前固定methodology、profiles及operational resolution rules；實際build/activation commitments在受控preparation形成，再由Final Admission解析及fresh驗證。Formal Execution另需execution authority，ADMITTED不是本Slice的execution授權。
+
+Checkpoint A/B由Human建立；source/config不變可指同一commit，policy/config變更則須重新audit並建立B，不rebind A。Diagnostic單次request不授權不限次calibration或四人成員rebuild；各操作仍須其明確scope與budget。後續remediation若改source/profile，須重評受影響evidence並重新checkpoint，不沿用stale preparation。
+
+Slice 0只授權四份PRD／SPEC文件修改與documentation semantic verification；不執行source/config變更、provider diagnostic、calibration、AC-014-X、Docker／Chroma／Candidate-C/F mutation、activation或Formal Evaluation。Git mutations由Human執行。新migration implementation及全部execution evidence均未由本amendment完成；Formal Evaluation為NOT EXECUTED，Slots Consumed = 0。Independent Slice 0 audit尚待執行。

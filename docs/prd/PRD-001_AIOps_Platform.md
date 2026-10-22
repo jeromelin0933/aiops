@@ -1,13 +1,14 @@
 # AIOps 智慧維運平台
-## 產品需求文件（PRD）v3.5
+## 產品需求文件（PRD）v3.6
 
 > **文件狀態**：執行中
-> **最後審閱**：2026-09-18
+> **最後審閱**：2026-10-22（Embedding Compatibility Migration amendment）
 > **適用對象**：東吳大學資管系專題四人組
 > **對應文件**：SDD v0.1、ADR-001（均由 Google Drive 管理）
 
 | Version | Date | Change |
 |---|---|---|
+| 3.6 | 2026-10-22 | PM-RAG-EMBEDDING-MIGRATION-20261022：Approved — Scoped Compatibility Migration；embedding direction由text-embedding-004調整為gemini-embedding-2。僅核准既有RAG Scope之compatibility migration；原產品語意、歷史approval及implementation evidence保留，新模型implementation／validation／activation尚未完成。 |
 | 3.1 | 2026-07-26 | 釐清 Metrics Threshold 與 Isolation Forest 雙軌分工；SPEC-003 v1.0 限定 QPS；新增未知 QPS Event 說明；DB Pool 定義為僅觀測與未來擴充。 |
 | 3.2 | 2026-08-12 | Post-SPEC-005 Cross-Document Governance Batch 2B：依 PRD-002 v1.3 與 SPEC-001～004 正式契約同步 S1、S3、S6、模組二驗收與 G3 里程碑；補充 SPEC-005 v1.2 非規範性驗證證據及相關文件。整體平台狀態維持執行中。 |
 | 3.3 | 2026-08-16 | 擴充 downstream Incident Lifecycle 產品方向；調和 Dashboard、Jira、Discord、Email 角色；加入 human-in-the-loop workflow、retention 與 knowledge feedback 方向，並修正過時治理與部署文字。Event Detection authoritative contract 不變。 |
@@ -489,7 +490,7 @@ SPEC-006～011各自既有核准scope Implemented不代表RCA additive integrati
 | Metrics 異常偵測 | Threshold + Isolation Forest | 1.4.x |
 | 向量資料庫 | ChromaDB | implementation detail deferred；不改變既有 dependency contract。 |
 | LLM | Gemini 2.5 Flash API | Approved model direction；exact SDK／package version deferred to RCA Engineering SPEC。 |
-| Embedding | Google text-embedding-004 | — |
+| Embedding | Google gemini-embedding-2（Stable Model） | PM-RAG-EMBEDDING-MIGRATION-20261022；compatibility evidence仍為必要Gate |
 | 後端 | FastAPI + Uvicorn | 0.115.x |
 | 前端 | Jinja2 + Tailwind CSS CDN | — |
 | Incident Work Management | Jira Cloud | integration detail deferred。 |
@@ -500,6 +501,16 @@ SPEC-006～011各自既有核准scope Implemented不代表RCA additive integrati
 本 PRD 不自行指定新的 SDK、REST version、webhook implementation 或未知 package version。
 
 ---
+
+### 11.1 Embedding Compatibility Migration Authority（2026-10-22）
+
+Decision ID：`PM-RAG-EMBEDDING-MIGRATION-20261022`；Approval Authority：AIOps Project PM；Approval Date：`2026-10-22`；Decision：`APPROVED — Scoped Compatibility Migration`；Implementation／Documentation Owner：SPEC Lead 富裕。此決策由PM Formal Authorization授權本次narrow-scope amendment，取代現行embedding technology direction；`text-embedding-004`保留為歷史baseline，不作silent replacement。
+
+本次限於既有RAG Scope的Embedding Compatibility Migration；Incident-driven RCA、Evidence-grounded Generation、Candidate A～E ownership、SPEC-011 Singular Runtime Authority、LLM Generation Model Direction、Knowledge Snapshot／Build Identity／LKG／Activation Authority、Security／Ground Truth Isolation、SOP_BACKED與Human Knowledge Governance均不變。六份Approved Knowledge Sources的內容、版本、分類與核准狀態、Governed Manifest及Corpus Release不因模型遷移改版。
+
+新模型須依PRD-004 v1.1及SPEC-014 v1.3完成compatibility verification、隔離calibration與policy freeze、新build／validation及全新AC-014-X四人驗證，才能取得migration production activation／Competition readiness資格。四人隔離環境的驗證activation不等於shared Production Activation。Production Activation與SPEC-017 evaluation-owned preparation／activation為不同授權流程，前者不是後者的必然前置條件。
+
+PM整體授權包含後續implementation、validation、audit／remediation及通過Gate後的governed activation；本次Slice 0僅執行四份PRD／SPEC文件amendment。PM Approval不等於Provider PASS、Four-member PASS、Production Activation PASS或Formal Evaluation PASS。Git commit／merge／push／branch integration仍由Human執行。
 
 ## 12. Future Work
 
@@ -520,6 +531,8 @@ SPEC-006～011各自既有核准scope Implemented不代表RCA additive integrati
 ---
 
 ## 13. 相關文件與驗證證據
+
+**2026-10-22 current authority update：**PRD-001 v3.6、PRD-004 v1.1、SPEC-014 v1.3及SPEC-017 v1.1納入`PM-RAG-EMBEDDING-MIGRATION-20261022`。新模型implementation／validation／activation尚未完成。本節以下v3.5 mapping與其他v1.0引用保留其歷史reconciliation／既有產品語意來源；current migration authority以本次amendment為準，不把既有Implemented推論為新模型PASS。
 
 正式文件依domain分工：PRD-001 v3.5為執行中的overall platform direction；PRD-002 v1.5 Approved為Event Detection authority；SPEC-001 v2.3、SPEC-002 v1.4、SPEC-003 v1.1、SPEC-004 v1.1為Implemented engineering contracts；PRD-003 v1.1維持Final Alert Correlation／Incident Management detailed requirement authority；`PRD-004 v1.0 Approved`是RCA Domain product requirement authority。SPEC-006～011既有核准scope、SPEC-008 RCA integration與SPEC-011 RCA additive boundary已Implemented；SPEC-012～016 Candidate A～E亦已Implemented。Candidate F、final real-LLM／RAG evaluation、PRD-005 interfaces與完整downstream integrations仍為Implementation Pending；Production Ready為`NO`。
 

@@ -1,6 +1,6 @@
 # SPEC-017 — RCA Evaluation & E2E Validation
 
-## Engineering Specification v1.0
+## Engineering Specification v1.1
 
 ---
 
@@ -10,24 +10,28 @@
 |---|---|
 | Document ID | SPEC-017 |
 | Document Name | RCA Evaluation & E2E Validation |
-| Version | 1.0 |
-| Status | Approved |
-| Date | 2026-10-02 |
-| Approval Date | 2026-10-02 |
+| Version | 1.1 |
+| Status | Approved — Migration Readiness Reconciliation Pending |
+| Date | 2026-10-22 |
+| Approval Date | 2026-10-22（migration amendment；v1.0 approval保留） |
+| Migration Authority | PM-RAG-EMBEDDING-MIGRATION-20261022；SPEC Lead Slice 0 authorization |
 | Owner | SPEC Lead |
-| Product Authority | PRD-004 v1.0 Approved |
+| Product Authority | PRD-004 v1.1 Approved |
 | Oracle Approval / Amendment Authority | 林子豪（PM） |
 | Candidate | Candidate F |
-| Repository Baseline | `7362d458a3908fdce38174db5ddaa69ed002657a` |
+| Repository Baseline | Historical v1.0: `7362d458a3908fdce38174db5ddaa69ed002657a`; Slice 0 inspection: `555ee833b4f274261bfcb670f83cea6139172613`（不是新preparation binding） |
 
 ### Change History
 
 | Version | Date | Status | Change |
 |---|---|---|---|
+| 1.1 | 2026-10-22 | Approved — Migration Readiness Reconciliation Pending | PM-RAG-EMBEDDING-MIGRATION-20261022及SPEC Lead Slice 0授權；新增§19 migration-specific readiness／分階段freeze。F1～F8、O1～O10、Formal methodology與既有PM pre-admission authority保留；未執行新模型preparation／readiness／Formal Evaluation。 |
 | 0.1 | 2026-10-02 | Draft | Phase 2 initial Candidate-F Engineering Contract；formalized Frozen F1～F8及PM Approved S1～S6 Oracle。 |
 | 1.0 | 2026-10-02 | Approved — Implementation Pending | Phase 3 Review提出F-001～F-004；Phase 4 Narrow Patch完成；Phase 3 Re-review PASS且全部findings closed。F1～F8及PM Oracle semantics preserved；正式核准進入implementation handoff planning，implementation尚未開始。 |
 
 ### Status Honesty
+
+v1.1 current authority為本次migration-specific amendment（§19）；下列v1.0 approval敘述及§18 approval block保留其歷史scope，不回溯改寫既有implementation／readiness facts。本次只有Contract文件修改；新模型readiness reconciliation、provider／calibration／AC-014-X／activation evidence均未完成。Formal Evaluation仍為`NOT EXECUTED`，`Slots Consumed = 0`；此為本次治理基線，不宣稱已執行ledger audit。
 
 Draft ≠ Approved；Approved ≠ Implemented；Implemented ≠ Evaluation Executed；Evaluation Executed ≠ Product Acceptance Complete；Product Acceptance Complete ≠ Production Ready。
 
@@ -51,7 +55,7 @@ observe → map → grade → aggregate → report
 
 衝突時依下列順序處理：
 
-1. PRD-004 v1.0 Approved；
+1. PRD-004 v1.1 Approved（v1.0產品語意保留；PM-RAG-EMBEDDING-MIGRATION-20261022新增migration authority）；
 2. PM Approved S1～S6 RCA Evaluation Oracle Handoff；
 3. PM Final Competition Evaluation Scope；
 4. implemented active SPECs；
@@ -823,6 +827,8 @@ Deterministic tests不得被描述成real execution。任何future verification 
 
 # 18. Approval Gate
 
+本節保留v1.0 historical approval文字與當時status；v1.1新增approval scope見文件資訊與§19，不以此歷史block宣稱目前implementation或新模型Gate結果。
+
 SPEC-017 v1.0正式核准為Candidate-F Engineering Contract，並可進入implementation handoff planning。Approval不表示implementation已開始或完成，也不構成任何execution evidence；fixture implementation、verification及real LLM／real RAG／Docker execution仍須於後續phase依本SPEC完成。
 
 ```text
@@ -841,3 +847,58 @@ Docker Candidate-F Gate: NOT EXECUTED
 Product Acceptance Complete: NO
 Production Ready: NO
 ```
+
+---
+
+# 19. Embedding Migration Readiness Amendment（v1.1 Additive）
+
+## 19.1 Authority與Frozen Scope
+
+Decision ID：`PM-RAG-EMBEDDING-MIGRATION-20261022`；Approval Date：`2026-10-22`；Approval Authority：AIOps Project PM；Decision：`APPROVED — Scoped Compatibility Migration`；Owner：SPEC Lead 富裕。依PRD-001 v3.6、PRD-004 v1.1及SPEC-014 v1.3建立新模型readiness contract。
+
+本節補充§2.3、§8.5、§11～§12及verification requirements，不修改Competition Evaluation Methodology、F1～F8、S1～S6 O1～O10、N／denominator／execution order、adjudication、refresh／restart acceptance、§5.4 Conclusion Calibration或合法NO_MATCH語意。Oracle Approval／Amendment Authority不變。既有`PM-SPEC017-R4-PREADMISSION-20261016`及§8.5原文完整保留；本節不授權繞過其禁止事項。
+
+## 19.2 Methodology、Preregistration與Operational Freeze
+
+| 階段 | 固定／產生的內容 | 不得推論 |
+|---|---|---|
+| Methodology freeze | 原approved Oracle／fixtures、N、order、seed、denominator、adjudication、latency及required cases；不得觀察Formal results後修改 | 尚無build/activation不代表可捏造identity |
+| Calibration policy freeze | 在Formal preparation以外完成calibration，批准新Retrieval／Applicability Policy與profiles | Calibration不是Formal Evaluation |
+| Fresh Preregistration | 在首次fresh preparation durable mutation之前，固定methodology、model/provider/profile commitments及operational resolution rules，建立新raw commitment | Preregistration不等於admitted executable Evaluation Plan |
+| Source-bound preparation | 對Human checkpoint後的exact clean repository/config建立新namespace／preparation；受控形成實際build、validation、activation、image、ownership及mount facts | PREPARED不是ADMITTED或Formal execution |
+| Final Formal Admission | 由權威resolver解析全部exact operational identities，拒絕unresolved placeholders；fresh-read全部required facts後形成materialized configuration／Evaluation Plan及admission commitments | Resource存在或舊readiness receipt不是PASS |
+
+Operational materialization只能填入預先聲明來源與規則產生的事實，不可藉機調整methodology、model/profile或policy。Raw preregistration commitment與materialized configuration commitment分開保存；不得手工預填尚不存在的Build Identity、activation digest或source binding。Source commit在Human checkpoint後由preparation綁定，不要求commit內嵌自身hash。
+
+現有preregistration／readiness hard pins仍指向舊模型，屬後續implementation reconciliation，不因本文件批准自動相容。新preregistration artifact revision、Real-RAG Gate Profile、embedding/retrieval/applicability commitments必須新建；不得覆寫或重用historical artifact冒充新evidence。Artifact revision與JSON schema version分開管理，只有shape／semantics改變才要求schema升版。新applicability commitment必須明確指向實際Applicability Policy，不以Embedding Profile代替；resolver／欄位語意須一致驗證。
+
+## 19.3 Calibration／Formal Isolation與Fresh Lineage
+
+Calibration依SPEC-014 §24.4，在獨立namespace與資料集進行；不得觸發Candidate-C authoritative claims、Candidate-F preparation／Formal stores、scenario injection、Formal results或slot consumption。Development／held-out calibration資料與Formal Evaluation資料隔離，protocol在結果判讀前固定；Ground Truth不得進production retrieval decision，不得為通過S1～S6反向調整thresholds。
+
+新模型使用fresh preregistration、source-bound preparation、capability／embedding／retrieval／applicability／Real-RAG profiles及實際build／activation commitments。`6589815`與`555ee83` historical preparation、claims、Chroma、Docker resources與evidence完整保留：不重用、不修改、不清理、不rebind，不將舊模型evidence繼承為新模型PASS。
+
+Source/config/profile改變必須重評evidence freshness並建立適當新lineage；不得修補historical preparation來匹配新source。Final Admission遵守§8.5，重新驗證repository/config、credential capability、build/activation、ownership/isolation及required facts；preparation-time readiness不可取代fresh驗證。
+
+## 19.4 Readiness Gates與Activation Branches
+
+共同前置流程依SPEC-014 §24.6：PM Approval → Approved Contract → Offline Implementation／Regression／Independent Audit／Human Checkpoint A → Controlled Provider Diagnostic → Isolated Calibration → Policy Freeze／Regression／Audit／Human Checkpoint B → New Build／Validate／AC-014-X → required regression／audit／remediation。
+
+之後分為不同authority的流程：
+
+- Production branch：必要Gate PASS後由Candidate-C authority執行明確governed Production Activation，不由Candidate F決定。
+- Evaluation branch：Fresh Preregistration → fresh source-bound preparation → evaluation-owned isolated Candidate-C build／validation／explicit activation → fresh Real-RAG及required readiness verification → Final Formal Admission → ADMITTED。Production Activation不是此branch的必然前置條件；Candidate-F只管理其preparation lineage，不接管Candidate-C或SPEC-011 authority。
+
+四人成員個人環境的驗證activation是AC-014-X取得evidence的步驟，不要求該AC事前PASS；production activation與正式Competition Readiness則必須具備全新的四人有效evidence。歷史`NOT EXECUTED — PM-DIRECTED SKIP FOR CURRENT CLOSURE`不延伸至新模型，不改寫為PASS。§11.2既有conditional scope文字對本migration的適用性已由本次PM decision確定為mandatory。
+
+新Real-RAG readiness必須驗證stable v1、54→54及逐筆chunk mapping/order、768、provider normalization、bounds、單次同步request／30秒／no hidden retries，以及已freeze的calibrated policy與新build/profile相容性。SDK static evidence、offline regression、HTTP success、單人rebuild或舊Gate receipt均不足以代替各required Gate。
+
+Formal Admission前的preparation-only resources依§8.5建立，不形成Formal execution facts、campaign provider invocation、denominator／slot consumption或Formal metrics。Controlled diagnostic、calibration及preparation資源建立各須其獨立scope/budget，不得冒充Formal campaign。ADMITTED不代表本Slice授權Formal Execution。
+
+## 19.5 Reproducibility與Status Honesty
+
+§12 manifest新增migration traceability要求：PM decision reference、approved Contract revisions、exact source commitment、raw preregistration／materialized config commitments、新capability／embedding envelopes／normalization／dimension／retrieval／applicability／Real-RAG profiles、calibration protocol/report commitments、新build／validation／activation、four-member evidence及preparation／admission lineage。Identity由實際facts衍生，不填虛構PASS或digest。
+
+本次Slice 0只執行四份PRD／SPEC文件amendment與documentation semantic verification，不建立physical report，不執行implementation、provider calls、credential access、calibration、AC-014-X、Docker／Chroma／Candidate-C/F／Real-RAG mutation、activation或Formal Evaluation。Git mutations由Human執行。新模型各execution Gate均未由本amendment取得PASS；Formal Evaluation = NOT EXECUTED；Slots Consumed = 0；Independent Slice 0 audit仍待執行。
+
+一般工程選擇與authorized remediation由SPEC Lead處理；若需更改production domain／ownership／security、Oracle或Formal acceptance、降低隔離／Knowledge Governance／測試要求，或無法滿足AC-014-X，依PM escalation boundary BLOCK並聯絡PM，不以文件closure取代所缺evidence。
