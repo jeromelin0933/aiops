@@ -1126,6 +1126,10 @@ class ProviderEmbeddingRequest:
     capability: ProviderCapability
     chunks: tuple[BuildChunk, ...]
     limits: ProviderInvocationLimits
+    # Transient, canonical admission facts. Historical requests may omit this;
+    # the gemini-embedding-2 adapter requires it before any invocation.
+    approved_document_ids: tuple[tuple[str, str], ...] = ()
+    approved_corpus_id: str = ""
 
     def __post_init__(self) -> None:
         _typed_identity(self.build_identity, "kbld", "build_identity")
@@ -1137,6 +1141,23 @@ class ProviderEmbeddingRequest:
             raise KnowledgeValidationError("chunks must be a non-empty tuple of BuildChunk")
         if not isinstance(self.limits, ProviderInvocationLimits):
             raise KnowledgeValidationError("limits must be ProviderInvocationLimits")
+        mapping = self.approved_document_ids
+        if not isinstance(mapping, tuple) or any(
+            not isinstance(item, tuple) or len(item) != 2 for item in mapping
+        ):
+            raise KnowledgeValidationError("approved document mapping must be immutable pairs")
+        for document_identity, document_id in mapping:
+            _typed_identity(document_identity, "kdoc", "approved document identity")
+            _identifier(document_id, "approved document_id")
+        identities = tuple(item[0] for item in mapping)
+        if identities != tuple(sorted(set(identities))):
+            raise KnowledgeValidationError("approved document mapping must be sorted and unique")
+        if mapping and set(identities) != {chunk.document_identity for chunk in self.chunks}:
+            raise KnowledgeValidationError("approved document mapping must cover exactly the chunks")
+        if mapping:
+            _identifier(self.approved_corpus_id, "approved corpus_id")
+        elif self.approved_corpus_id:
+            raise KnowledgeValidationError("approved corpus_id requires a document mapping")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1683,6 +1704,7 @@ class QueryEmbeddingResult:
     rate_units: int = 0
     quota_units: int = 0
     resource_units: int = 0
+    failure: BuildFailureFact | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.capability, ProviderCapability):
@@ -1698,13 +1720,18 @@ class QueryEmbeddingResult:
         if self.invocation_count > 1:
             raise KnowledgeValidationError("hidden query embedding retries are forbidden")
         if self.failure_detail is None:
-            if not self.vector or self.invocation_count != 1:
+            if not self.vector or self.invocation_count != 1 or self.failure is not None:
                 raise KnowledgeValidationError("successful query embedding must contain one invocation")
         elif (
             self.vector or not self.failure_detail or self.failure_detail != self.failure_detail.strip()
             or len(self.failure_detail) > 256 or _contains_secret_shape(self.failure_detail)
         ):
             raise KnowledgeValidationError("provider failure must be bounded and non-secret")
+        if self.failure is not None and (
+            not isinstance(self.failure, BuildFailureFact)
+            or self.failure.detail != self.failure_detail
+        ):
+            raise KnowledgeValidationError("typed query failure must match failure detail")
 
 
 @dataclass(frozen=True, slots=True)

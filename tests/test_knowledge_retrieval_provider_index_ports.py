@@ -1,10 +1,13 @@
 from knowledge_index import (
+    BuildFailureCode, BuildFailureFact,
     CanonicalKnowledgeQuery,
     KnowledgeRetrievalService,
     QueryFilter,
     QueryEmbeddingProviderPort,
+    QueryEmbeddingResult,
     RetrievalIndexPort,
     RetrievalResolution,
+    RetrySafetyDisposition,
     SqliteKnowledgeStore,
 )
 from _knowledge_build_testkit import limits
@@ -30,6 +33,22 @@ def test_deterministic_test_adapters_satisfy_owned_ports(tmp_path) -> None:
         assert result.resolution is RetrievalResolution.MATCH
         assert provider.calls == 1
         assert index.query_calls[0][0] == staged.build_identity
+
+
+def test_optional_typed_query_failure_keeps_legacy_port_construction() -> None:
+    provider = QueryProvider(failure="query embedding provider is unavailable")
+    legacy = provider.embed_query(None)
+    typed = QueryEmbeddingResult(
+        provider.selected, (), 0, "live Gemini invocation is unauthorized",
+        failure=BuildFailureFact(
+            BuildFailureCode.PROVIDER_UNAVAILABLE, "provider_authorization",
+            "live Gemini invocation is unauthorized", RetrySafetyDisposition.DO_NOT_RETRY,
+        ),
+    )
+    assert legacy.failure is None
+    assert legacy.failure_detail == "query embedding provider is unavailable"
+    assert typed.failure.code is BuildFailureCode.PROVIDER_UNAVAILABLE
+    assert typed.failure.field == "provider_authorization"
 
 
 def test_operational_unavailable_is_not_no_match_and_has_no_hidden_retry(tmp_path) -> None:

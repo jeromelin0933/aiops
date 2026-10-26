@@ -42,7 +42,7 @@ from .contracts import (
     RetrySafetyDisposition,
     StagedBuildRecord,
 )
-from .identity import build_identity, canonical_serialize, chunk_identity
+from .identity import build_identity, canonical_serialize, chunk_identity, document_identity
 from .manifest import admit_manifest
 from .security import preflight_outbound_content, sanitize_failure_detail
 
@@ -175,6 +175,33 @@ class KnowledgeBuildService:
                 "provider capability or hidden-retry policy does not match the build",
             ),))
 
+        approved_document_ids: tuple[tuple[str, str], ...] = ()
+        if capability.model == "gemini-embedding-2":
+            resolved: dict[str, str] = {}
+            for admitted in admission.admitted_documents:
+                governed = manifest_documents.get(admitted.source_path)
+                if (
+                    governed is None
+                    or document_identity(admission.manifest.corpus_id, governed.document_id)
+                    != admitted.document_identity
+                ):
+                    return BuildStageResult(None, (_failure(
+                        BuildFailureCode.INVALID_CHUNK_PLAN, "approved_document_ids",
+                        "approved document identity does not match admitted manifest",
+                    ),))
+                previous = resolved.setdefault(admitted.document_identity, governed.document_id)
+                if previous != governed.document_id:
+                    return BuildStageResult(None, (_failure(
+                        BuildFailureCode.INVALID_CHUNK_PLAN, "approved_document_ids",
+                        "approved document identity has conflicting document IDs",
+                    ),))
+            if set(resolved) != {chunk.document_identity for chunk in chunks}:
+                return BuildStageResult(None, (_failure(
+                    BuildFailureCode.INVALID_CHUNK_PLAN, "approved_document_ids",
+                    "approved document mapping does not cover the chunk plan",
+                ),))
+            approved_document_ids = tuple(sorted(resolved.items()))
+
         claim = BuildOperationClaim(
             operation_key,
             derive_build_operation_commitment(
@@ -231,7 +258,10 @@ class KnowledgeBuildService:
                 "provider request exceeds an approved invocation bound",
             ),))
 
-        request = ProviderEmbeddingRequest(build_id, capability, chunks, limits)
+        request = ProviderEmbeddingRequest(
+            build_id, capability, chunks, limits, approved_document_ids,
+            admission.manifest.corpus_id if approved_document_ids else "",
+        )
         try:
             provider_result = self._provider.embed(request)
         except Exception as exc:

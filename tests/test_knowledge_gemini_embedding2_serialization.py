@@ -6,6 +6,7 @@ No production adapter, credential profile, corpus or durable store is used.
 """
 
 from importlib.metadata import version
+from hashlib import sha256
 import json
 import os
 import socket
@@ -25,7 +26,10 @@ def offline_sdk(monkeypatch):
     # Do this before importing/constructing the SDK; explicit fake key is used.
     monkeypatch.setattr(os, "environ", {})
 
+    blocked_calls = []
+
     def blocked(*args, **kwargs):
+        blocked_calls.append("network-or-credential-discovery")
         raise AssertionError("Offline probe forbids network or credential discovery")
 
     for name in ("connect", "connect_ex"):
@@ -79,7 +83,8 @@ def offline_sdk(monkeypatch):
         clients.append((client, sync, async_client))
         return client, captured
 
-    yield SimpleNamespace(make_client=make_client, types=types, errors=errors)
+    yield SimpleNamespace(make_client=make_client, types=types, errors=errors,
+                         blocked_calls=blocked_calls)
     for client, sync, async_client in reversed(clients):
         client.close()
         sync.close()
@@ -139,6 +144,10 @@ def test_54_contents_use_real_sdk_serialization_and_preserve_order(offline_sdk):
     assert int(request.headers["content-length"]) == len(request.content)
     assert b'\\n' in request.content and b'\\"quoted\\"' in request.content
     # No token count or provider item/payload limit is inferred from these bytes.
+    canonical = json.dumps(body, sort_keys=True, ensure_ascii=True,
+                           separators=(",", ":")).encode("utf-8")
+    assert sha256(request.content).hexdigest() != sha256(canonical).hexdigest()
+    assert b"synthetic-offline-not-a-credential" not in request.content
 
 
 def test_list_of_strings_is_one_item_with_54_parts_negative_case(offline_sdk):
@@ -217,3 +226,89 @@ def test_network_and_credential_fallback_guards_are_active(offline_sdk):
             fallback.get("https://offline.invalid")
     with pytest.raises(AssertionError, match="credential discovery"):
         google.auth.default()
+
+
+@pytest.mark.parametrize("stage,failures", [
+    ("sync", ()), ("async", ()), ("async", ("sync",)),
+    ("sdk", ()), ("sdk", ("sync",)), ("sdk", ("async",)),
+    ("sdk", ("sync", "async")), ("sdk", ("suspend",)),
+])
+def test_s2_partial_constructor_cleanup_attempts_and_primary_failure(
+    offline_sdk, monkeypatch, stage, failures,
+):
+    from google import genai
+    from knowledge_index import google_embedding_adapter as adapter
+
+    events = []
+
+    class Sync:
+        def __init__(self, **kwargs):
+            events.append("sync acquire")
+            if stage == "sync":
+                raise RuntimeError("synthetic-secret-sync-constructor")
+
+        def close(self):
+            events.append("sync close")
+            if "sync" in failures:
+                raise RuntimeError("synthetic-secret-sync-cleanup")
+
+    class Suspend:
+        def __await__(self):
+            yield None
+
+    class Async:
+        def __init__(self, **kwargs):
+            events.append("async acquire")
+            if stage == "async":
+                raise RuntimeError("synthetic-secret-async-constructor")
+
+        async def aclose(self):
+            events.append("async close")
+            if "async" in failures:
+                raise RuntimeError("synthetic-secret-async-cleanup")
+            if "suspend" in failures:
+                await Suspend()
+
+    def constructor(**kwargs):
+        events.append("sdk construct")
+        raise RuntimeError("synthetic-secret-SDK-constructor")
+
+    monkeypatch.setattr(httpx, "Client", Sync)
+    monkeypatch.setattr(httpx, "AsyncClient", Async)
+    # Acquisition doubles are deliberately not real HTTPX clients. Isolate the
+    # constructor-failure fixture from Pydantic's real-client field validation.
+    monkeypatch.setattr(offline_sdk.types, "HttpOptions", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(genai, "Client", constructor)
+    with pytest.raises(ValueError) as failure:
+        adapter._create_gemini_offline_mock_client(
+            lambda *_: pytest.fail("constructor failure cannot delegate"))
+    detail = str(failure.value)
+    assert "synthetic-secret" not in detail and failure.value.__suppress_context__
+    expected_stage = {"sync": "sync acquisition", "async": "async acquisition",
+                      "sdk": "SDK constructor"}[stage]
+    assert expected_stage in detail  # Primary failure never replaced by cleanup error.
+    assert events.count("sdk construct") == int(stage == "sdk")
+    assert events.count("sync close") == int(stage != "sync")
+    assert events.count("async close") == int(stage == "sdk")
+    for cleanup in ("sync", "async"):
+        if cleanup in failures or (cleanup == "async" and "suspend" in failures):
+            assert cleanup in detail
+
+
+def test_s2_partial_cleanup_all_owners_and_no_second_attempt(offline_sdk):
+    from knowledge_index.google_embedding_adapter import _close_offline_resources
+
+    events = []
+
+    def close(name):
+        events.append(name)
+        raise RuntimeError("synthetic-secret-cleanup")
+
+    async def aclose():
+        close("async")
+
+    failures = _close_offline_resources(
+        SimpleNamespace(close=lambda: close("sdk")),
+        SimpleNamespace(close=lambda: close("sync")), SimpleNamespace(aclose=aclose))
+    assert events == ["sdk", "sync", "async"]
+    assert failures == ("sdk", "sync", "async")

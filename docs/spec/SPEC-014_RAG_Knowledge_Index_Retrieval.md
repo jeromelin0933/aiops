@@ -1,6 +1,6 @@
 # SPEC-014 — RAG Knowledge Index & Retrieval
 
-## Software Design Specification v1.3
+## Software Design Specification v1.4
 
 ---
 
@@ -10,11 +10,12 @@
 |---|---|
 | Document ID | SPEC-014 |
 | Document Name | RAG Knowledge Index & Retrieval |
-| Version | 1.3 |
-| Status | Approved — Migration Implementation Pending; historical v1.2 scope Implemented |
-| Approval Date | 2026-10-22（migration amendment；historical approvals保留） |
+| Version | 1.4（Phase A Minimum Controls narrow-scope amendment） |
+| Status | Approved — Minimum Controls Amendment；Slice 4 Phase B implementation pending；v1.3 Approved migration scope與historical v1.2 Implemented scope保留 |
+| Approval Date | 2026-10-23（v1.4 SPEC Lead formal document approval；v1.3及更早approval dates保留） |
 | Requirement Authority | PRD-004 v1.1 Approved；PRD-001 v3.6 |
 | Migration Authority | PM-RAG-EMBEDDING-MIGRATION-20261022；SPEC Lead Slice 0 authorization |
+| Diagnostic Security Authority | PM-DIAG-MINIMUM-CONTROLS-20261022（MODIFY — APPROVED WITH SCOPE SIMPLIFICATION；Parent：PM-RAG-EMBEDDING-MIGRATION-20261022）；SPEC Lead 2026-10-23 formal v1.4 document approval |
 | Runtime Authority | SPEC-011 v1.2 |
 | Related Incident Contract | SPEC-008 v1.3 Implemented |
 | Implementation Owner | 富裕 |
@@ -23,6 +24,8 @@
 
 | Version | Date | Status | Change |
 |---|---|---|---|
+| 1.4 | 2026-10-23（approval date） | Approved — Minimum Controls Amendment；Phase B implementation pending | SPEC Lead採納`PASS — MAJOR-01 / MAJOR-02 CLOSED; SLICE 4 PHASE A INDEPENDENT RE-AUDIT PASS; READY FOR SPEC LEAD REVIEW`，正式`APPROVE — SPEC-014 v1.4 Minimum Controls Narrow-scope Amendment`。批准範圍僅為§24.6.1與必要文件治理；PM-DIAG security simplification與SPEC文件approval分屬不同authority。前次BLOCK／remediation及下列同版revision紀錄保留；不授權Live Google Provider invocation。 |
+| 1.4 | 2026-10-23（revision date；非approval date） | Draft — Phase A Independent Re-audit Pending | 依PM-DIAG-MINIMUM-CONTROLS-20261022及SPEC Lead Phase A授權，對§24.6.1增補minimum controls；本次MAJOR-01／02 narrow remediation同步版本／authority／status與Authorization Record必填契約。前次Phase A document audit為BLOCK，尚無v1.4 approval或PASS；v1.3及更早歷史紀錄保留。 |
 | 1.3 | 2026-10-22 | Approved — Migration Implementation Pending | PM-RAG-EMBEDDING-MIGRATION-20261022及SPEC Lead Slice 0授權；§24正式納入narrow-scope embedding compatibility contract及EMD-01～10 reconciliation。D1～D4、G1～G4及歷史v1.2 implementation／AC-014-X skip完整保留；新provider／calibration／four-member／activation evidence未取得。 |
 | 0.1 | 2026-09-25 | Draft | 將Phase 0 Repository Reality Audit及Frozen D1～D4 formalize為Candidate C Engineering Contract；未進行implementation。 |
 | 1.0 | 2026-09-25 | Approved — Implementation Pending | Phase 3 Re-review PASS；D1～D4 Engineering Contract frozen；F-014-01～F-014-06全部closed；正式核准進入implementation planning，implementation尚未開始。 |
@@ -32,7 +35,7 @@
 
 ### Status Honesty
 
-**v1.3 current status：Approved — Migration Implementation Pending。** 下列v1.2狀態段落、§22及§23保留為historical scope/evidence；其Implemented與既有checkmarks不得套用到新模型。Current migration authority與未完成Gates以§24為準；本次只完成Contract文件amendment，independent audit仍待執行。
+**v1.4 current document status：Approved — Minimum Controls Narrow-scope Amendment（SPEC Lead formal approval：2026-10-23）。** 最新PM以`PM-DIAG-MINIMUM-CONTROLS-20261022`核准Diagnostic Security Governance Simplification；SPEC Lead另於本次決策採納Phase A Independent Re-audit `PASS — MAJOR-01 / MAJOR-02 CLOSED`後批准v1.4文件，兩種approval不可互代。前次Phase A document audit的`BLOCK — DOCUMENT CONTRACT / PM AUTHORITY FINDINGS REQUIRE REMEDIATION`及remediation evidence仍作歷史紀錄，不回溯刪改。v1.3 migration amendment及下列v1.2狀態段落、§22、§23保留historical scope/evidence，其Implemented與既有checkmarks不得套用到新模型。Current diagnostic security authority為最新PM決策；migration其餘未完成Gates仍依v1.3 §24與parent PM authority。v1.4文件批准不授權Slice 4 Phase B實作或Live Google Provider Execution；後者仍為`NOT AUTHORIZED`。Provider Compatibility、Calibration、new Build／Activation與SPEC-017 readiness均未PASS；Formal Evaluation為`NOT EXECUTED`且Slots Consumed = 0。
 
 > **Draft ≠ Approved；Approved ≠ Implemented；Slice implementation ≠ RCA E2E complete。**
 
@@ -1211,3 +1214,36 @@ PM Approval → Approved Contract
 Checkpoint A/B由Human建立；source/config不變可指同一commit，policy/config變更則須重新audit並建立B，不rebind A。Diagnostic單次request不授權不限次calibration或四人成員rebuild；各操作仍須其明確scope與budget。後續remediation若改source/profile，須重評受影響evidence並重新checkpoint，不沿用stale preparation。
 
 Slice 0只授權四份PRD／SPEC文件修改與documentation semantic verification；不執行source/config變更、provider diagnostic、calibration、AC-014-X、Docker／Chroma／Candidate-C/F mutation、activation或Formal Evaluation。Git mutations由Human執行。新migration implementation及全部execution evidence均未由本amendment完成；Formal Evaluation為NOT EXECUTED，Slots Consumed = 0。Independent Slice 0 audit尚待執行。
+
+### 24.6.1 Controlled Provider Diagnostic — Minimum Necessary Controls（Additive）
+
+最新PM Decision `PM-DIAG-MINIMUM-CONTROLS-20261022`（`MODIFY — APPROVED WITH SCOPE SIMPLIFICATION`）以`PM-RAG-EMBEDDING-MIGRATION-20261022`為Parent Authority，將本節Controlled Provider Diagnostic的安全設計限定為Minimum Necessary Controls。PM-DIAG-01：不採用Ed25519 cryptographic grant dependency；PM-DIAG-02：批准human-governed Live authorization；PM-DIAG-03：批准minimal API usage monitoring；PM-DIAG-04：批准offline／live separation。Ed25519、private／public Trust Root及獨立完整Atomic Accounting Framework不是本次必要交付。先前S4-D1／S4-D2工程授權方案已由最新PM決策取代；其歷史決策、audit與BLOCK evidence仍須保留，不回溯改寫。本addendum不變更§24.2、EMD-01～10、Frozen D1～D4／G1～G4或下游驗收條件。
+
+- **Live authorization與source gate：** 每次Live Diagnostic Campaign須事先取得PM明確授權，預設`Live DENIED`且執行者須另作explicit Live mode opt-in。受控Authorization Record須綁定Human Git Checkpoint A後的exact committed clean source revision、執行者、model、credential profile identity、批准的input scope、request／invocation／usage budget、有效期及30-second timeout／one synchronous attempt／no-retry policy。Runner須核對實際HEAD、clean working tree、record與source／input的一致性；一般caller不得任意取代授權來源或紀錄路徑，caller-supplied approved flag、verification物件或字串均不構成授權。任一前置條件不成立，須在credential discovery與provider transport前fail closed。當前Slice 1 HEAD不代表完成Slice 2～4後的Diagnostic execution revision。
+
+Authorization Record為每次Live Campaign的必填、受控且可稽核契約；下列各欄均須存在、格式有效，並於每次attempt前與實際執行事實及同一PM核准scope逐一比對。Record自身或caller宣稱`approved`不取代受控來源的PM授權核對；Record、授權來源與usage／attempt紀錄路徑不得由一般caller任意指定或替換。任一欄缺失、不一致、超出核准範圍或無法確認上限，均須於credential discovery／transport前fail closed。
+
+| Mandatory binding | 可驗證條件／拒絕準則 |
+|---|---|
+| PM Approval Reference | 非空且可在受控human-governed PM Live Campaign authorization來源解析；決策須明確涵蓋本次campaign，不得以parent migration approval代替Live execution approval。 |
+| Authorized SPEC Lead Identity | 非空、明確身分；與PM核准紀錄指定的SPEC Lead／執行監督權責一致，不接受caller自行宣稱。 |
+| Authorized Runner／Execution Identity | 非空、明確身分；與PM核准紀錄及執行時可驗證的runner／execution principal一致，未列入者拒絕。 |
+| Exact Clean Committed Source Revision | 完整commit identity；須等於Human Checkpoint A後核准revision及執行時HEAD，且working tree（含untracked files）clean；不得使用本次Slice 1 baseline冒充完成後source。 |
+| Provider Identity | 明確為本campaign核准的`google` Developer API provider，與實際client target一致；其他provider拒絕。 |
+| Model Identity | 明確為本campaign核准的`gemini-embedding-2`，與實際request model一致；fallback或別名替換拒絕。 |
+| Credential Profile Identity | 非空opaque profile identity，須與PM核准且執行時使用的profile一致；不得包含API key、token或其他secret material。 |
+| Diagnostic Purpose | 明確限定`CONTROLLED_PROVIDER_DIAGNOSTIC`；Build、Calibration、Production或Formal Evaluation目的拒絕。 |
+| Input Scope | 明列核准的document／query種類、來源及數量；每個實際輸入須在scope內，Scenario／Oracle／Ground Truth不得成為production retrieval輸入。 |
+| Input Commitment | 對核准的canonical ordered inputs與document／query envelopes形成固定commitment；執行時重算後須exact match，不容許變更順序、內容或prefix。 |
+| Maximum Invocation Count | 明確正整數且不超PM核准budget；包含同campaign已記錄及本次預占attempt，超額或記錄不可用即拒絕，不從retry分類推得額外呼叫。 |
+| Usage／Input Bounds | 明列適用的item數、完整envelope每item／aggregate token與UTF-8 byte bounds、serialized payload上限及安全依據；執行時逐項驗證，不能證明token／provider item安全或任一上限時拒絕。 |
+| Cost Limit | 明列核准的幣別／計量單位及有限、可比較的正上限；本次呼叫前須能以核准的保守上界證明累積預算不超限，否則拒絕，不以估計值冒充Google Billing。 |
+| Authorization Validity Start／Expiration | 兩個明確可比較且含時區的時間點，start早於expiration；每次attempt均須落在核准時窗內，過期或時鐘／時區無法判定即拒絕。 |
+| Timeout／Attempt／Retry Policy | 固定timeout = 30 seconds、每個request `attempts=1`、單次同步呼叫、no hidden retry／fallback／split；record與實際SDK options任一不符即拒絕。 |
+| Single Authorized Host／Single Active Runner Scope | 明列唯一host identity及本campaign適用的runner exclusivity；實際host須一致且執行鎖確證無第二active runner，無法確認即拒絕。 |
+
+Provider未回傳usage時，該usage事實記為`UNKNOWN`而非已知零值；若費用或使用量無法可靠確認，仍須依事前核准的保守上界占用budget並交human adjudication，不得自動繼續後續呼叫或宣稱正式Google Billing。這不放寬§24.2既有token／payload／provider item安全證據要求。
+
+- **Single-host usage與crash safety：** Live Campaign限定single authorized host、single active Diagnostic Runner，使用必要的執行鎖及受控位置的輕量持久化Attempt／Usage／Outcome紀錄。每次provider attempt必須在transport前記錄並占用核准budget；duplicate、budget exceeded、紀錄或鎖不可用時fail closed。Crash、TIMEOUT或UNKNOWN outcome不自動重新送出、不自動退還已占用budget，須保留可稽核狀態供human adjudication。可選適合prototype的JSONL、SQLite或等效簡單可靠方案，不強制建立完整Accounting Domain或multi-host coordination。保持30-second timeout、one synchronous attempt、no hidden retry／fallback／split；`SAME_OPERATION_ONLY`等retry-safety分類不授權自動重試。Provider usage未提供時明記`UNKNOWN`；cost estimate不得冒充正式Google Billing。
+- **Failure與evidence safety：** Diagnostic須以可稽核且secret-safe的typed failure／CLI reporting區分rate limit、quota／billing、credential／authentication、network／timeout、provider unavailable、response contract invalid及ambiguous／unknown outcome，並記錄attempt數、source／input／budget commitment及非敏感結果。不將API key、Authorization header或敏感provider response複製到log、CLI或evidence。失敗或不明結果不形成Provider PASS，亦不觸發Candidate-C／Candidate-F durable mutation。
+- **分段Gate與證據誠實性：** 原§24.6順序保持；於Offline Implementation／Regression／Independent Audit之後先完成Cumulative Audit，再由Human建立Git Checkpoint A並確定exact clean source revision。其後仍須另取得PM Live Campaign Authorization，方可執行Controlled Provider Diagnostic；只有實際provider observation依事前固定判準完成Provider Compatibility Acceptance，才可進入後續Calibration／new Build／Activation／SPEC-017 Evaluation各自的授權Gate。Offline MockTransport PASS不是Provider PASS。首次真實Diagnostic不要求事前已有該次呼叫才可能產生的Provider PASS，但input、item／token／payload安全bounds、budget、有效期與判讀準則必須事前核准；§24.2的54→54、768、document／query envelopes、逐筆identity／order、normalization及fail-closed驗收不放寬。本addendum只界定後續offline implementation的安全契約；本Phase A不授權Diagnostic Runner實作，Live Google invocation仍為`NOT AUTHORIZED`。

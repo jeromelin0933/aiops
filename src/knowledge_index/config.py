@@ -25,6 +25,40 @@ class KnowledgeConfigError(ValueError):
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class GeminiEmbedding2Profile:
+    """Offline-selectable embedding commitment; no retrieval or activation claim."""
+
+    version: str = "1.0"
+    capability_identity: str = "spec014-google-gemini-embedding-2-capability-v1"
+    embedding_profile_identity: str = "spec014-gemini-embedding-2-embedding-v1"
+    provider: str = "google"
+    model: str = "gemini-embedding-2"
+    api_version: str = "v1"
+    sdk_baseline: str = "google-genai==2.25.0"
+    dimension: int = 768
+    document_envelope: str = "title: {approved document_id} | text: {chunk_content}"
+    query_envelope: str = "task: search result | query: {canonical_query}"
+    normalization: str = "provider-normalized-conditional-v1"
+    bounds_policy: str = "verified-token-and-serialized-payload-v1"
+    retry_policy: str = "one-sync-attempt-30s-v1"
+    normalization_tolerance: float | None = None
+    retrieval_calibrated: bool = False
+    applicability_calibrated: bool = False
+
+
+GEMINI_EMBEDDING2_PROFILE = GeminiEmbedding2Profile()
+
+
+def select_gemini_embedding2_capability(profile_reference: OpaqueExternalReference) -> ProviderCapability:
+    """Explicit offline selection; tracked Production config stays on its historical model."""
+    profile = GEMINI_EMBEDDING2_PROFILE
+    return ProviderCapability(
+        profile_reference, profile.capability_identity, profile.provider,
+        profile.model, profile.embedding_profile_identity, profile.dimension, True,
+    )
+
+
 def _mapping(value: Any, label: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping) or any(not isinstance(key, str) for key in value):
         raise KnowledgeConfigError(f"{label} must be a string mapping")

@@ -426,3 +426,13 @@ def test_client_factory_keeps_sdk_hidden_retry_disabled_with_fake_sdk(monkeypatc
     assert client.fake is True
     assert observed["attempts"] == 1
     assert observed["timeout"] == 30_000
+
+
+def test_historical_numeric_string_conversion_remains_unchanged(tmp_path) -> None:
+    selected, _, _, _, request = _document_request(tmp_path)
+    models = FakeModels(response=SimpleNamespace(
+        embeddings=[SimpleNamespace(values=["0.25"] * 768)],
+    ))
+    result = GoogleEmbeddingAdapter(SimpleNamespace(models=models), selected).embed(request)
+    assert result.failure is None
+    assert result.embeddings[0].values == (0.25,) * 768
