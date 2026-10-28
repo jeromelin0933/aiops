@@ -170,6 +170,19 @@ def _gemini_http_options(*, timeout_seconds: float) -> Any:
     )
 
 
+def _prepare_counting_sdk_request(envelope: str) -> tuple[Any, bytes, dict]:
+    """Pure pinned-SDK conversion; retains SDK dependency in this adapter."""
+    from google.genai import types, models, _common
+    _require_pinned_gemini_sdk()
+    content = types.Content(role="user", parts=[types.Part(text=envelope)])
+    params = types._CountTokensParameters(model=GEMINI_MODEL, contents=[content])
+    wire = models._CountTokensParameters_to_mldev(SimpleNamespace(vertexai=False), params, None, params)
+    route = wire.pop("_url")
+    wire.pop("config", None)
+    body = json.dumps(_common.encode_unserializable_types(_common.convert_to_dict(wire))).encode("utf-8")
+    return (content,), body, route
+
+
 def _create_diagnostic_live_sdk_client(api_key: str, sync: Any, async_client: Any) -> Any:
     """SDK ownership stays in this adapter; runner owns authorization/attempts.
 

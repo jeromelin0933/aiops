@@ -13,7 +13,8 @@
 | 中文名稱 | 證據驅動 LLM + RAG 根因分析與可稽核 RCA |
 | Version | 1.1 |
 | Status | Approved |
-| Controlled Batching Amendment | v1.1-based Draft — Combined Independent Document Audit／PM及文件權責人Approval Pending；依SPEC Lead轉交的PM回覆「APPROVE — SPEC-014 Controlled Batching Narrow Amendment Direction」；未新增PM Decision ID，不構成Live Authorization |
+| Controlled Batching Amendment | v1.1-based Approved — Controlled Batching Narrow Amendment；baseline version不變；不構成Live Authorization |
+| Controlled Batching Approval Record | SPEC Lead 2026-10-28依PM最新D4文件核准授權，採納既有Combined Independent Document Audit — PASS／Findings NONE，正式核准§13.5第3點既有batching修訂；Authority為PM「APPROVE — SPEC-014 Controlled Batching Narrow Amendment Direction」及「APPROVE WITH MINIMUM NECESSARY CONTROLS — SPEC-014 Independent Counting Observation」。未新增PM Decision ID，未重新執行Audit，不授權Live，不構成Real-RAG／RCA PASS或Production Ready。 |
 | Approved Amendment | 2026-10-28 Minimum Necessary Competition Scope Reset Amendment on v1.1；Approved；baseline version不變 |
 | Scope Reset Approval Record | SPEC Lead 2026-10-28：APPROVE — Minimum Necessary Competition Scope Reset Amendment；依PM-AIOPS-COMPETITION-SCOPE-RESET-20261028採納Consolidated Independent Semantic Audit：PASS／Findings NONE／READY FOR APPROVAL；僅核准本次新增條款，不授權implementation、Live Provider或Formal Evaluation |
 | Date | 2026-10-22 |
@@ -32,6 +33,7 @@ Current authority為v1.1。本節原v1.0 Status Honesty及§21.1 implementation 
 
 | Version | Date | Status | Change |
 |---|---|---|---|
+| v1.1-based batching amendment | 2026-10-28（approval date） | Approved — Controlled Batching Narrow Amendment | SPEC Lead依PM最新D4授權採納既有Combined Independent Document Audit PASS／Findings NONE，僅完成§13.5第3點Approval／Status收尾；技術及RCA產品語意不變，下列draft、既有Approval及execution records保留。不產生Real-RAG／RCA或Formal PASS，不授權Live。 |
 | v1.1-based batching draft | 2026-10-28 | Draft — Combined Independent Document Audit／PM及文件權責人Approval Pending | 依PM Controlled Batching方向核准及SPEC Lead跨文件修訂授權，僅對齊§13.5第3點與SPEC-014 Sequential Synchronous Batching草案；保留Real-RAG／Evidence-grounded RCA產品語意與全部正式驗收。本草案尚未生效，不回溯改寫既有Approval／execution records，不授權implementation或Live。 |
 | v1.1-based amendment | 2026-10-28（approval date） | Approved — Minimum Necessary Competition Scope Reset Amendment | SPEC Lead正式採納Consolidated Independent Semantic Audit PASS／Findings NONE並核准§13.5適用註記及§17.5；僅完成Approval／Status收尾，保留下列draft與歷史approval；不構成Real S2、Full Acceptance、Formal PASS或Production Ready。 |
 | v1.1-based draft | 2026-10-28 | Draft — Scope Reset Approval Pending | 依PM-AIOPS-COMPETITION-SCOPE-RESET-20261028僅增補§13.5適用註記與§17.5 Milestone A Technical Handoff；不改AC-004-A～X，不授權implementation或Live execution。 |
@@ -641,6 +643,10 @@ Default regression不依賴live API。Domain／orchestration tests可用Fake ada
 
 ## 13.5 PM-approved Embedding Compatibility Migration（Additive）
 
+**Controlled Batching reconciliation — Approved，2026-10-28：** SPEC Lead依上列PM最新D4授權採納既有Combined Independent Document Audit PASS／Findings NONE，正式核准下列第3點，與SPEC-014及SPEC-017 §19.4完成Approval Status Reconciliation；技術條款、v1.1 baseline、Real-RAG／Evidence-grounded RCA產品需求及原正式Acceptance不變。Provider Compatibility仍為NOT EXECUTED，Real-RAG／RCA未由本次批准取得PASS，不構成Production Ready或PM Live Authorization。
+
+**Historical Controlled Batching draft status（原文保留；已由上列正式Approval收尾）：**
+
 **Controlled Batching reconciliation — Draft／Combined Independent Document Audit及PM／文件權責人Approval Pending：** 下列第3點為本次待審修訂，對齊SPEC-014 v1.4-based batching draft及SPEC-017 §19.4 draft；其餘產品需求與既有核准紀錄不變。PM方向核准不是本PRD Amendment Final Approval；未核准前不取代原Approved契約，原單次request文字可由Human Checkpoint `39d199b92187f70da9f54e770af34df37ec13da1`核對。本次不宣告Provider Compatibility或Real-RAG／RCA PASS，不授權Live Provider。
 
 **2026-10-28 Scope Reset amendment — Approved：** 本次文件amendment已獲SPEC Lead正式核准，不改既有v1.1 approval及historical execution status。下列第5點的Milestone A Competition readiness採SPEC-014 §24.5已核准amendment的必要四人獨立Build→Validate→Activate→Retrieve證據，不等於完整Formal／Production Acceptance；第6點的fresh preregistration／source-bound preparation／Final Admission限定於SPEC-017 §19.6已核准amendment的B Formal branch，不作為A technical handoff前置條件。其餘compatibility、calibration、isolation、Knowledge／Domain authority與正式acceptance不變；本次不產生任何execution PASS或Live authorization。
@@ -651,7 +657,7 @@ Decision ID：`PM-RAG-EMBEDDING-MIGRATION-20261022`；Approval Date：`2026-10-2
 
 1. Incident-driven RCA、Evidence-grounded Generation、Candidate A～E Domain Ownership、SPEC-011 Singular Runtime Authority、LLM Generation Model Direction、Knowledge Snapshot／Build Identity／LKG／Activation Authority、Security／Ground Truth Isolation、SOP_BACKED與Human Knowledge Governance不變。六份Approved Knowledge Sources的內容、版本、分類與批准狀態、Manifest及Corpus Release均保留；不能只因模型遷移而改版。
 2. 新舊embedding space不得混用。新模型重新產生vectors並建立具有新compatibility-bound identity的獨立Chroma L2 collection；維持STAGED → VALIDATED → Explicit Activation，失敗不得破壞歷史build／snapshot／RCA references或LKG。
-3. **Controlled Batching draft（Approval Pending）：** SPEC-014規範`gemini-embedding-2`、stable v1、768 dimensions、provider normalization、versioned document／query envelopes及依核准固定Batch Plan執行有限Sequential Synchronous Batching。每request最多一次physical attempt、30秒timeout、no hidden retry／fallback／未授權split；驗證每item／batch的必要token／payload／item安全上界及quota protection，並受campaign有限invocation／usage／cost bounds約束，安全證據不足即fail closed，不宣稱任何batch size已有Google保證。維持six approved sources、54 ordered unique chunks及完整input commitment／provenance；每batch須驗證chunk identity／一對一mapping／order，最後完整驗證全域54→54、768及normalization。Partial result、HTTP success或offline tests均不構成完整Provider PASS，須有真實對應Provider Compatibility Evidence；失敗須typed finding，UNKNOWN／TIMEOUT不自動retry、退款或繼續後續batch，不得降低要求以產生PASS。既有Free Tier及authorization安全控制依SPEC-014 §24.6.1保留；不改Real-RAG／Evidence-grounded RCA產品語意。
+3. **Controlled Batching approved amendment：** SPEC-014規範`gemini-embedding-2`、stable v1、768 dimensions、provider normalization、versioned document／query envelopes及依核准固定Batch Plan執行有限Sequential Synchronous Batching。每request最多一次physical attempt、30秒timeout、no hidden retry／fallback／未授權split；驗證每item／batch的必要token／payload／item安全上界及quota protection，並受campaign有限invocation／usage／cost bounds約束，安全證據不足即fail closed，不宣稱任何batch size已有Google保證。維持six approved sources、54 ordered unique chunks及完整input commitment／provenance；每batch須驗證chunk identity／一對一mapping／order，最後完整驗證全域54→54、768及normalization。Partial result、HTTP success或offline tests均不構成完整Provider PASS，須有真實對應Provider Compatibility Evidence；失敗須typed finding，UNKNOWN／TIMEOUT不自動retry、退款或繼續後續batch，不得降低要求以產生PASS。既有Free Tier及authorization安全控制依SPEC-014 §24.6.1保留；不改Real-RAG／Evidence-grounded RCA產品語意。
 4. Calibration-only index在獨立namespace建立，不具有Candidate-C authoritative claim／validation／activation或Formal preparation權威。Retrieval／Applicability須重新calibrate並freeze；不得直接沿用舊threshold宣稱已驗證。Calibration開發資料與Formal Evaluation資料隔離，Ground Truth不得進production retrieval；不得為通過S1～S6反向調整門檻。§16.4原Conclusion Calibration語意不變。
 5. 新AC-014-X四名成員各自的independent rebuild、drift／mismatch、validation、explicit governed activation及retrieval／provenance evidence，為Migration Production Activation與正式Competition Readiness的必要Gate。各自隔離環境的驗證activation可為取得此evidence而執行，不以four-member PASS為前置條件，亦不等於shared Production Activation。歷史`NOT EXECUTED — PM-DIRECTED SKIP FOR CURRENT CLOSURE`完整保留，不延伸至新模型、不改寫為PASS。
 6. SPEC-017的Competition methodology、F1～F8、S1～S6 O1～O10、N／denominator／execution order、adjudication及refresh／restart acceptance均不變。必須fresh preregistration及source-bound preparation；production activation不是evaluation-only preparation／activation的必然前置條件，Final Admission仍須全部required facts fresh verification。

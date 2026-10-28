@@ -54,6 +54,22 @@ _FORMAL_ATTEMPTS_DDL = """CREATE TABLE attempts (
     PRIMARY KEY (campaign_id, request_id)
 ) WITHOUT ROWID, STRICT"""
 
+# Additive evidence column in the SAME attempt authority. No automatic live
+# migration: a human must provision this exact schema before Counting can run.
+_COUNTING_ATTEMPTS_DDL = _FORMAL_ATTEMPTS_DDL.replace(
+    "    PRIMARY KEY", "    observation_json TEXT,\n    PRIMARY KEY", 1)
+COUNTING_OPERATION = "COUNTING_OBSERVATION"
+COUNTING_CHUNK = "kchk_5efd99ff50a380e0f983cc4193bd115f0b19072b7c03054af0165c561db4eb89"
+COUNTING_INPUT = "1f7c73a6895e0c0b9b089e6ab97bbf720cb3b8151615764d9eb96a63f93a2f12"
+COUNTING_CORPUS = "a104796f2e0982e0b591bfe0255a0338cd8468cc0f3d1a0e52b2045026dd7840"
+COUNTING_BODY = "e8b294325b71c9b6732ecd16a05b6e89d8631be2159dcfac5c6963bae4a701cc"
+COUNTING_URL = "https://generativelanguage.googleapis.com/v1/models/gemini-embedding-2:countTokens"
+_COUNTING_OUTCOMES = frozenset(("COUNTING_RESULT_OBTAINED", "CREDENTIAL_UNAVAILABLE",
+    "CREDENTIAL_INVALID", "CREDENTIAL_PROFILE_MISMATCH", "AUTHORIZATION_DENIED", "SOURCE_MISMATCH",
+    "INPUT_MISMATCH", "PAYLOAD_MISMATCH", "RUNNER_CONFLICT", "INVALID_PROVIDER_RESPONSE",
+    "RATE_LIMIT_QUOTA", "TRANSPORT_TIMEOUT", "TRANSPORT_FAILURE", "UNSUPPORTED_OPERATION",
+    "UNSUPPORTED_MODEL", "OPERATION_MISMATCH", "PERSISTENCE_FAILURE", "AUTHORIZATION_EXPIRED", "UNKNOWN"))
+
 
 class DiagnosticDenied(ValueError):
     """A bounded, non-secret denial before credential or transport access."""
@@ -697,8 +713,8 @@ class DiagnosticAuthorizationRecord:
     input_commitment: str
     maximum_invocations: int
     maximum_items: int
-    maximum_item_tokens: int
-    maximum_aggregate_tokens: int
+    maximum_item_tokens: int | None
+    maximum_aggregate_tokens: int | None
     maximum_item_bytes: int
     maximum_payload_bytes: int
     maximum_usage_units: int
@@ -714,7 +730,9 @@ class DiagnosticAuthorizationRecord:
     single_active_runner: bool
     api_version: str
     sdk_baseline: str
-    normalization_tolerance: float
+    normalization_tolerance: float | None
+    project_identity: str | None = None
+    credential_profile_revision: str | None = None
 
     def __post_init__(self) -> None:
         for field in (
@@ -738,22 +756,36 @@ class DiagnosticAuthorizationRecord:
         if len(self.input_commitment) != 64 or any(c not in "0123456789abcdef" for c in self.input_commitment):
             raise DiagnosticDenied("input commitment is invalid")
         for field in (
-            "maximum_invocations", "maximum_items", "maximum_item_tokens",
-            "maximum_aggregate_tokens", "maximum_item_bytes", "maximum_payload_bytes",
+            "maximum_invocations", "maximum_items", "maximum_item_bytes", "maximum_payload_bytes",
             "maximum_usage_units", "maximum_cost_micro_units",
         ):
             _positive(getattr(self, field), field)
-        if self.maximum_aggregate_tokens < self.maximum_item_tokens:
-            raise DiagnosticDenied("aggregate token bound is inconsistent")
+        if self.purpose == COUNTING_OPERATION:
+            if (self.input_kind != "document" or self.input_commitment != COUNTING_INPUT
+                    or self.maximum_invocations != 1 or self.maximum_items != 1
+                    or self.maximum_usage_units != 1 or self.maximum_item_bytes != 528
+                    or self.maximum_payload_bytes != 591 or self.maximum_item_tokens is not None
+                    or self.maximum_aggregate_tokens is not None or self.normalization_tolerance is not None):
+                raise DiagnosticDenied("counting scope or operation bounds mismatch", code="INPUT_MISMATCH")
+            for value in (self.project_identity, self.credential_profile_revision):
+                if type(value) is not str or not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", value):
+                    raise DiagnosticDenied("counting project or profile revision is invalid", code="CREDENTIAL_PROFILE_MISMATCH")
+        else:
+            if self.project_identity is not None or self.credential_profile_revision is not None:
+                raise DiagnosticDenied("counting-only authorization fields are not embedding authority")
+            _positive(self.maximum_item_tokens, "maximum_item_tokens")
+            _positive(self.maximum_aggregate_tokens, "maximum_aggregate_tokens")
+            if self.maximum_aggregate_tokens < self.maximum_item_tokens:
+                raise DiagnosticDenied("aggregate token bound is inconsistent")
         if self.timeout_seconds != 30 or self.attempts != 1 or self.single_active_runner is not True:
             raise DiagnosticDenied("single synchronous attempt policy is required")
         if self.provider_identity != "google" or self.model_identity != GEMINI_EMBEDDING2_PROFILE.model:
             raise DiagnosticDenied("diagnostic provider or model is not approved")
-        if self.purpose != "CONTROLLED_PROVIDER_DIAGNOSTIC" or self.input_kind not in ("document", "query"):
+        if self.purpose not in ("CONTROLLED_PROVIDER_DIAGNOSTIC", COUNTING_OPERATION) or self.input_kind not in ("document", "query"):
             raise DiagnosticDenied("diagnostic purpose or input kind is invalid")
         if self.api_version != "v1" or self.sdk_baseline != "google-genai==2.25.0":
             raise DiagnosticDenied("diagnostic API or SDK baseline is invalid")
-        if type(self.normalization_tolerance) is not float or not 0 < self.normalization_tolerance < 1:
+        if self.purpose != COUNTING_OPERATION and (type(self.normalization_tolerance) is not float or not 0 < self.normalization_tolerance < 1):
             raise DiagnosticDenied("normalization tolerance is invalid")
         if _timestamp(self.valid_from) >= _timestamp(self.expires_at):
             raise DiagnosticDenied("authorization validity interval is invalid")
@@ -762,7 +794,9 @@ class DiagnosticAuthorizationRecord:
     def from_json(cls, data: bytes) -> "DiagnosticAuthorizationRecord":
         try:
             value = _unique_json(data)
-            if type(value) is not dict or set(value) != set(cls.__dataclass_fields__):
+            optional = {"project_identity", "credential_profile_revision"}
+            if (type(value) is not dict or not set(cls.__dataclass_fields__) - optional <= set(value)
+                    or not set(value) <= set(cls.__dataclass_fields__)):
                 raise DiagnosticDenied("authorization record fields are incomplete or extra")
             return cls(**value)
         except (UnicodeError, TypeError, ValueError) as exc:
@@ -775,7 +809,12 @@ def authorization_record_digest(record: DiagnosticAuthorizationRecord) -> str:
     """Commit all current campaign fields without creating a digest cycle."""
     if not isinstance(record, DiagnosticAuthorizationRecord):
         raise DiagnosticDenied("authorization record is invalid")
-    canonical = json.dumps(asdict(record), sort_keys=True, ensure_ascii=True,
+    fields = asdict(record)
+    # Historical embedding grants retain their exact pre-extension digest.
+    for name in ("project_identity", "credential_profile_revision"):
+        if fields[name] is None:
+            fields.pop(name)
+    canonical = json.dumps(fields, sort_keys=True, ensure_ascii=True,
                            separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(canonical).hexdigest()
 
@@ -804,7 +843,7 @@ class DiagnosticSdkByteEvidence:
     sdk_body_bytes: int
     http_method: str
     request_url: str
-    output_dimensionality: int
+    output_dimensionality: int | None
     timeout_ms: int
     attempts: int
     schema_version: int = 1
@@ -873,11 +912,11 @@ class DiagnosticSdkByteEvidence:
                 or self.kind not in ("document", "query")
                 or (self.kind == "query" and len(self.ordered_identities) != 1)
                 or self.http_method != "POST"
-                or self.request_url != (
-                    "https://generativelanguage.googleapis.com/v1/models/"
-                    + self.model + ":batchEmbedContents")
-                or type(self.output_dimensionality) is not int
-                or self.output_dimensionality != 768
+                or not ((self.request_url == COUNTING_URL and self.kind == "document"
+                         and len(self.ordered_identities) == 1 and self.output_dimensionality is None)
+                        or (self.request_url == "https://generativelanguage.googleapis.com/v1/models/"
+                            + self.model + ":batchEmbedContents"
+                            and type(self.output_dimensionality) is int and self.output_dimensionality == 768))
                 or type(self.timeout_ms) is not int or self.timeout_ms != 30_000
                 or type(self.attempts) is not int or self.attempts != 1
                 or type(self.sdk_body_bytes) is not int
@@ -902,6 +941,8 @@ class DiagnosticSdkByteEvidence:
                 or self.input_commitment != approved.commitment
                 or self.sdk_body_bytes > record.maximum_payload_bytes):
             raise DiagnosticDenied("SDK byte evidence does not match campaign and approved input")
+        if (self.request_url == COUNTING_URL) != (record.purpose == COUNTING_OPERATION):
+            raise DiagnosticDenied("SDK evidence operation mismatch", code="OPERATION_MISMATCH")
 
 
 # G3-CL01: this table is the closed wire appendix, not an evidence registry.
@@ -946,6 +987,20 @@ _FREE_TIER_SCHEMA = dict(
     data_use_permission=dict(pm_approval_reference="S256", authority_identity="S256",
                             source=_SAFETY_SOURCE),
 )
+
+# Operation-specific appendix in the existing protected safety artifact. Unknown
+# system limits are explicit metadata, not invented numerical counting quotas.
+_COUNTING_SAFETY_SCHEMA = {key: value for key, value in _SAFETY_SCHEMA.items()
+                           if key not in ("token_evidence", "provider_limits")}
+_COUNTING_SAFETY_SCHEMA.update(operation=(COUNTING_OPERATION,),
+    project_identity="ID128", complete_corpus_commitment=(COUNTING_CORPUS,),
+    outbound_eligibility=("APPROVED_SYNTHETIC_NON_SECRET",),
+    provider_limits=dict(rpm=("UNKNOWN",), tpm=("UNKNOWN",), rpd=("UNKNOWN",),
+                         payload=("UNKNOWN",), source=_SAFETY_SOURCE))
+_COUNTING_SAFETY_SCHEMA["binding"] = dict(_SAFETY_SCHEMA["binding"], request_url=(COUNTING_URL,))
+_COUNTING_FREE_SCHEMA = dict(_FREE_TIER_SCHEMA,
+    quota_evidence=dict(rpm=("UNKNOWN",), tpm=("UNKNOWN",), rpd=("UNKNOWN",), source=_SAFETY_SOURCE))
+_COUNTING_SAFETY_SCHEMA["free_tier_evidence"] = _COUNTING_FREE_SCHEMA
 
 # No live batch size/default is supplied by code. This plan lives in the SAME
 # protected safety file; its digest is the PM record's existing bounds_basis.
@@ -1081,13 +1136,17 @@ class DiagnosticSafetyArtifact:
                 raise DiagnosticDenied("safety JSON numeric constant is invalid")
             value = json.loads(data.decode("utf-8"), object_pairs_hook=_safety_unique,
                                parse_constant=constant)
+            counting = type(value) is dict and value.get("operation") == COUNTING_OPERATION
+            if counting:
+                _validate_safety_wire(value, _COUNTING_SAFETY_SCHEMA)
             # Optional exact-input bound table. Old metadata remains readable,
             # but cannot enable live execution without accepted bound evidence.
             bounds = value.pop("accepted_input_token_bounds", None) if type(value) is dict else None
             free = value.pop("free_tier_evidence", None) if type(value) is dict else None
             plan = value.pop("sequential_batch_plan", None) if type(value) is dict else None
             batch_e4 = value.pop("batch_sdk_evidence", None) if type(value) is dict else None
-            _validate_safety_wire(value)
+            _validate_safety_wire(value, {k: v for k, v in _COUNTING_SAFETY_SCHEMA.items()
+                                         if k != "free_tier_evidence"} if counting else _SAFETY_SCHEMA)
             if plan is not None or batch_e4 is not None:
                 parsed_plan = DiagnosticBatchPlan.from_mapping(plan)
                 if type(batch_e4) is not list or len(batch_e4) != len(parsed_plan.ranges):
@@ -1097,7 +1156,7 @@ class DiagnosticSafetyArtifact:
                 value["sequential_batch_plan"], value["batch_sdk_evidence"] = plan, batch_e4
             pricing = value["pricing_evidence"]
             if pricing["price_tier"] == "FREE_TIER_TEXT_V1":
-                _validate_safety_wire(free, _FREE_TIER_SCHEMA)
+                _validate_safety_wire(free, _COUNTING_FREE_SCHEMA if counting else _FREE_TIER_SCHEMA)
                 context = free["account_context"]
                 credential = value["credential_binding"]
                 if (pricing["rate_micro_units_per_million_tokens"] != 0
@@ -1108,6 +1167,8 @@ class DiagnosticSafetyArtifact:
                 value["free_tier_evidence"] = free
             elif free is not None or pricing["rate_micro_units_per_million_tokens"] <= 0:
                 raise DiagnosticDenied("Paid Tier requires positive pricing and no Free Tier evidence")
+            if counting and pricing["price_tier"] != "FREE_TIER_TEXT_V1":
+                raise DiagnosticDenied("counting requires the approved Free Tier pricing context")
             if bounds is not None:
                 if type(bounds) is not dict or not 1 <= len(bounds) <= 128:
                     raise DiagnosticDenied("accepted token bounds are invalid")
@@ -1127,7 +1188,8 @@ class DiagnosticSafetyArtifact:
                     or _safety_time(value["publication"]["published_at"]) > start
                     or value["lifecycle_state"] != "ACTIVE"):
                 raise DiagnosticDenied("safety publication, validity or revocation is invalid")
-            for key in ("token_evidence", "provider_limits", "pricing_evidence"):
+            for key in (("provider_limits", "pricing_evidence") if counting
+                        else ("token_evidence", "provider_limits", "pricing_evidence")):
                 source = value[key]["source"]
                 if not _safety_time(source["effective_from"]) <= start < end <= _safety_time(source["expires_at"]):
                     raise DiagnosticDenied("safety evidence source validity does not contain artifact")
@@ -1186,6 +1248,18 @@ class DiagnosticSafetyArtifact:
         if not (_timestamp(record.valid_from) <= start < end <= _timestamp(record.expires_at)
                 and start <= now < end):
             raise DiagnosticDenied("safety or authorization validity is unavailable")
+        if record.purpose == COUNTING_OPERATION:
+            if (value.get("operation") != COUNTING_OPERATION
+                    or value.get("project_identity") != record.project_identity
+                    or value["credential_binding"]["secret_revision"] != record.credential_profile_revision
+                    or approved.identities != (COUNTING_CHUNK,)
+                    or approved.commitment != COUNTING_INPUT or e4.sdk_body_sha256 != COUNTING_BODY
+                    or e4.sdk_body_bytes != 591):
+                raise DiagnosticDenied("counting safety identity mismatch", code="INPUT_MISMATCH")
+            self.require_free_tier_permission(record)
+            return
+        if value.get("operation") == COUNTING_OPERATION:
+            raise DiagnosticDenied("counting evidence cannot authorize embedding", code="OPERATION_MISMATCH")
         count = len(approved.identities)
         limits = value["provider_limits"]
         if "sequential_batch_plan" in value:
@@ -1411,7 +1485,8 @@ def _validate_formal_connection(db: sqlite3.Connection) -> None:
     objects = db.execute(
         "SELECT type,name,tbl_name,sql FROM sqlite_schema ORDER BY type,name"
     ).fetchall()
-    if objects != [("table", "attempts", "attempts", _FORMAL_ATTEMPTS_DDL)]:
+    counting_schema = objects == [("table", "attempts", "attempts", _COUNTING_ATTEMPTS_DDL)]
+    if not counting_schema and objects != [("table", "attempts", "attempts", _FORMAL_ATTEMPTS_DDL)]:
         raise DiagnosticDenied("formal usage schema contains unexpected objects")
     columns = db.execute("PRAGMA table_xinfo(attempts)").fetchall()
     expected = (
@@ -1423,6 +1498,8 @@ def _validate_formal_connection(db: sqlite3.Connection) -> None:
         ("cost_reserved", "INTEGER", 1, None, 0, 0),
         ("usage_observed", "TEXT", 1, "'UNKNOWN'", 0, 0),
     )
+    if counting_schema:
+        expected += (("observation_json", "TEXT", 0, None, 0, 0),)
     if tuple(tuple(row[1:]) for row in columns) != expected:
         raise DiagnosticDenied("formal usage columns or constraints are invalid")
     if db.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
@@ -1596,6 +1673,8 @@ def validate_authorization(
     item_bytes: tuple[int, ...], item_tokens: tuple[int, ...], payload_bytes: int,
     safety_basis: str, conservative_usage_units: int, conservative_cost_micro_units: int,
 ) -> None:
+    if record.purpose != "CONTROLLED_PROVIDER_DIAGNOSTIC":
+        raise DiagnosticDenied("embedding authorization operation mismatch", code="OPERATION_MISMATCH")
     if live_opt_in is not True:
         raise DiagnosticDenied("explicit diagnostic opt-in is required")
     if type(facts.now) is not datetime or facts.now.tzinfo is None:
@@ -1646,11 +1725,12 @@ def validate_authorization(
 class TemporaryDiagnosticUsage:
     """Offline-only SQLite port. Its caller-selected path cannot authorize live use."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, enable_counting: bool = False) -> None:
         self._path = path
         try:
             with closing(self._connect()) as db:
-                db.execute(_FORMAL_ATTEMPTS_DDL.replace("CREATE TABLE attempts",
+                ddl = _COUNTING_ATTEMPTS_DDL if enable_counting else _FORMAL_ATTEMPTS_DDL
+                db.execute(ddl.replace("CREATE TABLE attempts",
                                                         "CREATE TABLE IF NOT EXISTS attempts", 1))
         except sqlite3.Error as exc:
             raise DiagnosticDenied("diagnostic usage record is unavailable") from exc
@@ -1686,6 +1766,12 @@ class TemporaryDiagnosticUsage:
             with closing(self._connect()) as db:
                 db.execute("BEGIN IMMEDIATE")
                 self._check_reservation_state(db)
+                if record.purpose == COUNTING_OPERATION:
+                    # Existing stores are never automatically migrated.
+                    db.execute("SELECT observation_json FROM attempts LIMIT 0")
+                    if db.execute("SELECT 1 FROM attempts WHERE campaign_id=? AND request_id=?",
+                                  (record.campaign_id, request_id)).fetchone():
+                        raise DiagnosticDenied("counting attempt is already consumed", code="DUPLICATE_ATTEMPT")
                 if db.execute(
                     "SELECT 1 FROM attempts WHERE outcome IN ('IN_FLIGHT','UNKNOWN','TIMEOUT') "
                     "OR usage_observed = 'UNKNOWN' "
@@ -1710,23 +1796,107 @@ class TemporaryDiagnosticUsage:
                     "VALUES (?,?, 'IN_FLIGHT',?,?,?)",
                     (record.campaign_id, request_id, items, usage_units, cost_micro_units),
                 )
+                if record.purpose == COUNTING_OPERATION:
+                    pending = dict(operation=COUNTING_OPERATION, authorization_sha256=authorization_record_digest(record),
+                        input_commitment=record.input_commitment, body_sha256=COUNTING_BODY,
+                        reserved_at=datetime.now(timezone.utc).isoformat(),
+                        campaign_id=record.campaign_id, attempt_id=request_id, outcome="IN_FLIGHT",
+                        code="ATTEMPT_RESERVED", observed_token_count=None, usage="UNKNOWN")
+                    db.execute("UPDATE attempts SET observation_json=? WHERE campaign_id=? AND request_id=?",
+                        (json.dumps(pending, sort_keys=True, separators=(",", ":")), record.campaign_id, request_id))
                 db.commit()
         except DiagnosticDenied:
             raise
         except sqlite3.IntegrityError as exc:
             raise DiagnosticDenied("duplicate diagnostic request identity") from exc
         except sqlite3.Error as exc:
-            raise DiagnosticDenied("diagnostic usage lock or record is unavailable") from exc
+            raise DiagnosticDenied("diagnostic usage lock or record is unavailable",
+                code="PERSISTENCE_FAILURE" if record.purpose == COUNTING_OPERATION else "AUTHORIZATION_DENIED") from exc
 
     def finish(self, record: DiagnosticAuthorizationRecord, request_id: str, outcome: str) -> None:
         # No caller observation override. Missing/failed responses stay UNKNOWN.
         self._finish(record, request_id, outcome, "UNKNOWN")
 
     def _finish_provider_usage(self, record, request_id, outcome, receipt, request_sha256):
+        if record.purpose == COUNTING_OPERATION:
+            raise DiagnosticDenied("counting is not embedding usage", code="OPERATION_MISMATCH")
         if type(receipt) is not _ProviderUsageReceipt or outcome != "SUCCESS":
             raise DiagnosticDenied("trusted successful provider usage is unavailable")
         receipt.matches(record, request_id, request_sha256)
         self._finish(record, request_id, outcome, str(receipt.prompt_tokens), _provider_receipt=receipt)
+
+    def _finish_counting(self, record, request_id, outcome, code, boundary=None):
+        """Durable counting evidence in the same row; usage remains UNKNOWN.
+
+        Numeric totalTokens is a result, never an embedding usage receipt. A
+        successful result can only originate at the guarded physical boundary.
+        Ambiguous persistence raises and retains all reservations/fences.
+        """
+        from .gemini_diagnostic import _DiagnosticLiveTransport
+        if (record.purpose != COUNTING_OPERATION
+                or outcome not in ("SUCCESS", "FAILED", "TIMEOUT", "UNKNOWN")
+                or (outcome == "SUCCESS") != (code == "COUNTING_RESULT_OBTAINED")
+                or code not in _COUNTING_OUTCOMES):
+            raise DiagnosticDenied("counting completion context is invalid")
+        count = response_sha = None
+        if outcome == "SUCCESS":
+            if (type(boundary) is not _DiagnosticLiveTransport or boundary.delegations != 1
+                    or boundary._entered is not True
+                    or boundary._response_validated is not True
+                    or boundary._prepared.record != record or boundary._attempt_id != request_id
+                    or boundary._evidence.sdk_body_sha256 != COUNTING_BODY):
+                raise DiagnosticDenied("trusted counting boundary is unavailable")
+            count, response_sha = boundary._counting_tokens, boundary._counting_response_sha256
+            if type(count) is not int or not 0 <= count <= 2**63 - 1 or not response_sha:
+                raise DiagnosticDenied("counting result is invalid")
+        evidence = dict(operation=COUNTING_OPERATION, campaign_id=record.campaign_id,
+            attempt_id=request_id, authorization_sha256=authorization_record_digest(record),
+            provider=record.provider_identity, model=record.model_identity, api=record.api_version,
+            sdk=record.sdk_baseline, source_revision=record.source_revision,
+            input_commitment=record.input_commitment, corpus_commitment=COUNTING_CORPUS,
+            chunk_identity=COUNTING_CHUNK, global_ordinal=52, body_sha256=COUNTING_BODY,
+            profile_identity=record.credential_profile_identity,
+            profile_revision=record.credential_profile_revision, project_identity=record.project_identity,
+            host_identity=record.authorized_host, runner_identity=record.runner_identity,
+            outcome=outcome, code=code, observed_token_count=count,
+            usage="UNKNOWN", usage_unit="COUNTING_OPERATION", provider_limits="UNKNOWN",
+            response_sha256=response_sha, recorded_at=datetime.now(timezone.utc).isoformat())
+        wire = json.dumps(evidence, sort_keys=True, separators=(",", ":"))
+        db = None
+        try:
+            db = self._connect()
+            db.execute("BEGIN IMMEDIATE")
+            self._check_reservation_state(db)
+            pending = db.execute("SELECT observation_json FROM attempts WHERE campaign_id=? AND request_id=?",
+                                 (record.campaign_id, request_id)).fetchone()
+            pending = _unique_json(pending[0].encode()) if pending and pending[0] else None
+            if (type(pending) is not dict or pending.get("operation") != COUNTING_OPERATION
+                    or pending.get("authorization_sha256") != authorization_record_digest(record)
+                    or pending.get("input_commitment") != record.input_commitment
+                    or pending.get("body_sha256") != COUNTING_BODY):
+                raise DiagnosticDenied("counting reservation binding mismatch")
+            evidence["reserved_at"] = pending["reserved_at"]
+            wire = json.dumps(evidence, sort_keys=True, separators=(",", ":"))
+            changed = db.execute("UPDATE attempts SET outcome=?,observation_json=? "
+                "WHERE campaign_id=? AND request_id=? AND outcome='IN_FLIGHT' AND usage_observed='UNKNOWN'",
+                (outcome, wire, record.campaign_id, request_id)).rowcount
+            if changed != 1:
+                raise DiagnosticDenied("counting attempt is ambiguous")
+            db.commit()
+            db.close()
+            db = None
+            # Read back without attempting a second write on ambiguity.
+            with closing(self._connect(read_only=True)) as read:
+                self._check_reservation_state(read)
+                row = read.execute("SELECT outcome,usage_observed,observation_json FROM attempts "
+                    "WHERE campaign_id=? AND request_id=?", (record.campaign_id, request_id)).fetchone()
+                if row != (outcome, "UNKNOWN", wire):
+                    raise DiagnosticDenied("counting completion is ambiguous")
+        except (sqlite3.Error, OSError, DiagnosticDenied, ValueError, TypeError, KeyError):
+            self._end_failed_transaction(db)
+            raise DiagnosticDenied("counting persistence is UNKNOWN; human review required",
+                                   code="PERSISTENCE_FAILURE") from None
+        return evidence
 
     def _finish(self, record: DiagnosticAuthorizationRecord, request_id: str,
                 outcome: str, observed: str, *, _provider_receipt=None) -> None:
@@ -1735,6 +1905,8 @@ class TemporaryDiagnosticUsage:
         Keep exact excess evidence with UNKNOWN using the existing columns. A
         reservation is never reduced, even with known zero or failed completion.
         """
+        if record.purpose == COUNTING_OPERATION:
+            raise DiagnosticDenied("counting requires operation-specific completion", code="OPERATION_MISMATCH")
         if outcome not in ("SUCCESS", "FAILED", "TIMEOUT", "UNKNOWN"):
             raise DiagnosticDenied("diagnostic outcome is invalid")
         if type(request_id) is not str or not request_id or len(request_id) > 128:

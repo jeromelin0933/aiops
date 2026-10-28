@@ -21,12 +21,18 @@
 | Implementation Owner | 富裕 |
 | Approved Amendment | 2026-10-28 Minimum Necessary Competition Scope Reset Amendment on v1.4；Approved；baseline version不變 |
 | Scope Reset Approval Record | SPEC Lead 2026-10-28：APPROVE — Minimum Necessary Competition Scope Reset Amendment；依PM-AIOPS-COMPETITION-SCOPE-RESET-20261028採納Consolidated Independent Semantic Audit：PASS／Findings NONE／READY FOR APPROVAL；僅核准本次新增條款，不授權implementation或Live execution |
-| Controlled Batching Amendment | v1.4-based Draft — Independent Document Audit／SPEC Lead Approval Pending；依SPEC Lead轉交的PM原文回覆「APPROVE — SPEC-014 Controlled Batching Narrow Amendment Direction」；未另指定PM Decision ID，不構成Live Authorization |
+| Controlled Batching Amendment | v1.4-based Approved — Controlled Batching Narrow Amendment；baseline version不變；不構成Live Authorization |
+| Controlled Batching Approval Record | SPEC Lead 2026-10-28正式採納既有Combined Independent Document Audit — PASS／Findings NONE；依PM「APPROVE — SPEC-014 Controlled Batching Narrow Amendment Direction」及最新「APPROVE WITH MINIMUM NECESSARY CONTROLS — SPEC-014 Independent Counting Observation」對正式文件收尾的授權，核准EMD-06、§24.2／§24.3／§24.5／§24.6／§24.6.1與AC-014-AD的既有batching修訂；未新增PM Decision ID，未重新執行Audit，不授權Live execution。 |
+| Counting Observation Amendment | v1.4-based Approved — COUNTING_OBSERVATION Minimum Narrow Amendment；核准範圍為§24.2／§24.6.1新增Counting條款及必要文件狀態；baseline version不變，不構成Implementation或PM Live Campaign Authorization。 |
+| Counting Observation Approval Record | Approval Authority：AIOps SPEC Lead；Approval Date：2026-10-28；PM Authority：APPROVE WITH MINIMUM NECESSARY CONTROLS — SPEC-014 Independent Counting Observation；Decision：APPROVE — SPEC-014 COUNTING_OBSERVATION Minimum Narrow Amendment；正式採納Independent Document Audit：PASS — READY FOR SPEC LEAD FORMAL DOCUMENT APPROVAL；Audit Findings：NONE。僅核准§24.2／§24.6.1新增Counting契約及必要文件資訊／History／Status，不新增PM Decision ID，不授權Implementation或任何Live Provider Calls。 |
 
 ### Change History
 
 | Version | Date | Status | Change |
 |---|---|---|---|
+| v1.4-based counting observation amendment | 2026-10-28（approval date） | Approved — COUNTING_OBSERVATION Minimum Narrow Amendment | SPEC Lead正式採納Independent Document Audit PASS／Findings NONE並依上列PM Authority核准§24.2／§24.6.1新增Counting契約；本輪僅作Approval Status Reconciliation，已審查技術正文不變，下列draft、Controlled Batching／Scope Reset／v1.4及歷史Approval／Audit／BLOCK／Remediation紀錄保留。Counting Runner未實作，Live仍NOT AUTHORIZED／NOT EXECUTED，不產生Provider、G8、Knowledge或Formal PASS。 |
+| v1.4-based counting observation draft | 2026-10-28（draft date；非approval date） | Draft — Independent Document Audit／SPEC Lead Amendment Approval Pending | 依PM已核准的Independent Counting Observation方向與最低控制（D2／D3；D4授權的batching Approval收尾已保留），於§24.2／§24.6.1新增單筆COUNTING_OBSERVATION scope、固定input／payload commitments、operation-specific admission及result／usage邊界。完整54→54、既有安全／Knowledge／Runtime／Formal authority不變；本輪只修文件，不授權Implementation或Live，不宣稱Audit／Provider PASS。 |
+| v1.4-based batching amendment | 2026-10-28（approval date） | Approved — Controlled Batching Narrow Amendment | SPEC Lead依本次PM授權採納既有Combined Independent Document Audit PASS／Findings NONE，僅完成既有batching修訂的Approval／Status收尾；技術條款不變，下列draft及歷史Approval／BLOCK／Audit／Skip紀錄保留。不新增Counting條款，不產生Provider／RAG／RCA或Formal PASS，不授權Live。 |
 | v1.4-based batching draft | 2026-10-28 | Draft — Independent Document Audit／SPEC Lead Approval Pending | 依本次PM Controlled Batching方向核准及SPEC Lead文件修訂授權，窄幅修訂EMD-06、§24.2／§24.3／§24.5／§24.6／§24.6.1與AC-014-AD：由單次54-item request改為有限Sequential Synchronous Batching，維持完整54→54與安全／Free Tier控制；不新增Decision ID，不授權implementation或Live，不改歷史approval／audit／BLOCK／skip／NOT EXECUTED紀錄。 |
 | v1.4-based amendment | 2026-10-28（approval date） | Approved — Minimum Necessary Competition Scope Reset Amendment | SPEC Lead正式採納Consolidated Independent Semantic Audit PASS／Findings NONE並核准本次新增條款；僅完成Approval／Status收尾，保留下列draft與歷史approval；不構成Provider／Implementation／four-member／Activation或Formal PASS，不授權Live Campaign。 |
 | v1.4-based draft | 2026-10-28 | Draft — Scope Reset Approval Pending | 依PM-AIOPS-COMPETITION-SCOPE-RESET-20261028僅增補AC-014-X、§24.5、§24.6／§24.6.1的Milestone A適用方式；未取得Amendment Final Approval，不授權implementation或Live execution。 |
@@ -40,6 +46,16 @@
 | 1.2 | 2026-09-26 | Implemented — Documentation-only Closure | Post-integration reconciliation：記錄approved six-document corpus、governed manifest、Google embedding／Chroma adapters、local lifecycle CLI、Knowledge Snapshot及public provenance已實作。AC-014-X未執行，依PM指示以explicit verification exception完成current repository closure；不修改Approved AC或Frozen D1～D4／G1～G4。 |
 
 ### Status Honesty
+
+**COUNTING_OBSERVATION current status — Approved，2026-10-28：** COUNTING_OBSERVATION Contract：APPROVED；SPEC Lead已正式採納Independent Document Audit PASS／Findings NONE並完成本次文件核准，僅作狀態收尾，技術契約不變。Counting Runner Implementation：NOT IMPLEMENTED；Offline Implementation PASS：未取得；Counting Live：NOT AUTHORIZED／NOT EXECUTED；Provider Counting Compatibility：NOT VERIFIED；Embedding 54→54 Compatibility：NOT PASS；G8：NOT PASS；本次新模型Knowledge Build／Activation：NOT EXECUTED；Formal Evaluation：NOT EXECUTED。所有Live Google Provider Calls仍為NOT AUTHORIZED；文件Approval不代替後續Implementation授權或PM Live Campaign Authorization。Controlled Batching Approval及歷史紀錄不變；下段只保留當時Counting draft狀態。
+
+**Historical COUNTING_OBSERVATION draft status（原文保留；已由上列正式Approval收尾）：**
+
+**COUNTING_OBSERVATION current status — Draft／Audit及Amendment Approval Pending，2026-10-28：** PM最低控制方向已核准，本輪僅提出下列窄幅文件草案；Controlled Batching的正式Approval不因此退回Pending。PM方向、文件Amendment Approval、後續Implementation及首次PM Live Campaign Authorization分別記錄；既有offline candidate evidence不是Provider Acceptance或Live Token Evidence。歷史Approval／Draft／BLOCK／Skip／NOT EXECUTED紀錄保留，不要求交接報告必須實體存放Repository。
+
+**Controlled Batching current status — Approved，2026-10-28：** 本次SPEC Lead依上列PM Authority正式採納既有Combined Independent Document Audit PASS／Findings NONE並核准既有batching修訂；SPEC-014、PRD-004 §13.5第3點與SPEC-017 §19.4已完成對應Approval Status Reconciliation。僅更新Approval／Version History／Status，baseline version及已審查技術語意不變。下段為當時draft狀態的歷史紀錄，不代表目前仍Pending。既有Implementation Audit及Human Source Checkpoint `7d0000a472e51572a522b6d7472241ecb24d5eef`依SPEC Lead交接紀錄保留，不由本次文件批准重新判定；Provider Compatibility仍為NOT EXECUTED，不形成Live Readiness或Production Ready，首次PM Live Campaign Authorization仍須另行取得。本次不新增COUNTING_OBSERVATION契約或實作。
+
+**Historical Controlled Batching draft status（原文保留；已由上列正式Approval收尾）：**
 
 **Controlled Batching draft — 2026-10-28：** 本次PM僅正式核准「APPROVE — SPEC-014 Controlled Batching Narrow Amendment Direction」；SPEC Lead授權本輪文件修訂，Independent Document Audit及Amendment Final Approval仍待完成。以下標示的batching修訂為待審草案，尚不取代已核准契約；原單次54-item／no split契約可由修訂前Human Checkpoint `39d199b92187f70da9f54e770af34df37ec13da1`核對。既有v1.4與Scope Reset approval完整保留，不挪用為batching approval。本checkpoint已包含Diagnostic Offline Implementation及`FREE_TIER_TEXT_V1`修復，依SPEC Lead提供的Acceptance／Independent Audit PASS／Human Commit紀錄確認；這不等於batching已實作或Provider Compatibility PASS。Provider／token安全缺口不得由方向核准補成PASS；不必以Google書面回覆作為離線工程前置條件，但Live前仍須具備必要安全上界及另行PM Campaign Authorization。依本輪跨文件最小修訂授權，PRD-004 §13.5第3點與SPEC-017 §19.4已在草案層級對齊本batching contract，三份文件待一次Combined Independent Document Audit及各自正式Approval；PRD-004仍須PM／文件權責人核准，不宣稱已完成正式跨文件reconciliation。
 
@@ -1034,7 +1050,7 @@ Candidate C只接受approved shared non-secret Profile／capability reference；
 
 Embedding／provider contract tests驗證timeout、request／batch bound、rate／quota及cost／resource protection與typed exhaustion facts。SDK hidden retry停用或可證明計入唯一Runtime-authorized budget；Candidate C沒有durable retry scheduler、clock或第二budget。
 
-**Controlled Batching amendment — Draft／Approval Pending：** 新模型依§24.2驗證固定Sequential Synchronous Batching、每request最多一次physical attempt／30秒、campaign累積限額及全域54→54完整mapping／order；partial result、未授權split或UNKNOWN／TIMEOUT後自動繼續均不得通過。既有domain／retry authority不變。
+**Controlled Batching amendment — Approved：** 新模型依§24.2驗證固定Sequential Synchronous Batching、每request最多一次physical attempt／30秒、campaign累積限額及全域54→54完整mapping／order；partial result、未授權split或UNKNOWN／TIMEOUT後自動繼續均不得通過。既有domain／retry authority不變。
 
 ## AC-014-AE — Finalized Unavailable Knowledge Lineage
 
@@ -1166,7 +1182,7 @@ Decision ID：`PM-RAG-EMBEDDING-MIGRATION-20261022`；Approval Date：`2026-10-2
 | EMD-03 | Dimension / Normalization：768 dimensions、provider normalization；結果須驗證 | §24.2 |
 | EMD-04 | Asymmetric Task Semantics / Envelopes：versioned asymmetric document/query envelopes；不傳task_type | §24.2 |
 | EMD-05 | Approved Document Title：Document envelope的title使用approved document_id | §24.2 |
-| EMD-06 | Multi-content Serialization / Cardinality — Controlled Batching draft（Approval Pending）：54個獨立types.Content依固定順序作有限Sequential Synchronous Batching→完整54 embeddings；逐筆及全域identity/order驗證；每request一次physical attempt／30秒，無hidden retry／fallback／未授權split | §24.2 |
+| EMD-06 | Multi-content Serialization / Cardinality — Controlled Batching approved amendment：54個獨立types.Content依固定順序作有限Sequential Synchronous Batching→完整54 embeddings；逐筆及全域identity/order驗證；每request一次physical attempt／30秒，無hidden retry／fallback／未授權split | §24.2 |
 | EMD-07 | Truncation / Payload / Token Bounds：完整envelope／serialized payload／token checks；不傳auto_truncate；fail closed | §24.2 |
 | EMD-08 | New Identities / Vector Isolation：新capability/profile/build identities、獨立collection，不混用新舊vectors | §24.3；downstream Build／Validate／Activation gates見§24.5 |
 | EMD-09 | Chroma L2 / Retrieval Calibration：保留Chroma L2；Retrieval／Applicability calibration、policy freeze與資料隔離 | §24.3～§24.4；downstream AC-014-X／Activation gates見§24.5 |
@@ -1174,7 +1190,9 @@ Decision ID：`PM-RAG-EMBEDDING-MIGRATION-20261022`；Approval Date：`2026-10-2
 
 ## 24.2 Request Contract與Compatibility Evidence
 
-**Controlled Batching amendment — Draft／Independent Document Audit及SPEC Lead Approval Pending。** 本節下列request/cardinality／bounds／verification修訂僅採本次PM核准方向，不宣告Google已保證任何batch size，也不構成Live Authorization。
+**Controlled Batching amendment — Approved。** 本節下列request/cardinality／bounds／verification修訂僅採本次PM核准方向，不宣告Google已保證任何batch size，也不構成Live Authorization。
+
+**Operation applicability（COUNTING_OBSERVATION approved amendment）：** 本節既有document／query、54→54、vector／768／normalization、batch與Embedding token admission條款維持適用於Embedding Diagnostic及Knowledge相關流程。獨立`COUNTING_OBSERVATION`僅適用本節末段及§24.6.1明列的Counting scope／minimum admission，不以單筆Counting取代上述契約；Counting不是隱藏附加API呼叫，也不因本amendment而取得Live授權。
 
 - Backend target為Gemini Developer API stable `v1`，model為`gemini-embedding-2`；使用pinned `google-genai==2.25.0`進行離線serialization verification。API target／SDK static support不等於實際HTTP相容；SDK升級不在本baseline內，須另行SPEC Lead engineering approval，不得silent upgrade。
 - 明確設定`output_dimensionality=768`，採新模型provider-side normalization semantics。每個vector須驗證dimension、finite values、nonzero norm及依已聲明numeric tolerance檢查normalization；不得以client-side renormalization掩蓋provider mismatch。Provider normalization結果尚未驗證，tolerance須版本化並在結果判讀前固定。
@@ -1184,13 +1202,29 @@ Decision ID：`PM-RAG-EMBEDDING-MIGRATION-20261022`；Approval Date：`2026-10-2
 - Bounds檢查須分別涵蓋完整envelope後的每item、每batch aggregate token／UTF-8 bytes、各batch實際serialized request payload（含JSON escaping與必要欄位），並驗證provider item／per-item token／aggregate token／payload限制的適用範圍；另驗證完整campaign的有限invocation／item／token／usage／cost budget及累積占用。Project quota與campaign budget分開記錄，quota不是授權budget；依核准rate／quota限制執行，不推定分批即可滿足TPM等限制。Bytes不等於tokens；須有model-compatible local counting或可證明的保守上界，不以54×8192或近似模型tokenizer冒充已證實上界。未有必要安全證據即fail closed，不得另加隱藏token API invocation；尚未證實的provider limits維持NOT VERIFIED，不捏造上限。
 - Offline tests須覆蓋各batch的獨立Content serialization、exact route/config、absence of task_type/auto_truncate、固定plan／全域commitment、retry/timeout、逐batch與campaign bounds、malformed／partial responses及失敗停止；受控provider diagnostic再驗證stable v1、完整54→54及逐筆／跨batch mapping/order、768、normalization與實際request/response behavior。Order verification方法須事先定義，不能只檢查陣列長度；任一batch缺漏、失敗或無法驗證即不得將partial result宣稱為完整Provider Compatibility PASS，亦不得形成完整可驗收Knowledge Build。
 - 若實際provider無法滿足本contract，輸出typed incompatibility並STOP；不得在固定且核准的plan外自行拆批、增加invocation、放寬timeout、改backend／API、改用asynchronous Batch API或降低測試要求。變更plan／input／budget須重新核對適用scope與授權，不能沿用stale commitment；需變更正式contract時交SPEC Lead／PM，不由runner自行決定。
-- 第一版只要求有限同步分批、完整mapping／order、安全bounds、typed failure與54→54 complete validation。成功batch可在本次執行內暫存供完整結果驗證，但不授予partial publication／activation。Persistent Resume／跨次cache reuse不是必要交付，也未由本草案授權實作；日後若token重複消耗確有需要，由SPEC Lead另行決定最小Resume scope。不得新增完整Checkpoint Framework、Quota Accounting Domain或Multi-key Pool。
+- 第一版只要求有限同步分批、完整mapping／order、安全bounds、typed failure與54→54 complete validation。成功batch可在本次執行內暫存供完整結果驗證，但不授予partial publication／activation。Persistent Resume／跨次cache reuse不是必要交付，也未由本amendment授權實作；日後若token重複消耗確有需要，由SPEC Lead另行決定最小Resume scope。不得新增完整Checkpoint Framework、Quota Accounting Domain或Multi-key Pool。
+
+**Independent COUNTING_OBSERVATION — Approved：** 依PM「APPROVE WITH MINIMUM NECESSARY CONTROLS — SPEC-014 Independent Counting Observation」，新增用途明確的獨立Counting Operation，目的僅為取得一筆Approved Exact Document Content的實際model-compatible token counting observation。它不是Embedding Diagnostic、Knowledge Build、Calibration、Formal Evaluation或Production Knowledge Authority，不提供G8 Compatibility PASS，也不改變本節原完整54→54驗收。
+
+| Fixed first observation binding | Candidate／必要核對 |
+|---|---|
+| Provider／Model／API／SDK | Google Gemini Developer API；`gemini-embedding-2`；Stable `v1`；`google-genai==2.25.0`。不得換模型、改v1beta、silent upgrade或fallback。 |
+| Operation／Method／Route | `COUNTING_OBSERVATION`／`models.countTokens`；同步`POST https://generativelanguage.googleapis.com/v1/models/gemini-embedding-2:countTokens`；一個獨立`types.Content`、一個text part，內容為原Approved Exact Document Envelope；不附帶Embedding request、output_dimensionality、task_type、auto_truncate、工具或未核准內容。 |
+| Source／Version／Global Ordinal | `ops.shared-database-network-dependency-interruption`／`1.0`／`52`。原source／manifest／document version provenance須保留；不得注入Scenario Ground Truth、Oracle或Expected Answer。 |
+| Chunk Identity | `kchk_5efd99ff50a380e0f983cc4193bd115f0b19072b7c03054af0165c561db4eb89` |
+| Single-input Commitment | `1f7c73a6895e0c0b9b089e6ab97bbf720cb3b8151615764d9eb96a63f93a2f12`；使用既有canonical input commitment規則，須與實際單筆identity／envelope exact match。 |
+| Complete Corpus Commitment | `a104796f2e0982e0b591bfe0255a0338cd8468cc0f3d1a0e52b2045026dd7840`；作原Approved Corpus來源綁定，不代表本次處理全部54筆。 |
+| Offline candidate size／body commitment | Exact Envelope `528` UTF-8 bytes；Counting serialized body `591` bytes；body SHA-256 `e8b294325b71c9b6732ecd16a05b6e89d8631be2159dcfac5c6963bae4a701cc`。僅為既有Offline Candidate Evidence，不是Token Count、Provider Payload Limit或Provider Acceptance。 |
+
+正式執行前MUST以實際Pinned SDK送出前的request重新核對上述route／method、單筆完整Content、input／body commitments及實際serialized bytes；本次固定input size及payload bound分別為528／591 bytes，須同時exact match，不能只檢查小於上限。任何內容、identity、序列化、API或SDK不一致即拒絕，不自行改寫候選hash或擴大budget。這些數值是PM指定候選的本地admission bounds，不宣稱為Google保證接受的上限；必要授權及其他minimum admission仍依§24.6.1。
+
+`countTokens.totalTokens`只可作Counting Observation Result。須驗證為可信、與本次physical attempt／model／input及request body綁定的非負整數（不接受bool、字串、負數、缺失或malformed response）；保存非敏感result及必要provenance，不持久化完整raw response body或secret。成功Observation只證明該次取得的計數結果；不得擴張為其他53筆、Embedding Actual Usage、完整Embedding Admission或Compatibility PASS。後續採納其作Embedding token evidence時，仍須核對model／Exact Content／計量適用性與獨立授權，不能自動啟動Embedding。
 
 ## 24.3 Versioned Identity與Physical Isolation
 
 新Provider Capability、Embedding Profile（含document/query envelope）、Retrieval Profile、Applicability Policy及Real-RAG Gate Profile必須建立新versioned identities，不得沿用舊名稱卻更換語意。Compatibility commitment至少涵蓋backend/API version、model、SDK compatibility baseline、dimension、normalization、envelope revisions及bounds/retry policy；Build Identity依§4.3 commitment實際build inputs，可透過profile commitment涵蓋。
 
-**Controlled Batching draft：** batching semantics／固定plan與其commitment納入適用的compatibility/profile及execution evidence；全54 inputs、source／manifest／model／profile／Build Identity continuity不得跨batch切換。依既有identity規則綁定實際inputs與profile，不另造Build authority、schema升級或虛構digest；舊單次request evidence不自動證明新plan相容。
+**Controlled Batching approved amendment：** batching semantics／固定plan與其commitment納入適用的compatibility/profile及execution evidence；全54 inputs、source／manifest／model／profile／Build Identity continuity不得跨batch切換。依既有identity規則綁定實際inputs與profile，不另造Build authority、schema升級或虛構digest；舊單次request evidence不自動證明新plan相容。
 
 Chroma L2 physical schema保持；新模型重新embedding並建立獨立collection，不混用舊vectors、不複製generated DB冒充新evidence。New Build Identity由實際canonical inputs衍生，不預填虛構digest。Artifact revision不等於schema version；若schema shape／semantics未變，不為模型遷移任意升schema或改hash algorithm。
 
@@ -1208,7 +1242,7 @@ Calibration protocol於結果判讀／政策選擇前固定development／held-ou
 
 ## 24.5 Build、Four-member Gate與Activation
 
-**Controlled Batching draft（Approval Pending）：** 下列新build／validation與四人獨立rebuild須使用§24.2完整54→54及固定batch-plan-bound evidence。每人仍獨立完成全部54 embeddings，不複製他人generated DB；成功個別batch不是完整Build Validation或AC-014-X PASS。STAGED→VALIDATED→explicit activation、new collection isolation、provenance、LKG及A/B驗收邊界均不變，不新增resume或四人逐batch人工簽核要求。
+**Controlled Batching approved amendment：** 下列新build／validation與四人獨立rebuild須使用§24.2完整54→54及固定batch-plan-bound evidence。每人仍獨立完成全部54 embeddings，不複製他人generated DB；成功個別batch不是完整Build Validation或AC-014-X PASS。STAGED→VALIDATED→explicit activation、new collection isolation、provenance、LKG及A/B驗收邊界均不變，不新增resume或四人逐batch人工簽核要求。
 
 **Scope Reset amendment — Approved 2026-10-28；Authority：PM-AIOPS-COMPETITION-SCOPE-RESET-20261028。** 本段限定下列原條款中Milestone A Competition readiness的證據範圍；完整Formal／Production Acceptance義務不取消。
 
@@ -1242,23 +1276,25 @@ PM Approval → Approved Contract
 
 最後兩行為分支而非先後依賴；Production Activation不是Formal Preparation前置條件。Fresh Preregistration在首次preparation mutation前固定methodology、profiles及operational resolution rules；實際build/activation commitments在受控preparation形成，再由Final Admission解析及fresh驗證。Formal Execution另需execution authority，ADMITTED不是本Slice的execution授權。
 
-Checkpoint A/B由Human建立；source/config不變可指同一commit，policy/config變更則須重新audit並建立B，不rebind A。Controlled Batching draft：Diagnostic有限batch campaign不授權不限次calibration或四人成員rebuild；各操作仍須其明確scope與budget。後續remediation若改source/profile，須重評受影響evidence並重新checkpoint，不沿用stale preparation。
+Checkpoint A/B由Human建立；source/config不變可指同一commit，policy/config變更則須重新audit並建立B，不rebind A。Controlled Batching approved amendment：Diagnostic有限batch campaign不授權不限次calibration或四人成員rebuild；各操作仍須其明確scope與budget。後續remediation若改source/profile，須重評受影響evidence並重新checkpoint，不沿用stale preparation。
 
 Slice 0只授權四份PRD／SPEC文件修改與documentation semantic verification；不執行source/config變更、provider diagnostic、calibration、AC-014-X、Docker／Chroma／Candidate-C/F mutation、activation或Formal Evaluation。Git mutations由Human執行。新migration implementation及全部execution evidence均未由本amendment完成；Formal Evaluation為NOT EXECUTED，Slots Consumed = 0。Independent Slice 0 audit尚待執行。
 
 ### 24.6.1 Controlled Provider Diagnostic — Minimum Necessary Controls（Additive）
 
-**Controlled Batching amendment — Draft／Approval Pending：** 以下更新request／plan及campaign binding；原PM-DIAG與Scope Reset歷史approval保留。本次PM Direction不等於Amendment Final Approval、Diagnostic Implementation Authorization或PM Live Campaign Authorization。只有事前核准固定plan的Sequential Synchronous Batching可適用，不允許runner自行split或動態擴張campaign。
+**COUNTING_OBSERVATION applicability — Approved：** 下列原Controlled Provider Diagnostic purpose、完整54筆document scope、batch-plan、Embedding token／usage及vector驗收要求不改寫；只有本節末段明列的獨立Counting Operation適用差異，依Counting專用binding及minimum admission判讀。共用PM受控授權來源、exact clean source、host／runner、profile／account、atomic eligibility／reservation、secret safety及既有attempt authority不變；不得將Counting目的偽裝為`CONTROLLED_PROVIDER_DIAGNOSTIC`以繞過檢查。
+
+**Controlled Batching amendment — Approved：** 以下更新request／plan及campaign binding；原PM-DIAG與Scope Reset歷史approval保留。本次PM Direction不等於Amendment Final Approval、Diagnostic Implementation Authorization或PM Live Campaign Authorization。只有事前核准固定plan的Sequential Synchronous Batching可適用，不允許runner自行split或動態擴張campaign。
 
 **Scope Reset amendment — Approved 2026-10-28：** 本段在Milestone A範圍限定下列「每次Campaign／各操作授權」及「分段Gate」的解讀；原安全binding與§24.2不放寬。首次尚未驗證新Provider的Live Diagnostic Campaign須PM一次明確核准當次exact runner/source/model/config、input與budget範圍，並另作explicit Live opt-in，預設Live DENIED。同一已核准Campaign內的requests依同一有效scope／budget核對，不逐request再簽；超出scope／有效期／budget不得繼續。
 
 Diagnostic核准不自動授權Build、Calibration、Production或Formal目的。新模型／腳本完成驗證且相關操作已獲准常態使用後，一般成員在該操作範圍與安全限額內自行rebuild／Demo不設per-run PM approval；未獲常態操作授權前不得自行推定已授權。此區分不要求新增credential、usage或security framework。
 
-同一整合風險的regression／independent audit及Human checkpoint依§24.6合併，不另增加微步驟Gate。Controlled Batching draft保留single-host／single-runner、每request transport前持久化attempt及budget記錄、bounded requests／payload／tokens與費用、每request 30秒／一次physical attempt／no hidden retry、secret-safe typed errors，以及TIMEOUT／UNKNOWN不自動重送、退還預算或繼續後續batch。下列既有輕量JSONL／SQLite選項已足夠，不新增完整Accounting／Reservation Ledger子系統。
+同一整合風險的regression／independent audit及Human checkpoint依§24.6合併，不另增加微步驟Gate。Controlled Batching approved amendment保留single-host／single-runner、每request transport前持久化attempt及budget記錄、bounded requests／payload／tokens與費用、每request 30秒／一次physical attempt／no hidden retry、secret-safe typed errors，以及TIMEOUT／UNKNOWN不自動重送、退還預算或繼續後續batch。下列既有輕量JSONL／SQLite選項已足夠，不新增完整Accounting／Reservation Ledger子系統。
 
 最新PM Decision `PM-DIAG-MINIMUM-CONTROLS-20261022`（`MODIFY — APPROVED WITH SCOPE SIMPLIFICATION`）以`PM-RAG-EMBEDDING-MIGRATION-20261022`為Parent Authority，將本節Controlled Provider Diagnostic的安全設計限定為Minimum Necessary Controls。PM-DIAG-01：不採用Ed25519 cryptographic grant dependency；PM-DIAG-02：批准human-governed Live authorization；PM-DIAG-03：批准minimal API usage monitoring；PM-DIAG-04：批准offline／live separation。Ed25519、private／public Trust Root及獨立完整Atomic Accounting Framework不是本次必要交付。先前S4-D1／S4-D2工程授權方案已由最新PM決策取代；其歷史決策、audit與BLOCK evidence仍須保留，不回溯改寫。本addendum不變更§24.2、EMD-01～10、Frozen D1～D4／G1～G4或下游驗收條件。
 
-- **Live authorization與source gate（Controlled Batching draft）：** 每次Live Diagnostic Campaign須事先取得PM明確授權，預設`Live DENIED`且執行者須另作explicit Live mode opt-in。受控Authorization Record須綁定Human Git Checkpoint A後的exact committed clean source revision、執行者、model、credential profile identity、批准的完整input scope／commitment與固定batch-plan commitment、campaign最大batch／invocation／usage budget、有效期及每request 30-second timeout／one physical attempt／no-retry policy。Runner須核對實際HEAD、clean working tree、record與source／input／plan的一致性；一般caller不得任意取代授權來源或紀錄路徑，caller-supplied approved flag、verification物件或字串均不構成授權。任一前置條件不成立，須在credential discovery與provider transport前fail closed；包括累積budget、IN_FLIGHT／runner conflict及未經human adjudication解除的UNKNOWN／TIMEOUT等既有atomic eligibility拒絕條件。先完成既有atomic eligibility／attempt reservation，再進行credential resolution；credential失敗保留typed failure、已占用budget與UNKNOWN usage，不自動退款或重送。`39d199b92187f70da9f54e770af34df37ec13da1`是既有Offline／Free Tier source checkpoint，不冒充尚未實作batching後的execution revision。
+- **Live authorization與source gate（Controlled Batching approved amendment）：** 每次Live Diagnostic Campaign須事先取得PM明確授權，預設`Live DENIED`且執行者須另作explicit Live mode opt-in。受控Authorization Record須綁定Human Git Checkpoint A後的exact committed clean source revision、執行者、model、credential profile identity、批准的完整input scope／commitment與固定batch-plan commitment、campaign最大batch／invocation／usage budget、有效期及每request 30-second timeout／one physical attempt／no-retry policy。Runner須核對實際HEAD、clean working tree、record與source／input／plan的一致性；一般caller不得任意取代授權來源或紀錄路徑，caller-supplied approved flag、verification物件或字串均不構成授權。任一前置條件不成立，須在credential discovery與provider transport前fail closed；包括累積budget、IN_FLIGHT／runner conflict及未經human adjudication解除的UNKNOWN／TIMEOUT等既有atomic eligibility拒絕條件。先完成既有atomic eligibility／attempt reservation，再進行credential resolution；credential失敗保留typed failure、已占用budget與UNKNOWN usage，不自動退款或重送。`39d199b92187f70da9f54e770af34df37ec13da1`是既有Offline／Free Tier source checkpoint，不冒充尚未實作batching後的execution revision。
 
 Authorization Record為每次Live Campaign的必填、受控且可稽核契約；下列各欄均須存在、格式有效，並於每次attempt前與實際執行事實及同一PM核准scope逐一比對。Record自身或caller宣稱`approved`不取代受控來源的PM授權核對；Record、授權來源與usage／attempt紀錄路徑不得由一般caller任意指定或替換。任一欄缺失、不一致、超出核准範圍或無法確認上限，均須於credential discovery／transport前fail closed。
 
@@ -1272,19 +1308,41 @@ Authorization Record為每次Live Campaign的必填、受控且可稽核契約�
 | Model Identity | 明確為本campaign核准的`gemini-embedding-2`，與實際request model一致；fallback或別名替換拒絕。 |
 | Credential Profile Identity | 非空opaque profile identity，須與PM核准且執行時使用的profile一致；不得包含API key、token或其他secret material。 |
 | Diagnostic Purpose | 明確限定`CONTROLLED_PROVIDER_DIAGNOSTIC`；Build、Calibration、Production或Formal Evaluation目的拒絕。 |
-| Input Scope | Controlled Batching draft：明列核准的document／query種類、來源及數量；document為six approved sources／54 ordered unique chunks，固定batch index／連續範圍及各batch數量，query另列且每request 1 item；每個實際輸入須在scope內，Scenario／Oracle／Ground Truth不得成為production retrieval輸入。 |
-| Input Commitment | Controlled Batching draft：對核准的完整canonical ordered inputs與document／query envelopes形成固定commitment，連同batch plan及各batch input commitments綁定；執行時重算後須exact match，不容許變更順序、內容、prefix、範圍或重複／遺漏。 |
-| Maximum Invocation Count | Controlled Batching draft：明列有限正整數maximum batches及maximum physical invocations，document batches與query requests分列並合計，不超PM核准campaign budget；包含同campaign已記錄及本次預占attempt，超額或記錄不可用即拒絕，不從retry分類推得額外呼叫。 |
-| Usage／Input Bounds | Controlled Batching draft：明列適用的每request item數、完整envelope每item／每batch aggregate token與UTF-8 byte bounds、各serialized payload上限、安全依據及完整campaign累積token／usage限額；執行時逐項驗證，不能證明必要安全上界時拒絕；Project quota不取代campaign budget。 |
+| Input Scope | Controlled Batching approved amendment：明列核准的document／query種類、來源及數量；document為six approved sources／54 ordered unique chunks，固定batch index／連續範圍及各batch數量，query另列且每request 1 item；每個實際輸入須在scope內，Scenario／Oracle／Ground Truth不得成為production retrieval輸入。 |
+| Input Commitment | Controlled Batching approved amendment：對核准的完整canonical ordered inputs與document／query envelopes形成固定commitment，連同batch plan及各batch input commitments綁定；執行時重算後須exact match，不容許變更順序、內容、prefix、範圍或重複／遺漏。 |
+| Maximum Invocation Count | Controlled Batching approved amendment：明列有限正整數maximum batches及maximum physical invocations，document batches與query requests分列並合計，不超PM核准campaign budget；包含同campaign已記錄及本次預占attempt，超額或記錄不可用即拒絕，不從retry分類推得額外呼叫。 |
+| Usage／Input Bounds | Controlled Batching approved amendment：明列適用的每request item數、完整envelope每item／每batch aggregate token與UTF-8 byte bounds、各serialized payload上限、安全依據及完整campaign累積token／usage限額；執行時逐項驗證，不能證明必要安全上界時拒絕；Project quota不取代campaign budget。 |
 | Cost Limit | 明列核准的幣別／計量單位及有限、可比較的正上限；本次呼叫前須能以核准的保守上界證明累積預算不超限，否則拒絕，不以估計值冒充Google Billing。 |
 | Authorization Validity Start／Expiration | 兩個明確可比較且含時區的時間點，start早於expiration；每次attempt均須落在核准時窗內，過期或時鐘／時區無法判定即拒絕。 |
-| Timeout／Attempt／Retry Policy | Controlled Batching draft：固定Sequential Synchronous Batching；每request timeout = 30 seconds、`attempts=1`且最多一次physical attempt、no hidden retry／fallback／未授權split；record／plan與實際SDK options任一不符即拒絕。 |
+| Timeout／Attempt／Retry Policy | Controlled Batching approved amendment：固定Sequential Synchronous Batching；每request timeout = 30 seconds、`attempts=1`且最多一次physical attempt、no hidden retry／fallback／未授權split；record／plan與實際SDK options任一不符即拒絕。 |
 | Single Authorized Host／Single Active Runner Scope | 明列唯一host identity及本campaign適用的runner exclusivity；實際host須一致且執行鎖確證無第二active runner，無法確認即拒絕。 |
 
 Provider未回傳usage時，該usage事實記為`UNKNOWN`而非已知零值；若費用或使用量無法可靠確認，仍須依事前核准的保守上界占用budget並交human adjudication，不得自動繼續後續呼叫或宣稱正式Google Billing。這不放寬§24.2既有token／payload／provider item安全證據要求。
 
-**Free Tier preservation（Controlled Batching draft）：** 沿用已完成的`FREE_TIER_TEXT_V1`與受控pricing／quota／credential profile／account context／PM campaign及資料使用許可binding。Provider unit price可為0，但campaign cost limit仍須有限且為正值；每physical attempt保留既有1 micro-USD internal budget hold，計入campaign累積cost bound，不作Google單價或實際Billing。UNKNOWN token／usage不因零費率變成已知0；即使batch回應成功但usage仍UNKNOWN，也維持既有human adjudication fence，不自動繼續下一batch。固定batch plan不是該fence的豁免；本草案不要求逐batch PM重新簽核，也不授權自動usage reconciliation、新accounting authority或Persistent Resume。
+**Free Tier preservation（Controlled Batching approved amendment）：** 沿用已完成的`FREE_TIER_TEXT_V1`與受控pricing／quota／credential profile／account context／PM campaign及資料使用許可binding。Provider unit price可為0，但campaign cost limit仍須有限且為正值；每physical attempt保留既有1 micro-USD internal budget hold，計入campaign累積cost bound，不作Google單價或實際Billing。UNKNOWN token／usage不因零費率變成已知0；即使batch回應成功但usage仍UNKNOWN，也維持既有human adjudication fence，不自動繼續下一batch。固定batch plan不是該fence的豁免；本amendment不要求逐batch PM重新簽核，也不授權自動usage reconciliation、新accounting authority或Persistent Resume。
 
-- **Single-host usage與crash safety（Controlled Batching draft）：** Live Campaign限定single authorized host、single active Diagnostic Runner，使用必要的執行鎖及受控位置的輕量持久化Attempt／Usage／Outcome紀錄。每次provider attempt必須在transport前atomically檢查eligibility、記錄並占用核准budget，綁定campaign／batch identity與input commitment；duplicate、budget exceeded、未結清UNKNOWN／TIMEOUT／IN_FLIGHT、紀錄或鎖不可用時，均於credential discovery前fail closed。Crash、TIMEOUT或UNKNOWN outcome不自動重新送出、不自動退還已占用budget、不自動繼續後續batch，須保留可稽核狀態供human adjudication。可選適合prototype的JSONL、SQLite或等效簡單可靠方案，不強制建立完整Accounting Domain或multi-host coordination。保持每request 30-second timeout、one physical attempt、no hidden retry／fallback／未授權split；`SAME_OPERATION_ONLY`等retry-safety分類不授權自動重試。Provider usage未提供時明記`UNKNOWN`；cost estimate不得冒充正式Google Billing。
+- **Single-host usage與crash safety（Controlled Batching approved amendment）：** Live Campaign限定single authorized host、single active Diagnostic Runner，使用必要的執行鎖及受控位置的輕量持久化Attempt／Usage／Outcome紀錄。每次provider attempt必須在transport前atomically檢查eligibility、記錄並占用核准budget，綁定campaign／batch identity與input commitment；duplicate、budget exceeded、未結清UNKNOWN／TIMEOUT／IN_FLIGHT、紀錄或鎖不可用時，均於credential discovery前fail closed。Crash、TIMEOUT或UNKNOWN outcome不自動重新送出、不自動退還已占用budget、不自動繼續後續batch，須保留可稽核狀態供human adjudication。可選適合prototype的JSONL、SQLite或等效簡單可靠方案，不強制建立完整Accounting Domain或multi-host coordination。保持每request 30-second timeout、one physical attempt、no hidden retry／fallback／未授權split；`SAME_OPERATION_ONLY`等retry-safety分類不授權自動重試。Provider usage未提供時明記`UNKNOWN`；cost estimate不得冒充正式Google Billing。
 - **Failure與evidence safety：** Diagnostic須以可稽核且secret-safe的typed failure／CLI reporting區分rate limit、quota／billing、credential／authentication、network／timeout、provider unavailable、response contract invalid及ambiguous／unknown outcome，並記錄attempt數、source／input／budget commitment及非敏感結果。不將API key、Authorization header或敏感provider response複製到log、CLI或evidence。失敗或不明結果不形成Provider PASS，亦不觸發Candidate-C／Candidate-F durable mutation。
 - **分段Gate與證據誠實性：** 原§24.6順序保持；於Offline Implementation／Regression／Independent Audit之後先完成Cumulative Audit，再由Human建立Git Checkpoint A並確定exact clean source revision。其後仍須另取得PM Live Campaign Authorization，方可執行Controlled Provider Diagnostic；只有實際provider observation依事前固定判準完成Provider Compatibility Acceptance，才可進入後續Calibration／new Build／Activation／SPEC-017 Evaluation各自的授權Gate。Offline MockTransport PASS不是Provider PASS。首次真實Diagnostic不要求事前已有該次呼叫才可能產生的Provider PASS，但input、item／token／payload安全bounds、budget、有效期與判讀準則必須事前核准；§24.2的54→54、768、document／query envelopes、逐筆identity／order、normalization及fail-closed驗收不放寬。本addendum只界定後續offline implementation的安全契約；本Phase A不授權Diagnostic Runner實作，Live Google invocation仍為`NOT AUTHORIZED`。
+
+**Independent COUNTING_OBSERVATION minimum admission — Approved**
+
+本段落實PM本次D2／D3的獨立Counting scope及minimum controls；D4相關Controlled Batching正式文件批准依上列Approval Record保留，不將其當作Counting Amendment或Live批准。只有明確以`COUNTING_OBSERVATION`為目的、指向§24.2固定候選的獨立Campaign可適用下列差異；原Embedding Campaign仍須滿足全部原有binding／admission，Counting成功不建立任何下游readiness豁免。
+
+| Counting-specific binding／control | Mandatory admission／拒絕準則 |
+|---|---|
+| Purpose／Scope／Operation | PM受控Live Campaign record明列`COUNTING_OBSERVATION`、取得單筆token counting evidence的用途，以及§24.2的exact operation／model／API／SDK／source／version／ordinal／chunk／single-input及complete-corpus commitments；不使用54-item batch plan冒充單筆scope，不授權Embedding、Build、Calibration、Production或Formal目的。 |
+| Authority／Source／Validity | Default `Live DENIED`；首次Counting仍須PM Explicit Live Campaign Authorization及runner explicit opt-in。沿用既有受控human-governed來源，不接受caller的approved flag／自製verification object。綁定Authorized SPEC Lead、唯一Runner／Host、Human checkpoint後的exact committed clean execution source（含untracked檢查）及明確有效起訖；本次方向核准或文件草案不能取代上述授權。 |
+| Project／Credential／Outbound eligibility | 確認實際Google Project／account context及credential profile identity／revision與授權一致，綁定核准的synthetic／non-secret outbound eligibility及Free Tier資料使用許可；僅經既有resolver取得Credential，不切換profile／account或fallback，不記錄key。Project／profile或資料使用證據缺失、不一致即拒絕。 |
+| Fixed Input／Payload | 一個Approved Exact Document Content；§24.2固定528-byte envelope／591-byte serialized body及其hash，MUST由實際Pinned SDK request於transport前重驗；單筆input／payload／method／route／commitment任一不符即拒絕。不得把bytes當tokens，也不以這些本地bounds宣稱Google Payload Admission或官方System Limit已驗證。 |
+| Invocation／Timeout／Retry | Campaign最大physical invocation／attempt count = `1`，包括既有及本次預占attempt；同步執行，timeout = `30 seconds`，SDK `attempts=1`，no hidden retry／fallback／parallel／async batch／自動後續呼叫。一次attempt是本地Campaign budget，不是Google官方RPM／RPD unit保證。 |
+| Quota／Token evidence treatment | 以本Operation自身適用的最低事前安全依據判讀；不要求先取得Counting要產生的Exact Token Count，不機械式套用Embedding per-item／batch token admission。官方Billing FAQ的GetTokens免費／不計Inference Quota說明可作相關證據，但須記錄來源與適用範圍，不擴張為本模型已Live驗證或無限請求。尚無公開證明適用本案的Counting System-level RPM，不填虛構數值、不套用其他產品3000 RPM，也不以Embedding的100 RPM／30000 TPM／1000 RPD當Counting budget。所有未驗證Provider Limits記`UNKNOWN`，不是0或Unlimited。 |
+| Minimum safety／Unknown system limits | 依PM核准的本次minimum-controls原則，以明確單筆approved input、固定實際payload／hash、確認Project／profile／outbound eligibility、一次attempt、有限cost及受控authority／persistence作Counting admission；不要求事先證明所有未知Google System-level Limits，亦不將「尚未知系統RPM」本身轉成必須取得人工回覆的新Gate。此為獨立Counting的窄幅admission，不宣稱Provider保證接受；任一上述最低安全依據無法成立、已知適用限制被違反或無法確認Campaign不超限時，仍於credential discovery／transport前fail closed，不能靠PM一般性同意放行。 |
+| Cost／Usage bounds | PM record仍MUST明列幣別／計量單位、有限正值Campaign Cost Limit、一次attempt的有限input／payload／invocation占用及費用安全依據。保留`FREE_TIER_TEXT_V1`、零Provider Unit Price與每physical attempt既有`1 micro-USD` Internal Budget Hold，hold計入Campaign正值cost bound，不冒充Google Billing。缺失的actual usage／費用事實保持`UNKNOWN`，不得因免費、計數成功或取得totalTokens而填零／退款；未知系統Quota不偽造成數字token budget。 |
+| Reservation／Final Guard／Persistence | 重用既有single-host／single-runner、SQLite／Attempt authority及鎖。MUST先atomically檢查eligibility、累積budget／duplicate／IN_FLIGHT／UNKNOWN／TIMEOUT fence並持久化reservation，再credential resolution；送出前Final Guard重驗同一source／authority／profile／input／payload／有效期。Credential失敗保留typed outcome及占用，不重送或退款；紀錄／鎖／final guard不可用即拒絕。不得新增Store、Credential Registry、Quota Domain或Counting Scheduler。 |
+
+**Result／Usage／Failure boundary。** Counting `totalTokens`與Embedding Actual Usage分離；不得完成Embedding Usage Receipt、寫入不相容的Embedding usage欄位，或以Counting結果清除本次／其他Campaign未結清的UNKNOWN／TIMEOUT fence。僅在可信Counting response驗證及既有authority中的durable recording均完成後，可記錄「Counting Observation result obtained」；不得將不明結果或持久化失敗標成成功。Evidence至少綁定campaign／attempt、exact source、host／runner、model／profile、input／body commitments、時間、結果或typed failure與未知limit／usage事實；不新增第二套Usage Authority，不持久化secret或完整raw response body。
+
+Counting失敗、Malformed Response、Model Unsupported／Unsupported Operation、429／Quota、Timeout、Network／UNKNOWN或Persistence Ambiguity均MUST記錄適當typed outcome並STOP；未知結果、crash／restart或已占用budget不自動重送、退款、恢復額度、改模型／API、改input或啟動Embedding。無法確證durable write時保留既有IN_FLIGHT／UNKNOWN等保守fence供human adjudication，不假造記錄成功。一次Counting成功後亦無下一個自動request；後續Embedding Diagnostic須另行授權並通過其原Token／Payload／Quota／Batch／Usage admission。
+
+**Acceptance／delivery preservation。** 本amendment不修改Controlled Sequential Batching、Trusted Usage Metadata、54→54／768／normalization、Knowledge Build／Validate／Activate、AC-014-X、Knowledge Governance、SPEC-011 singular Runtime或SPEC-017 Formal Acceptance。單筆Counting不是G7完整Embedding Diagnostic、G8 Compatibility PASS、Candidate-C Build、RAG／RCA PASS或Production Ready；不是Formal Evaluation evidence或slot consumption。本輪只完成已通過Audit的Counting Amendment正式文件Approval Status收尾，不授權Counting Runner Implementation或任何Provider Execution，不新增G／S／E Gate、Persistent Resume、Multi-key Pool或獨立Accounting Framework。

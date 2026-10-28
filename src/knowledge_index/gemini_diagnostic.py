@@ -33,6 +33,8 @@ from .gemini_diagnostic_controls import (
     validate_authorization,
     LiveDiagnosticUsage, load_live_safety_artifact, resolve_diagnostic_credential,
     _issue_provider_usage_receipt,
+    COUNTING_OPERATION, COUNTING_CHUNK, COUNTING_INPUT, COUNTING_CORPUS, COUNTING_BODY, COUNTING_URL,
+    _timestamp,
 )
 from .google_embedding_adapter import (
     GEMINI_MODEL, GeminiEmbedding2Verification, GoogleEmbeddingAdapter,
@@ -43,6 +45,7 @@ from .google_embedding_adapter import (
     _close_offline_resources, _create_diagnostic_live_sdk_client,
     _validated_vectors,
     _embedding_prompt_tokens,
+    _prepare_counting_sdk_request,
 )
 from .identity import document_identity
 
@@ -872,6 +875,8 @@ class _DiagnosticLiveTransport(httpx.BaseTransport):
         self._usage_response_sha256 = None
         self._attempt_id = attempt_id
         self._response_validated = False
+        self._counting_tokens = None
+        self._counting_response_sha256 = None
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         if not self._lock.acquire(blocking=False):
@@ -881,7 +886,10 @@ class _DiagnosticLiveTransport(httpx.BaseTransport):
                 raise DiagnosticDenied("diagnostic resend denied", code="RUNNER_CONFLICT")
             self._entered = True
             self._revalidate()
-            compare_sdk_request_bytes(self._prepared, self._approved, self._evidence, request)
+            if self._prepared.record.purpose == COUNTING_OPERATION:
+                _compare_counting_bytes(self._prepared, self._evidence, request)
+            else:
+                compare_sdk_request_bytes(self._prepared, self._approved, self._evidence, request)
             if (request.headers.get("x-goog-api-key") != self._credential.value
                     or request.headers.get("x-server-timeout") != "30"
                     or request.headers.get("content-length") != str(len(request.content))
@@ -901,9 +909,13 @@ class _DiagnosticLiveTransport(httpx.BaseTransport):
                 # Observe only the already guarded physical response. The
                 # pinned SDK drops this field; no SDK patch/raw-body storage.
                 if 200 <= response.status_code < 300:
-                    self._prompt_tokens = _embedding_prompt_tokens(bytes(body))
-                    if self._prompt_tokens is not None:
-                        self._usage_response_sha256 = sha256(body).hexdigest()
+                    if self._prepared.record.purpose == COUNTING_OPERATION:
+                        self._counting_tokens = _counting_token_count(bytes(body))
+                        self._counting_response_sha256 = sha256(body).hexdigest()
+                    else:
+                        self._prompt_tokens = _embedding_prompt_tokens(bytes(body))
+                        if self._prompt_tokens is not None:
+                            self._usage_response_sha256 = sha256(body).hexdigest()
                 return httpx.Response(response.status_code, headers=response.headers,
                                       content=bytes(body), request=request)
             finally:
@@ -1148,17 +1160,25 @@ def _run_sequential_campaign(request, binding, artifact, resolve_facts):
 
 def run_live(
     request: ProviderEmbeddingRequest | QueryEmbeddingRequest | None = None,
-    *, live_opt_in: bool = False,
+    *, live_opt_in: bool = False, operation: str = "CONTROLLED_PROVIDER_DIAGNOSTIC",
 ) -> DiagnosticObservation:
     """Load protected campaign facts; reserve once before controlled dispatch.
 
     This public entry accepts no source, resolver, safety proof, ledger, client,
     or transport override. Missing host/PM/safety facts deny before credentials.
     """
+    if operation == COUNTING_OPERATION:
+        if request is not None:
+            raise DiagnosticDenied("counting takes only its fixed repository input", code="INPUT_MISMATCH")
+        return run_counting_observation(live_opt_in=live_opt_in)
+    if operation != "CONTROLLED_PROVIDER_DIAGNOSTIC":
+        raise DiagnosticDenied("diagnostic operation is invalid", code="OPERATION_MISMATCH")
     if live_opt_in is not True:
         raise DiagnosticDenied("explicit live diagnostic opt-in is required")
     binding = load_live_binding()
     record = binding.record
+    if record.purpose != "CONTROLLED_PROVIDER_DIAGNOSTIC":
+        raise DiagnosticDenied("counting cannot dispatch embedding", code="OPERATION_MISMATCH")
     if not isinstance(request, (ProviderEmbeddingRequest, QueryEmbeddingRequest)):
         raise DiagnosticDenied("authorized diagnostic input is not available")
     kind, identities, envelopes = _envelopes(request)
@@ -1243,6 +1263,202 @@ def run_live(
         _attempt_id=request_id, _usage_sink=receipts)
     observation = _record_live_observation(usage, refreshed, request_id, observation, receipts, binding.sdk_byte_evidence)
     return observation
+
+
+@dataclass(frozen=True, slots=True)
+class CountingObservation:
+    """Counting result/evidence, NEVER embedding usage or compatibility PASS."""
+    outcome: str
+    code: str
+    observed_token_count: int | None
+    provider_attempts: int
+    evidence: Any
+    usage: str = "UNKNOWN"
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedCounting:
+    record: DiagnosticAuthorizationRecord
+    facts: DiagnosticExecutionFacts
+    contents: tuple[Any, ...]
+    body: bytes
+    cost_micro_units: int = 1
+
+
+def _counting_content():
+    """Read approved sources and derive chunks; no build/claim/store mutation."""
+    from .manifest import admit_production_manifest
+    from .chunking import plan_chunks
+    from .config import load_knowledge_config
+    root = Path(__file__).resolve().parents[2]
+    try:
+        config = load_knowledge_config(root / "configs/knowledge_index.yaml")
+        admission = admit_production_manifest("configs/knowledge_manifest.json", repository_root=root)
+        chunks = plan_chunks(admission, source_root=root / "docs/knowledge", profile=config.chunking)
+        mapping = {document_identity(admission.manifest.corpus_id, d.document_id): d.document_id
+                   for d in admission.manifest.documents}
+        identities = tuple(c.chunk_identity for c in chunks)
+        texts = tuple(f"title: {mapping[c.document_identity]} | text: {c.content}" for c in chunks)
+        if (len(chunks) != 54 or len(set(identities)) != 54 or len(mapping) != 6
+                or input_commitment("document", identities, texts) != COUNTING_CORPUS
+                or identities[52] != COUNTING_CHUNK
+                or mapping[chunks[52].document_identity] != "ops.shared-database-network-dependency-interruption"
+                or next(d for d in admission.manifest.documents
+                        if d.document_id == mapping[chunks[52].document_identity]).document_version != "1.0"):
+            raise ValueError("candidate differs")
+        return admission.manifest.corpus_id, texts[52]
+    except Exception:
+        raise DiagnosticDenied("approved counting corpus or chunk mismatch", code="INPUT_MISMATCH") from None
+
+
+def _serialize_counting(envelope):
+    try:
+        contents, body, route = _prepare_counting_sdk_request(envelope)
+    except DiagnosticDenied:
+        raise
+    except Exception:
+        raise DiagnosticDenied("counting SDK serialization unavailable", code="PAYLOAD_MISMATCH") from None
+    if (route != {"model": "models/" + GEMINI_MODEL} or len(envelope.encode()) != 528
+            or len(body) != 591 or sha256(body).hexdigest() != COUNTING_BODY):
+        raise DiagnosticDenied("counting SDK payload differs from approved candidate", code="PAYLOAD_MISMATCH")
+    return contents, body
+
+
+def _prepare_counting(binding, artifact):
+    record, approved, e4 = binding.record, binding.approved_input, binding.sdk_byte_evidence
+    # Revalidate DTOs as well as fixed-host parsed records.
+    record.__post_init__()
+    if record.purpose != COUNTING_OPERATION:
+        raise DiagnosticDenied("counting authorization operation mismatch", code="OPERATION_MISMATCH")
+    scope, envelope = _counting_content()
+    if (approved.kind != "document" or approved.scope_identity != scope
+            or record.input_scope_identity != scope or approved.identities != (COUNTING_CHUNK,)
+            or approved.envelopes != (envelope,)
+            or input_commitment("document", approved.identities, approved.envelopes) != COUNTING_INPUT):
+        raise DiagnosticDenied("counting approved input mismatch", code="INPUT_MISMATCH")
+    contents, body = _serialize_counting(envelope)
+    revision, clean = resolve_repository_source(Path(__file__).resolve().parents[2])
+    now = datetime.now(timezone.utc)
+    if not clean or revision != record.source_revision:
+        raise DiagnosticDenied("counting source is dirty or unapproved", code="SOURCE_MISMATCH")
+    if (binding.runner_sid != record.runner_identity or socket.gethostname() != record.authorized_host):
+        raise DiagnosticDenied("counting host or runner mismatch", code="AUTHORIZATION_DENIED")
+    if not _timestamp(record.valid_from) <= now < _timestamp(record.expires_at):
+        raise DiagnosticDenied("counting authorization expired", code="AUTHORIZATION_EXPIRED")
+    artifact.matches_record_input(record, approved, e4, revision)
+    if (e4.sdk_body_sha256 != sha256(body).hexdigest()
+            or e4.canonical_json_sha256 != sha256(_canonical_request(body)).hexdigest()
+            or e4.sdk_body_bytes != len(body) or e4.output_dimensionality is not None):
+        raise DiagnosticDenied("counting E4 payload mismatch", code="PAYLOAD_MISMATCH")
+    facts = DiagnosticExecutionFacts(revision, clean, record.pm_approval_reference,
+        record.spec_lead_identity, binding.runner_sid, record.authorized_host,
+        record.credential_profile_identity, now)
+    return _PreparedCounting(record, facts, contents, body)
+
+
+def _compare_counting_bytes(prepared, evidence, request):
+    if (prepared.record.purpose != COUNTING_OPERATION or request.method != "POST"
+            or str(request.url) != COUNTING_URL or request.content != prepared.body
+            or sha256(request.content).hexdigest() != COUNTING_BODY
+            or evidence.sdk_body_sha256 != COUNTING_BODY
+            or request.extensions.get("timeout") != dict(connect=30.0, read=30.0, write=30.0, pool=30.0)):
+        raise DiagnosticDenied("actual counting request mismatch", code="PAYLOAD_MISMATCH")
+
+
+def _counting_token_count(body):
+    from .gemini_diagnostic_controls import _safety_unique
+    try:
+        if type(body) is not bytes or not 0 < len(body) <= 1_000_000:
+            raise ValueError("size")
+        def invalid_constant(_):
+            raise ValueError("invalid JSON constant")
+        value = json.loads(body.decode("utf-8"), object_pairs_hook=_safety_unique,
+                           parse_constant=invalid_constant)
+        count = value.get("totalTokens") if type(value) is dict else None
+        if type(count) is not int or not 0 <= count <= 2**63 - 1:
+            raise ValueError("count")
+        return count
+    except Exception:
+        raise DiagnosticDenied("counting response is invalid", code="INVALID_PROVIDER_RESPONSE") from None
+
+
+def _dispatch_counting(prepared, binding, credential, revalidate, request_id):
+    """Same controlled SDK/client/physical guard as embedding, one operation."""
+    guard = _DiagnosticLiveTransport(prepared, binding.approved_input, binding.sdk_byte_evidence,
+                                     credential, revalidate, attempt_id=request_id)
+    sdk = sync = async_client = None
+    outcome, code = "UNKNOWN", "UNKNOWN"
+    try:
+        sync = _DiagnosticHttpxClient(guard)
+        async_client = httpx.AsyncClient(transport=_DiagnosticAsyncDenyTransport(),
+                                         trust_env=False, follow_redirects=False, max_redirects=0)
+        sdk = _create_diagnostic_live_sdk_client(credential.value, sync, async_client)
+        api, opts = sdk._api_client, sdk._api_client._http_options
+        if (api.vertexai is not False or opts.api_version != "v1" or opts.timeout != 30_000
+                or opts.retry_options.attempts != 1 or api._retry.stop.max_attempt_number != 1
+                or api._httpx_client is not sync or api._async_httpx_client is not async_client
+                or opts.base_url.rstrip("/") != "https://generativelanguage.googleapis.com"):
+            raise DiagnosticDenied("counting SDK policy mismatch", code="AUTHORIZATION_DENIED")
+        response = sdk.models.count_tokens(model=GEMINI_MODEL,
+            contents=[c.model_copy(deep=True) for c in prepared.contents])
+        if (guard.delegations != 1 or guard._counting_tokens is None
+                or type(response.total_tokens) is not int or response.total_tokens != guard._counting_tokens):
+            raise DiagnosticDenied("counting response boundary mismatch", code="INVALID_PROVIDER_RESPONSE")
+        guard._response_validated = True
+        outcome, code = "SUCCESS", "COUNTING_RESULT_OBTAINED"
+    except Exception as exc:
+        if isinstance(exc, DiagnosticDenied):
+            outcome, code = "FAILED", exc.code
+        elif isinstance(exc, httpx.TimeoutException):
+            outcome, code = "TIMEOUT", "TRANSPORT_TIMEOUT"
+        elif getattr(exc, "code", None) == 429:
+            outcome, code = "FAILED", "RATE_LIMIT_QUOTA"
+        elif getattr(exc, "code", None) == 404:
+            outcome, code = "FAILED", "UNSUPPORTED_MODEL"
+        elif getattr(exc, "code", None) in (400, 405):
+            outcome, code = "FAILED", "UNSUPPORTED_OPERATION"
+        else:
+            outcome, code = "UNKNOWN", "TRANSPORT_FAILURE"
+    finally:
+        if _close_offline_resources(sdk, sync, async_client):
+            outcome, code = "UNKNOWN", "UNKNOWN"
+    return outcome, code, guard
+
+
+def run_counting_observation(*, live_opt_in=False):
+    """Fixed host authority only. Tests replace internal I/O with sealed mocks."""
+    from types import MappingProxyType
+    if live_opt_in is not True:
+        raise DiagnosticDenied("explicit counting live opt-in is required")
+    if not _SEQUENTIAL_RUNNER_LOCK.acquire(blocking=False):
+        raise DiagnosticDenied("diagnostic runner conflict", code="RUNNER_CONFLICT")
+    try:
+        binding, artifact = load_live_binding(), load_live_safety_artifact()
+        prepared = _prepare_counting(binding, artifact)
+        record = prepared.record
+        usage = LiveDiagnosticUsage()
+        request_id = "counting." + COUNTING_BODY
+        # No token estimates: usage_reserved=1 means an operation unit, NOT a token.
+        usage.reserve(record, request_id, items=1, usage_units=1, cost_micro_units=1)
+        try:
+            credential = resolve_diagnostic_credential(record, artifact)
+        except Exception as exc:
+            code = exc.code if isinstance(exc, DiagnosticDenied) else "CREDENTIAL_UNAVAILABLE"
+            usage._finish_counting(record, request_id, "FAILED", code)
+            raise DiagnosticDenied("counting credential unavailable", code=code) from None
+        def revalidate():
+            current, safety = load_live_binding(), load_live_safety_artifact()
+            if current != binding or safety.fields != artifact.fields:
+                raise DiagnosticDenied("counting authority changed before transport")
+            latest = _prepare_counting(current, safety)
+            if latest.body != prepared.body or latest.record != record:
+                raise DiagnosticDenied("counting final safety mismatch")
+        outcome, code, guard = _dispatch_counting(prepared, binding, credential, revalidate, request_id)
+        evidence = usage._finish_counting(record, request_id, outcome, code, guard)
+        return CountingObservation(outcome, code, evidence["observed_token_count"],
+                                   guard.delegations, MappingProxyType(evidence))
+    finally:
+        _SEQUENTIAL_RUNNER_LOCK.release()
 
 
 def main() -> int:

@@ -12,7 +12,8 @@
 | Document Name | RCA Evaluation & E2E Validation |
 | Version | 1.1 |
 | Status | Approved — Migration Readiness Reconciliation Pending |
-| Controlled Batching Amendment | v1.1-based Draft — Combined Independent Document Audit／SPEC Lead Approval Pending；依SPEC Lead轉交的PM回覆「APPROVE — SPEC-014 Controlled Batching Narrow Amendment Direction」；未新增PM Decision ID，不構成Live或Formal Authorization |
+| Controlled Batching Amendment | v1.1-based Approved — Controlled Batching Narrow Amendment；baseline version不變；不構成Live或Formal Authorization |
+| Controlled Batching Approval Record | SPEC Lead 2026-10-28正式採納既有Combined Independent Document Audit — PASS／Findings NONE；依PM「APPROVE — SPEC-014 Controlled Batching Narrow Amendment Direction」及最新「APPROVE WITH MINIMUM NECESSARY CONTROLS — SPEC-014 Independent Counting Observation」的文件收尾授權，核准§19.4既有batching修訂。未新增PM Decision ID，未重新執行Audit，不改Formal Acceptance，不授權Live／Formal execution。 |
 | Approved Amendment | 2026-10-28 Minimum Necessary Competition Scope Reset Amendment on v1.1；Approved；baseline version不變 |
 | Scope Reset Approval Record | SPEC Lead 2026-10-28：APPROVE — Minimum Necessary Competition Scope Reset Amendment；依PM-AIOPS-COMPETITION-SCOPE-RESET-20261028採納Consolidated Independent Semantic Audit：PASS／Findings NONE／READY FOR APPROVAL；僅核准本次新增條款，不授權implementation、Live Provider或Formal execution |
 | Date | 2026-10-22 |
@@ -28,6 +29,7 @@
 
 | Version | Date | Status | Change |
 |---|---|---|---|
+| v1.1-based batching amendment | 2026-10-28（approval date） | Approved — Controlled Batching Narrow Amendment | SPEC Lead依PM授權採納既有Combined Independent Document Audit PASS／Findings NONE，僅完成§19.4 Approval／Status收尾；已審查技術條款、F1～F8、S1～S6 O1～O10、N=5及reviewers／Oracle／denominator／Admission不變。下列draft及既有Approval／BLOCK紀錄保留，Formal Evaluation仍為NOT EXECUTED，不授權Live／Formal execution。 |
 | v1.1-based batching draft | 2026-10-28 | Draft — Combined Independent Document Audit／SPEC Lead Approval Pending | 依PM Controlled Batching方向核准及SPEC Lead跨文件修訂授權，僅對齊§19.4 Real-RAG readiness的request contract與SPEC-014 batching draft／PRD-004 §13.5第3點draft；保留Formal S1～S6、N=5、F1～F8、O1～O10、reviewers／Oracle／denominator／Admission。既有Approval／BLOCK／NOT EXECUTED紀錄不變，不形成readiness或Formal PASS，不授權execution。 |
 | v1.1-based amendment | 2026-10-28（approval date） | Approved — Minimum Necessary Competition Scope Reset Amendment | SPEC Lead正式採納Consolidated Independent Semantic Audit PASS／Findings NONE並核准§19.6；僅完成Approval／Status收尾，保留下列draft與歷史approval；不構成Implementation、real gate或Formal PASS，不授權Live／Formal execution。 |
 | v1.1-based draft | 2026-10-28 | Draft — Scope Reset Approval Pending | 依PM-AIOPS-COMPETITION-SCOPE-RESET-20261028增補§19.6的A Demo／B Formal適用範圍；不改Formal acceptance，不授權implementation、Live Provider或Formal execution。 |
@@ -36,6 +38,10 @@
 | 1.0 | 2026-10-02 | Approved — Implementation Pending | Phase 3 Review提出F-001～F-004；Phase 4 Narrow Patch完成；Phase 3 Re-review PASS且全部findings closed。F1～F8及PM Oracle semantics preserved；正式核准進入implementation handoff planning，implementation尚未開始。 |
 
 ### Status Honesty
+
+**Controlled Batching current status — Approved，2026-10-28：** SPEC Lead依上列PM Authority採納既有Combined Independent Document Audit PASS／Findings NONE並正式核准§19.4，與SPEC-014及PRD-004 §13.5第3點完成Approval Status Reconciliation。僅作文件狀態收尾，不重做Audit，不修改v1.1 baseline、Formal methodology／Acceptance、Oracle／reviewer／denominator／Admission或歷史evidence。Formal Evaluation仍為NOT EXECUTED、Slots Consumed = 0；Provider Compatibility仍為NOT EXECUTED，不產生readiness或Formal PASS，不授權Live Provider或Formal Evaluation。下段僅保留當時draft狀態。
+
+**Historical Controlled Batching draft status（原文保留；已由上列正式Approval收尾）：**
 
 **Controlled Batching reconciliation — Draft／Combined Independent Document Audit及SPEC Lead Approval Pending：** 僅將§19.4指定request contract對齊SPEC-014 v1.4-based batching draft及PRD-004 §13.5第3點draft；未核准前不取代原Approved契約，原單次request文字可由Human Checkpoint `39d199b92187f70da9f54e770af34df37ec13da1`核對。PM方向核准不是三份文件Amendment Final Approval，不修改Formal methodology／acceptance或歷史evidence，不新增slot consumption，也不授權Live Provider或Formal Evaluation。
 
@@ -901,7 +907,7 @@ Source/config/profile改變必須重評evidence freshness並建立適當新linea
 
 四人成員個人環境的驗證activation是AC-014-X取得evidence的步驟，不要求該AC事前PASS；production activation與正式Competition Readiness則必須具備全新的四人有效evidence。歷史`NOT EXECUTED — PM-DIRECTED SKIP FOR CURRENT CLOSURE`不延伸至新模型，不改寫為PASS。§11.2既有conditional scope文字對本migration的適用性已由本次PM decision確定為mandatory。
 
-**Controlled Batching draft（Approval Pending）：** 新Real-RAG readiness必須依SPEC-014 §24.2／§24.6.1驗證`gemini-embedding-2`、stable v1、approved固定Batch Plan及其commitment、Sequential Synchronous Execution與完整54 ordered unique inputs／commitment。每batch須有適用的item／token／payload安全上界、quota protection與逐筆chunk identity／一對一mapping／order evidence；最後驗證全域完整54→54、768 dimensions、provider normalization、source／manifest／provenance及新build/profile一致性，並保留已freeze的calibrated policy相容性。Campaign須受有限maximum batch／invocation count及累積token／usage／cost bounds約束；每request最多一次physical attempt、30秒timeout、no hidden retry／fallback／未授權split。安全證據不足即fail closed，不推定任何batch size已有Google保證；partial result不得通過readiness，UNKNOWN／TIMEOUT不自動retry、退款或繼續後續batch，既有Free Tier／authorization控制及UNKNOWN usage fence依SPEC-014 §24.6.1保留。SDK static evidence、offline regression、HTTP success、單人rebuild或舊Gate receipt均不足以代替真實Provider Compatibility Evidence與各required Gate；本修訂不降低Formal Readiness或Acceptance Requirements。
+**Controlled Batching approved amendment：** 新Real-RAG readiness必須依SPEC-014 §24.2／§24.6.1驗證`gemini-embedding-2`、stable v1、approved固定Batch Plan及其commitment、Sequential Synchronous Execution與完整54 ordered unique inputs／commitment。每batch須有適用的item／token／payload安全上界、quota protection與逐筆chunk identity／一對一mapping／order evidence；最後驗證全域完整54→54、768 dimensions、provider normalization、source／manifest／provenance及新build/profile一致性，並保留已freeze的calibrated policy相容性。Campaign須受有限maximum batch／invocation count及累積token／usage／cost bounds約束；每request最多一次physical attempt、30秒timeout、no hidden retry／fallback／未授權split。安全證據不足即fail closed，不推定任何batch size已有Google保證；partial result不得通過readiness，UNKNOWN／TIMEOUT不自動retry、退款或繼續後續batch，既有Free Tier／authorization控制及UNKNOWN usage fence依SPEC-014 §24.6.1保留。SDK static evidence、offline regression、HTTP success、單人rebuild或舊Gate receipt均不足以代替真實Provider Compatibility Evidence與各required Gate；本修訂不降低Formal Readiness或Acceptance Requirements。
 
 Formal Admission前的preparation-only resources依§8.5建立，不形成Formal execution facts、campaign provider invocation、denominator／slot consumption或Formal metrics。Controlled diagnostic、calibration及preparation資源建立各須其獨立scope/budget，不得冒充Formal campaign。ADMITTED不代表本Slice授權Formal Execution。
 

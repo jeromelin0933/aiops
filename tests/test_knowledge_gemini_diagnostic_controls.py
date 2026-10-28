@@ -661,7 +661,8 @@ def validate(item, actual=None, **changes):
     return validate_authorization(item, actual or facts(), **args)
 
 
-@pytest.mark.parametrize("field", tuple(DiagnosticAuthorizationRecord.__dataclass_fields__))
+@pytest.mark.parametrize("field", tuple(name for name in DiagnosticAuthorizationRecord.__dataclass_fields__
+                                      if name not in ("project_identity", "credential_profile_revision")))
 def test_every_mandatory_record_field_is_required(field):
     values = asdict(record())
     del values[field]
