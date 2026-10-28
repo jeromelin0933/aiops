@@ -63,6 +63,81 @@ class DiagnosticDenied(ValueError):
         self.code = code
 
 
+_PROVIDER_USAGE_SEAL = object()
+
+
+@dataclass(frozen=True, slots=True, init=False, repr=False)
+class _ProviderUsageReceipt:
+    """Invocation-local boundary receipt, not a caller grant or durable store.
+
+    Only the guarded diagnostic response path issues this after vector
+    validation. Public finish()/run_live() accept no caller usage override.
+    """
+
+    prompt_tokens: int
+    campaign_id: str
+    request_id: str
+    authorization_sha256: str
+    request_sha256: str
+    response_sha256: str
+    _seal: object
+
+    def __init__(self, *args, **kwargs):
+        raise DiagnosticDenied("provider usage receipts are internal boundary results")
+
+    def __repr__(self):
+        return "<ProviderUsageReceipt>"
+
+    def matches(self, record, request_id: str, request_sha256: str) -> None:
+        try:
+            if (type(self) is not _ProviderUsageReceipt or self._seal is not _PROVIDER_USAGE_SEAL
+                    or self.campaign_id != record.campaign_id or self.request_id != request_id
+                    or self.authorization_sha256 != authorization_record_digest(record)
+                    or self.request_sha256 != request_sha256):
+                raise DiagnosticDenied("provider usage attempt/source/input binding mismatch")
+            _positive(self.prompt_tokens, "provider prompt tokens")
+        except (AttributeError, TypeError):
+            raise DiagnosticDenied("provider usage receipt is unavailable") from None
+
+    def provenance(self) -> str:
+        # Authorization digest covers source/model/profile/input/plan/budgets;
+        # request ID identifies the reserved batch. No raw body is persisted.
+        return hashlib.sha256(json.dumps([self.campaign_id, self.request_id,
+            self.authorization_sha256, self.request_sha256, self.response_sha256,
+            self.prompt_tokens], separators=(",", ":")).encode()).hexdigest()
+
+
+def _issue_provider_usage_receipt(boundary):
+    """Private handoff from the existing guarded physical response only.
+
+    This is not a parser or user-facing acceptance surface. It creates no PM
+    approval, technical compatibility evidence, or permission to make a call.
+    """
+    # No scalar/verified flag supplied by a caller can mint this result. Read
+    # only the exact existing guard after physical dispatch AND SDK validation.
+    from .gemini_diagnostic import _DiagnosticLiveTransport
+    if (type(boundary) is not _DiagnosticLiveTransport or boundary.delegations != 1
+            or not boundary._entered or boundary._response_validated is not True):
+        raise DiagnosticDenied("trusted provider response boundary is unavailable")
+    record = boundary._prepared.record
+    request_id = boundary._attempt_id
+    request_sha256 = boundary._evidence.sdk_body_sha256
+    response_sha256 = boundary._usage_response_sha256
+    prompt_tokens = boundary._prompt_tokens
+    _positive(prompt_tokens, "provider prompt tokens")
+    if (type(record) is not DiagnosticAuthorizationRecord
+            or type(request_id) is not str or not 1 <= len(request_id) <= 128
+            or any(type(v) is not str or not re.fullmatch(r"[0-9a-f]{64}", v)
+                   for v in (request_sha256, response_sha256))):
+        raise DiagnosticDenied("provider usage context is invalid")
+    result = object.__new__(_ProviderUsageReceipt)
+    for name, value in dict(prompt_tokens=prompt_tokens, campaign_id=record.campaign_id,
+        request_id=request_id, authorization_sha256=authorization_record_digest(record),
+        request_sha256=request_sha256, response_sha256=response_sha256, _seal=_PROVIDER_USAGE_SEAL).items():
+        object.__setattr__(result, name, value)
+    return result
+
+
 @dataclass(frozen=True, slots=True)
 class FixedHostPaths:
     root: Path
@@ -1644,12 +1719,18 @@ class TemporaryDiagnosticUsage:
             raise DiagnosticDenied("diagnostic usage lock or record is unavailable") from exc
 
     def finish(self, record: DiagnosticAuthorizationRecord, request_id: str, outcome: str) -> None:
-        # Provider usage mapping is unproven. No public observation override.
+        # No caller observation override. Missing/failed responses stay UNKNOWN.
         self._finish(record, request_id, outcome, "UNKNOWN")
 
+    def _finish_provider_usage(self, record, request_id, outcome, receipt, request_sha256):
+        if type(receipt) is not _ProviderUsageReceipt or outcome != "SUCCESS":
+            raise DiagnosticDenied("trusted successful provider usage is unavailable")
+        receipt.matches(record, request_id, request_sha256)
+        self._finish(record, request_id, outcome, str(receipt.prompt_tokens), _provider_receipt=receipt)
+
     def _finish(self, record: DiagnosticAuthorizationRecord, request_id: str,
-                outcome: str, observed: str) -> None:
-        """Atomic completion; numeric observations are isolated offline fixtures.
+                outcome: str, observed: str, *, _provider_receipt=None) -> None:
+        """Atomic completion; formal numeric usage needs a boundary receipt.
 
         Keep exact excess evidence with UNKNOWN using the existing columns. A
         reservation is never reduced, even with known zero or failed completion.
@@ -1658,8 +1739,14 @@ class TemporaryDiagnosticUsage:
             raise DiagnosticDenied("diagnostic outcome is invalid")
         if type(request_id) is not str or not request_id or len(request_id) > 128:
             raise DiagnosticDenied("diagnostic request identity is invalid")
+        if _provider_receipt is not None:
+            if type(_provider_receipt) is not _ProviderUsageReceipt or outcome != "SUCCESS":
+                raise DiagnosticDenied("provider usage receipt is invalid")
+            _provider_receipt.matches(record, request_id, _provider_receipt.request_sha256)
+            if observed != str(_provider_receipt.prompt_tokens):
+                raise DiagnosticDenied("provider usage scalar differs from boundary receipt")
         if type(observed) is not str or (observed != "UNKNOWN" and (
-            type(self) is not TemporaryDiagnosticUsage
+            (type(self) is not TemporaryDiagnosticUsage and _provider_receipt is None)
             or not re.fullmatch(r"0|[1-9][0-9]{0,18}", observed)
             or int(observed) > 2**63 - 1
         )):

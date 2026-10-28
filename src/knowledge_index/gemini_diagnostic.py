@@ -32,6 +32,7 @@ from .gemini_diagnostic_controls import (
     load_live_binding, reserve_eligible_attempt, resolve_repository_source,
     validate_authorization,
     LiveDiagnosticUsage, load_live_safety_artifact, resolve_diagnostic_credential,
+    _issue_provider_usage_receipt,
 )
 from .google_embedding_adapter import (
     GEMINI_MODEL, GeminiEmbedding2Verification, GoogleEmbeddingAdapter,
@@ -41,6 +42,7 @@ from .google_embedding_adapter import (
     _DiagnosticHttpxClient, _DiagnosticAsyncDenyTransport,
     _close_offline_resources, _create_diagnostic_live_sdk_client,
     _validated_vectors,
+    _embedding_prompt_tokens,
 )
 from .identity import document_identity
 
@@ -62,6 +64,7 @@ class DiagnosticObservation:
     source_revision: str
     input_commitment: str
     billing_status: str = "ESTIMATE_NOT_GOOGLE_BILLING"
+    usage_provenance_sha256: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -859,12 +862,16 @@ def _create_live_transport() -> httpx.BaseTransport:
 class _DiagnosticLiveTransport(httpx.BaseTransport):
     """One synchronous send after final source/authority/body verification."""
 
-    def __init__(self, prepared, approved, evidence, credential, revalidate) -> None:
+    def __init__(self, prepared, approved, evidence, credential, revalidate, *, attempt_id=None) -> None:
         self._prepared, self._approved, self._evidence = prepared, approved, evidence
         self._credential, self._revalidate = credential, revalidate
         self._lock, self._entered = Lock(), False
         self.delegations = 0
         self._delegate = None
+        self._prompt_tokens = None
+        self._usage_response_sha256 = None
+        self._attempt_id = attempt_id
+        self._response_validated = False
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         if not self._lock.acquire(blocking=False):
@@ -891,6 +898,12 @@ class _DiagnosticLiveTransport(httpx.BaseTransport):
                     body.extend(chunk)
                     if len(body) > 1_000_000:
                         raise DiagnosticDenied("diagnostic provider response exceeds bound", code="INVALID_PROVIDER_RESPONSE")
+                # Observe only the already guarded physical response. The
+                # pinned SDK drops this field; no SDK patch/raw-body storage.
+                if 200 <= response.status_code < 300:
+                    self._prompt_tokens = _embedding_prompt_tokens(bytes(body))
+                    if self._prompt_tokens is not None:
+                        self._usage_response_sha256 = sha256(body).hexdigest()
                 return httpx.Response(response.status_code, headers=response.headers,
                                       content=bytes(body), request=request)
             finally:
@@ -903,8 +916,9 @@ class _DiagnosticLiveTransport(httpx.BaseTransport):
             self._delegate.close()
 
 
-def _dispatch_live(prepared, approved, evidence, credential, revalidate, *, _vectors=None) -> DiagnosticObservation:
-    guard = _DiagnosticLiveTransport(prepared, approved, evidence, credential, revalidate)
+def _dispatch_live(prepared, approved, evidence, credential, revalidate, *,
+                   _vectors=None, _attempt_id=None, _usage_sink=None) -> DiagnosticObservation:
+    guard = _DiagnosticLiveTransport(prepared, approved, evidence, credential, revalidate, attempt_id=_attempt_id)
     sdk = sync = async_client = None
     try:
         sync = _DiagnosticHttpxClient(guard)
@@ -924,12 +938,20 @@ def _dispatch_live(prepared, approved, evidence, credential, revalidate, *, _vec
             raise DiagnosticDenied("invalid diagnostic provider vectors", code="INVALID_PROVIDER_RESPONSE")
         if _vectors is not None:
             _vectors.extend(zip(prepared.identities, vectors, strict=True))
+        guard._response_validated = True
+        receipt = None
+        if (_attempt_id is not None and type(_usage_sink) is list
+                and guard.delegations == 1 and guard._prompt_tokens is not None):
+            receipt = _issue_provider_usage_receipt(guard)
+            _usage_sink.append(receipt)
         # Positional vectors are observed, not a real mapping/order acceptance
         # proof. Never apply synthetic cosine markers to real provider output.
         return DiagnosticObservation("SUCCESS", "OBSERVED_MAPPING_REVIEW_REQUIRED", None, None,
-            None, None, guard.delegations, prepared.identities, len(vectors), "UNKNOWN",
+            None, None, guard.delegations, prepared.identities, len(vectors),
+            str(receipt.prompt_tokens) if receipt is not None else "UNKNOWN",
             prepared.cost_micro_units, prepared.record.campaign_id, prepared.record.source_revision,
-            prepared.record.input_commitment)
+            prepared.record.input_commitment,
+            usage_provenance_sha256=receipt.provenance() if receipt is not None else None)
     except Exception as exc:
         code, field, detail, retry = prepared.adapter._gemini_invocation_failure(exc, query=True)
         if field == "provider_rate_limit" and getattr(exc, "status", None) == "RESOURCE_EXHAUSTED":
@@ -946,6 +968,17 @@ def _dispatch_live(prepared, approved, evidence, credential, revalidate, *, _vec
 
 
 _SEQUENTIAL_RUNNER_LOCK = Lock()
+
+
+def _record_live_observation(usage, prepared, request_id, observation, receipts, evidence):
+    """Only a validated physical response can complete formal numeric usage."""
+    if observation.outcome == "SUCCESS" and len(receipts) == 1:
+        receipt = receipts[0]
+        usage._finish_provider_usage(prepared.record, request_id, observation.outcome,
+                                     receipt, evidence.sdk_body_sha256)
+        return observation
+    usage.finish(prepared.record, request_id, observation.outcome)
+    return replace(observation, usage="UNKNOWN", usage_provenance_sha256=None)
 
 
 def _chunk_metadata_commitment(request: ProviderEmbeddingRequest) -> str:
@@ -1074,8 +1107,10 @@ def _run_sequential_campaign(request, binding, artifact, resolve_facts):
                 usage.finish(prepared.record, request_id, "FAILED")
                 raise DiagnosticDenied("batch credential resolution failed; attempt retained",
                                        code="CREDENTIAL_UNAVAILABLE") from None
-            observation = _dispatch_live(prepared, approved, evidence, credential, refresh, _vectors=collected)
-            usage.finish(prepared.record, request_id, observation.outcome)
+            receipts = []
+            observation = _dispatch_live(prepared, approved, evidence, credential, refresh,
+                _vectors=collected, _attempt_id=request_id, _usage_sink=receipts)
+            observation = _record_live_observation(usage, prepared, request_id, observation, receipts, evidence)
             observations.append(observation)
             if observation.outcome != "SUCCESS":
                 return replace(observation, vector_count=0,
@@ -1083,8 +1118,8 @@ def _run_sequential_campaign(request, binding, artifact, resolve_facts):
                     ordered_identities=binding.approved_input.identities,
                     input_commitment=binding.record.input_commitment,
                     cost_estimate_micro_units=sum(o.cost_estimate_micro_units for o in observations))
-            # Production finish() records UNKNOWN; only existing human
-            # adjudication can clear it. Mock tests may use numeric fixtures.
+            # Durable validated provider usage must exist before continuation.
+            # Missing metadata keeps the existing UNKNOWN/adjudication fence.
             state = usage._completion_state(prepared.record, request_id)
             if (state is None or state[0] != "SUCCESS" or state[1] == "UNKNOWN"
                     or not state[1].isdigit() or int(state[1]) > prepared.usage_units):
@@ -1101,6 +1136,11 @@ def _run_sequential_campaign(request, binding, artifact, resolve_facts):
             ordered_identities=tuple(identity for identity, _ in collected), vector_count=54,
             provider_attempts=sum(o.provider_attempts for o in observations),
             cost_estimate_micro_units=sum(o.cost_estimate_micro_units for o in observations),
+            usage=str(sum(int(o.usage) for o in observations))
+                if all(o.usage.isdigit() for o in observations) else "UNKNOWN",
+            usage_provenance_sha256=sha256(json.dumps(
+                [o.usage_provenance_sha256 for o in observations], separators=(",", ":")).encode()).hexdigest()
+                if all(o.usage_provenance_sha256 is not None for o in observations) else None,
             input_commitment=binding.record.input_commitment)
     finally:
         _SEQUENTIAL_RUNNER_LOCK.release()
@@ -1198,8 +1238,10 @@ def run_live(
         if load_live_safety_artifact().fields != artifact.fields:
             raise DiagnosticDenied("diagnostic safety metadata changed before transport")
 
-    observation = _dispatch_live(refreshed, approved, binding.sdk_byte_evidence, credential, revalidate)
-    usage.finish(record, request_id, observation.outcome)
+    receipts = []
+    observation = _dispatch_live(refreshed, approved, binding.sdk_byte_evidence, credential, revalidate,
+        _attempt_id=request_id, _usage_sink=receipts)
+    observation = _record_live_observation(usage, refreshed, request_id, observation, receipts, binding.sdk_byte_evidence)
     return observation
 
 

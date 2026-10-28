@@ -38,6 +38,34 @@ APPROVED_DIMENSION = 768
 GEMINI_MODEL = GEMINI_EMBEDDING2_PROFILE.model
 
 
+def _embedding_prompt_tokens(body: bytes) -> int | None:
+    """Allowlisted scalar from the existing guarded response, before SDK loss.
+
+    This parser alone establishes NO provider/attempt authority. Missing,
+    duplicate, malformed and implausible usage remains UNKNOWN. Every approved
+    envelope is nonempty, so an explicit zero is not adopted as actual usage.
+    Never retain/return the raw response, other metadata, or header guesses.
+    """
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate response field")
+            result[key] = value
+        return result
+    def constant(_):
+        raise ValueError("invalid JSON constant")
+    try:
+        if type(body) is not bytes or not 0 < len(body) <= 1_000_000:
+            return None
+        value = json.loads(body.decode("utf-8"), object_pairs_hook=unique, parse_constant=constant)
+        metadata = value.get("usageMetadata") if type(value) is dict else None
+        count = metadata.get("promptTokenCount") if type(metadata) is dict else None
+        return count if type(count) is int and 0 < count <= 2**63 - 1 else None
+    except (ValueError, UnicodeError, TypeError, RecursionError, OverflowError):
+        return None
+
+
 @dataclass(frozen=True, slots=True)
 class GeminiEmbedding2Verification:
     """Offline technical inputs only; never authorizes a provider invocation.
