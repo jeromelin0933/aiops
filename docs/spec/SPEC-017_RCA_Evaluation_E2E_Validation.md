@@ -12,6 +12,8 @@
 | Document Name | RCA Evaluation & E2E Validation |
 | Version | 1.1 |
 | Status | Approved — Migration Readiness Reconciliation Pending |
+| Approved Amendment | 2026-10-28 Minimum Necessary Competition Scope Reset Amendment on v1.1；Approved；baseline version不變 |
+| Scope Reset Approval Record | SPEC Lead 2026-10-28：APPROVE — Minimum Necessary Competition Scope Reset Amendment；依PM-AIOPS-COMPETITION-SCOPE-RESET-20261028採納Consolidated Independent Semantic Audit：PASS／Findings NONE／READY FOR APPROVAL；僅核准本次新增條款，不授權implementation、Live Provider或Formal execution |
 | Date | 2026-10-22 |
 | Approval Date | 2026-10-22（migration amendment；v1.0 approval保留） |
 | Migration Authority | PM-RAG-EMBEDDING-MIGRATION-20261022；SPEC Lead Slice 0 authorization |
@@ -25,11 +27,15 @@
 
 | Version | Date | Status | Change |
 |---|---|---|---|
+| v1.1-based amendment | 2026-10-28（approval date） | Approved — Minimum Necessary Competition Scope Reset Amendment | SPEC Lead正式採納Consolidated Independent Semantic Audit PASS／Findings NONE並核准§19.6；僅完成Approval／Status收尾，保留下列draft與歷史approval；不構成Implementation、real gate或Formal PASS，不授權Live／Formal execution。 |
+| v1.1-based draft | 2026-10-28 | Draft — Scope Reset Approval Pending | 依PM-AIOPS-COMPETITION-SCOPE-RESET-20261028增補§19.6的A Demo／B Formal適用範圍；不改Formal acceptance，不授權implementation、Live Provider或Formal execution。 |
 | 1.1 | 2026-10-22 | Approved — Migration Readiness Reconciliation Pending | PM-RAG-EMBEDDING-MIGRATION-20261022及SPEC Lead Slice 0授權；新增§19 migration-specific readiness／分階段freeze。F1～F8、O1～O10、Formal methodology與既有PM pre-admission authority保留；未執行新模型preparation／readiness／Formal Evaluation。 |
 | 0.1 | 2026-10-02 | Draft | Phase 2 initial Candidate-F Engineering Contract；formalized Frozen F1～F8及PM Approved S1～S6 Oracle。 |
 | 1.0 | 2026-10-02 | Approved — Implementation Pending | Phase 3 Review提出F-001～F-004；Phase 4 Narrow Patch完成；Phase 3 Re-review PASS且全部findings closed。F1～F8及PM Oracle semantics preserved；正式核准進入implementation handoff planning，implementation尚未開始。 |
 
 ### Status Honesty
+
+**2026-10-28 approved amendment：** SPEC Lead依PM-AIOPS-COMPETITION-SCOPE-RESET-20261028採納Consolidated Independent Semantic Audit PASS／Findings NONE，正式核准§19.6；v1.1 baseline version及歷史approval／audit／BLOCK／NOT EXECUTED紀錄不變。本次不形成Implementation、real gate或Formal PASS；Formal Evaluation仍為NOT EXECUTED，未由本次消耗任何slot，也未執行新的ledger audit。
 
 v1.1 current authority為本次migration-specific amendment（§19）；下列v1.0 approval敘述及§18 approval block保留其歷史scope，不回溯改寫既有implementation／readiness facts。本次只有Contract文件修改；新模型readiness reconciliation、provider／calibration／AC-014-X／activation evidence均未完成。Formal Evaluation仍為`NOT EXECUTED`，`Slots Consumed = 0`；此為本次治理基線，不宣稱已執行ledger audit。
 
@@ -902,3 +908,13 @@ Formal Admission前的preparation-only resources依§8.5建立，不形成Formal
 本次Slice 0只執行四份PRD／SPEC文件amendment與documentation semantic verification，不建立physical report，不執行implementation、provider calls、credential access、calibration、AC-014-X、Docker／Chroma／Candidate-C/F／Real-RAG mutation、activation或Formal Evaluation。Git mutations由Human執行。新模型各execution Gate均未由本amendment取得PASS；Formal Evaluation = NOT EXECUTED；Slots Consumed = 0；Independent Slice 0 audit仍待執行。
 
 一般工程選擇與authorized remediation由SPEC Lead處理；若需更改production domain／ownership／security、Oracle或Formal acceptance、降低隔離／Knowledge Governance／測試要求，或無法滿足AC-014-X，依PM escalation boundary BLOCK並聯絡PM，不以文件closure取代所缺evidence。
+
+## 19.6 Milestone A Demo／Milestone B Formal Scope Reset（Approved — 2026-10-28）
+
+Authority：`PM-AIOPS-COMPETITION-SCOPE-RESET-20261028`。本段已正式核准，限定§19.1～§19.5在A／B的適用範圍；不改寫§2.3、§8.5、§11或AC-017-A～T的Formal semantics。本次僅完成文件核准狀態收尾，不構成Implementation Authorization、Live Provider Authorization或Formal Execution Authorization。
+
+- **A：11/07 PRD-004技術交付。** 真實S2 Evidence→RAG→Gemini→Validated RCA→durable publication→public read與必要安全驗證，不以Formal Preregistration、Final Admission、30 nominal runs、雙階段Formal Review或Final Closure為前置條件。SPEC-014必要compatibility、隔離calibration／policy freeze、新build／validation／explicit activation及精簡四人驗證仍須完成；同風險regression／audit及checkpoint依SPEC-014 §24.6已核准amendment合併。
+- **A隔離與最小證據。** 使用與Formal及歷史preparation／evidence分離的Demo namespace及stores，不使用、污染或rebind Formal namespace、denominator、slots或歷史evidence。保存source Git revision、inputs／config、prompt/schema、model、Knowledge build／provenance、RCA／Incident ID、timestamp、result／typed error；不冒用Formal run／verdict身分。A Demo exercise不是§8.5的Formal preparation，不藉此放寬Formal pre-admission禁令。Ground Truth／Oracle answers不得進production Evidence selector、query、RAG或prompt。
+- **A必要驗證。** 以實際Docker／服務健康及真實資料路徑完成S2 smoke，保留static＋重點runtime Ground Truth／secret leakage checks、schema／referential guards、至少一個必要failure／degraded案例與關鍵restart／replay smoke，不重複authority effect。人工核實S2 root cause、evidence、unsupported claims與Knowledge boundary；MOST_SUPPORTED不得說成確診。若未展示refresh如實標示；觀察數據揭露實際N，不冒充Formal UCR／成功率或完整latency統計。
+- **B：12月初／後續正式驗收。** §19原fresh preregistration、source-bound preparation、Final Admission及完整Formal report／closure義務維持。F1～F8、S1～S6 O1～O10、N=5／30 nominal、seed=17017、denominator、execution order、censor、reviewers／disagreement、UCR、latency及全部Frozen Acceptance不變。未執行仍記PENDING／NOT EXECUTED，不因日期到達而改成PASS。
+- **判讀與ownership。** A：DEMO READY／BLOCKED與B：FORMAL PASS／PENDING分別記錄；A證據不自動構成Formal、Common Readiness或Production PASS。本工作線僅負責PRD-004技術交付與必要SPEC-014／017驗證；以PRD-004 §17.5已核准amendment的technical handoff交給PM。PRD-005規格、UI、adapter、integration及其驗收由PM另行管理，不是本工作線的implementation或handoff blocker。

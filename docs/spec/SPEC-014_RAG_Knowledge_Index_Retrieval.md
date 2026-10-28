@@ -19,11 +19,15 @@
 | Runtime Authority | SPEC-011 v1.2 |
 | Related Incident Contract | SPEC-008 v1.3 Implemented |
 | Implementation Owner | 富裕 |
+| Approved Amendment | 2026-10-28 Minimum Necessary Competition Scope Reset Amendment on v1.4；Approved；baseline version不變 |
+| Scope Reset Approval Record | SPEC Lead 2026-10-28：APPROVE — Minimum Necessary Competition Scope Reset Amendment；依PM-AIOPS-COMPETITION-SCOPE-RESET-20261028採納Consolidated Independent Semantic Audit：PASS／Findings NONE／READY FOR APPROVAL；僅核准本次新增條款，不授權implementation或Live execution |
 
 ### Change History
 
 | Version | Date | Status | Change |
 |---|---|---|---|
+| v1.4-based amendment | 2026-10-28（approval date） | Approved — Minimum Necessary Competition Scope Reset Amendment | SPEC Lead正式採納Consolidated Independent Semantic Audit PASS／Findings NONE並核准本次新增條款；僅完成Approval／Status收尾，保留下列draft與歷史approval；不構成Provider／Implementation／four-member／Activation或Formal PASS，不授權Live Campaign。 |
+| v1.4-based draft | 2026-10-28 | Draft — Scope Reset Approval Pending | 依PM-AIOPS-COMPETITION-SCOPE-RESET-20261028僅增補AC-014-X、§24.5、§24.6／§24.6.1的Milestone A適用方式；未取得Amendment Final Approval，不授權implementation或Live execution。 |
 | 1.4 | 2026-10-23（approval date） | Approved — Minimum Controls Amendment；Phase B implementation pending | SPEC Lead採納`PASS — MAJOR-01 / MAJOR-02 CLOSED; SLICE 4 PHASE A INDEPENDENT RE-AUDIT PASS; READY FOR SPEC LEAD REVIEW`，正式`APPROVE — SPEC-014 v1.4 Minimum Controls Narrow-scope Amendment`。批准範圍僅為§24.6.1與必要文件治理；PM-DIAG security simplification與SPEC文件approval分屬不同authority。前次BLOCK／remediation及下列同版revision紀錄保留；不授權Live Google Provider invocation。 |
 | 1.4 | 2026-10-23（revision date；非approval date） | Draft — Phase A Independent Re-audit Pending | 依PM-DIAG-MINIMUM-CONTROLS-20261022及SPEC Lead Phase A授權，對§24.6.1增補minimum controls；本次MAJOR-01／02 narrow remediation同步版本／authority／status與Authorization Record必填契約。前次Phase A document audit為BLOCK，尚無v1.4 approval或PASS；v1.3及更早歷史紀錄保留。 |
 | 1.3 | 2026-10-22 | Approved — Migration Implementation Pending | PM-RAG-EMBEDDING-MIGRATION-20261022及SPEC Lead Slice 0授權；§24正式納入narrow-scope embedding compatibility contract及EMD-01～10 reconciliation。D1～D4、G1～G4及歷史v1.2 implementation／AC-014-X skip完整保留；新provider／calibration／four-member／activation evidence未取得。 |
@@ -34,6 +38,8 @@
 | 1.2 | 2026-09-26 | Implemented — Documentation-only Closure | Post-integration reconciliation：記錄approved six-document corpus、governed manifest、Google embedding／Chroma adapters、local lifecycle CLI、Knowledge Snapshot及public provenance已實作。AC-014-X未執行，依PM指示以explicit verification exception完成current repository closure；不修改Approved AC或Frozen D1～D4／G1～G4。 |
 
 ### Status Honesty
+
+**2026-10-28 approved amendment：** SPEC Lead依PM-AIOPS-COMPETITION-SCOPE-RESET-20261028採納Consolidated Independent Semantic Audit PASS／Findings NONE，正式核准本次新增的Scope Reset適用性條款，在明列的Milestone A範圍優先適用；v1.4 baseline version及原核准範圍保留。歷史Approval／Audit／BLOCK／Skip／NOT EXECUTED紀錄保留；本次不產生Implementation、Provider Compatibility、four-member、Activation或Formal PASS，也不授權Live Provider。Milestone A／B不等同歷史Slice 4 Phase A／B。
 
 **v1.4 current document status：Approved — Minimum Controls Narrow-scope Amendment（SPEC Lead formal approval：2026-10-23）。** 最新PM以`PM-DIAG-MINIMUM-CONTROLS-20261022`核准Diagnostic Security Governance Simplification；SPEC Lead另於本次決策採納Phase A Independent Re-audit `PASS — MAJOR-01 / MAJOR-02 CLOSED`後批准v1.4文件，兩種approval不可互代。前次Phase A document audit的`BLOCK — DOCUMENT CONTRACT / PM AUTHORITY FINDINGS REQUIRE REMEDIATION`及remediation evidence仍作歷史紀錄，不回溯刪改。v1.3 migration amendment及下列v1.2狀態段落、§22、§23保留historical scope/evidence，其Implemented與既有checkmarks不得套用到新模型。Current diagnostic security authority為最新PM決策；migration其餘未完成Gates仍依v1.3 §24與parent PM authority。v1.4文件批准不授權Slice 4 Phase B實作或Live Google Provider Execution；後者仍為`NOT AUTHORIZED`。Provider Compatibility、Calibration、new Build／Activation與SPEC-017 readiness均未PASS；Formal Evaluation為`NOT EXECUTED`且Slots Consumed = 0。
 
@@ -985,6 +991,8 @@ Candidate C能區分READY、NOT_INITIALIZED、UNAVAILABLE、MISMATCH及REPAIR_RE
 
 ## AC-014-X — Team Rebuild
 
+**Scope Reset amendment — Approved 2026-10-28：** Milestone A仍必須完成§24.5所列四人獨立Build→Validate→Activate→Retrieve證據，不得以歷史skip或單人結果替代。A portability evidence不自動構成下列完整Formal AC或Production Acceptance PASS；原AC與historical closure disposition保留。
+
 全部四名team members在符合approved setup／config contract的各自環境中，皆可由同一repository authority所含的approved source revisions、approved governed manifest、required non-secret semantic configuration及rebuild tooling，重建compatible Knowledge index、detect drift／mismatch、validate staged build並執行explicit governed activation path，不複製任何成員的generated Chroma DB。此AC只驗證Candidate C Knowledge capability reproducibility；完整real-provider／real-RAG RCA E2E由Candidate F／final integration驗證，不降低本four-member rebuild gate。
 
 ### AC-014-X Current Closure Disposition（Non-normative）
@@ -1189,6 +1197,12 @@ Calibration protocol於結果判讀／政策選擇前固定development／held-ou
 
 ## 24.5 Build、Four-member Gate與Activation
 
+**Scope Reset amendment — Approved 2026-10-28；Authority：PM-AIOPS-COMPETITION-SCOPE-RESET-20261028。** 本段限定下列原條款中Milestone A Competition readiness的證據範圍；完整Formal／Production Acceptance義務不取消。
+
+Milestone A必須由四名成員使用相同approved Git revision／source／model／manifest／config，各自在本機以自己的合法API Key／profile完成一次獨立Build→Validate→Explicit Activate→bounded Retrieve，不得複製他人成品Chroma DB。每人最小紀錄包含：OS／主要工具版本與Git／非敏感model/config identity、credential profile identity（不含key）、document/chunk數與build ID、validation PASS/FAIL、activation ID，以及至少一組approved SOP query的retrieved chunk/source/version、MATCH/NO_MATCH或typed error。失敗／缺漏不得記為完成四人驗證。
+
+此為A portability驗證，不要求四人LLM文字一致，也不混入固定環境的品質統計。首次未驗證新模型Diagnostic仍依§24.6.1取得PM Campaign Authorization；經驗證且獲准常態操作後，成員在核准操作範圍及安全限額內自行重建／Demo不需per-run PM approval。個人驗證activation不要求AC預先PASS，亦不等於shared Production Activation。A證據不自動授予完整Formal AC-014-X、Common Readiness或Production Acceptance PASS；較完整drift／mismatch及正式契約核對留B。§24.2 compatibility、§24.4 calibration／policy freeze、全新STAGED build／validation、explicit activation及LKG保護均維持。
+
 Calibration freeze之後，Candidate C在新授權scope內建立新的immutable STAGED build，完成§5.3 validation，再依明確authority explicit activate；structural validation或bounded probe不取代retrieval quality calibration。Production activation前必須完成compatibility、calibration、regression／audit及新AC-014-X四人evidence，且fresh驗證target/profile相容性。
 
 新AC-014-X必須取得四名成員在相互隔離個人環境、相同repository revision／approved sources／manifest／config下各自獨立rebuild、drift／mismatch detection、staged validation、explicit governed activation、retrieval／provenance及reproducibility evidence；不得複製另一成員generated Chroma DB。各自的驗證activation屬取得AC evidence的測試步驟，不要求該AC預先PASS，不等於shared Production Activation。如此不形成activation／AC-014-X依賴循環。
@@ -1196,6 +1210,10 @@ Calibration freeze之後，Candidate C在新授權scope內建立新的immutable 
 新AC-014-X為Migration Production Activation及正式Competition Readiness必要Gate。§19原AC-014-X與Current Closure Disposition逐字保留；historical `NOT EXECUTED — PM-DIRECTED SKIP FOR CURRENT CLOSURE`不是新模型例外。新的PASS必須是新的source/profile-bound四人evidence，不能改寫歷史。無法滿足時BLOCK並聯絡PM。
 
 ## 24.6 Gate Sequence與Slice 0 Boundary
+
+**Scope Reset amendment — Approved 2026-10-28：** 下列原順序的安全／資料依賴保留，但Milestone A不要求每個微步驟各自audit或checkpoint。同一整合風險可合併affected regression與一次independent audit；不強制在已涵蓋相同風險的audit外再做獨立Cumulative Audit。Human Git Checkpoint依實際source/config revision及完整change set決定，可覆蓋多項相關修改。首次Live仍須鎖定exact clean committed execution revision；後續policy/config若變更，須記錄實際新revision並重評受影響evidence，不能rebind舊checkpoint或沿用stale證據。
+
+A在compatibility、隔離calibration／policy freeze、新build／validation、explicit activation與精簡四人驗證的必要依賴下完成PRD-004技術交付；Fresh Formal Preregistration、Final Admission及Formal execution屬SPEC-017 §19.6的B branch，不是A前置條件。以下Slice 0限制及原A/B checkpoint名稱保留其歷史scope；本文件amendment不授權任何implementation、Git mutation或Live execution。
 
 ```text
 PM Approval → Approved Contract
@@ -1216,6 +1234,12 @@ Checkpoint A/B由Human建立；source/config不變可指同一commit，policy/co
 Slice 0只授權四份PRD／SPEC文件修改與documentation semantic verification；不執行source/config變更、provider diagnostic、calibration、AC-014-X、Docker／Chroma／Candidate-C/F mutation、activation或Formal Evaluation。Git mutations由Human執行。新migration implementation及全部execution evidence均未由本amendment完成；Formal Evaluation為NOT EXECUTED，Slots Consumed = 0。Independent Slice 0 audit尚待執行。
 
 ### 24.6.1 Controlled Provider Diagnostic — Minimum Necessary Controls（Additive）
+
+**Scope Reset amendment — Approved 2026-10-28：** 本段在Milestone A範圍限定下列「每次Campaign／各操作授權」及「分段Gate」的解讀；原安全binding與§24.2不放寬。首次尚未驗證新Provider的Live Diagnostic Campaign須PM一次明確核准當次exact runner/source/model/config、input與budget範圍，並另作explicit Live opt-in，預設Live DENIED。同一已核准Campaign內的requests依同一有效scope／budget核對，不逐request再簽；超出scope／有效期／budget不得繼續。
+
+Diagnostic核准不自動授權Build、Calibration、Production或Formal目的。新模型／腳本完成驗證且相關操作已獲准常態使用後，一般成員在該操作範圍與安全限額內自行rebuild／Demo不設per-run PM approval；未獲常態操作授權前不得自行推定已授權。此區分不要求新增credential、usage或security framework。
+
+同一整合風險的regression／independent audit及Human checkpoint依§24.6合併，不另增加微步驟Gate。保留single-host／single-runner、transport前持久化attempt及budget記錄、bounded requests／payload／tokens與費用、30秒／單次同步／no hidden retry、secret-safe typed errors，以及TIMEOUT／UNKNOWN不自動重送或退還預算。下列既有輕量JSONL／SQLite選項已足夠，不新增完整Accounting／Reservation Ledger子系統。
 
 最新PM Decision `PM-DIAG-MINIMUM-CONTROLS-20261022`（`MODIFY — APPROVED WITH SCOPE SIMPLIFICATION`）以`PM-RAG-EMBEDDING-MIGRATION-20261022`為Parent Authority，將本節Controlled Provider Diagnostic的安全設計限定為Minimum Necessary Controls。PM-DIAG-01：不採用Ed25519 cryptographic grant dependency；PM-DIAG-02：批准human-governed Live authorization；PM-DIAG-03：批准minimal API usage monitoring；PM-DIAG-04：批准offline／live separation。Ed25519、private／public Trust Root及獨立完整Atomic Accounting Framework不是本次必要交付。先前S4-D1／S4-D2工程授權方案已由最新PM決策取代；其歷史決策、audit與BLOCK evidence仍須保留，不回溯改寫。本addendum不變更§24.2、EMD-01～10、Frozen D1～D4／G1～G4或下游驗收條件。
 

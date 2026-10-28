@@ -13,6 +13,8 @@
 | 中文名稱 | 證據驅動 LLM + RAG 根因分析與可稽核 RCA |
 | Version | 1.1 |
 | Status | Approved |
+| Approved Amendment | 2026-10-28 Minimum Necessary Competition Scope Reset Amendment on v1.1；Approved；baseline version不變 |
+| Scope Reset Approval Record | SPEC Lead 2026-10-28：APPROVE — Minimum Necessary Competition Scope Reset Amendment；依PM-AIOPS-COMPETITION-SCOPE-RESET-20261028採納Consolidated Independent Semantic Audit：PASS／Findings NONE／READY FOR APPROVAL；僅核准本次新增條款，不授權implementation、Live Provider或Formal Evaluation |
 | Date | 2026-10-22 |
 | Amendment Authority | AIOps Project PM — PM-RAG-EMBEDDING-MIGRATION-20261022 |
 | Amendment Owner | SPEC Lead 富裕 |
@@ -29,6 +31,8 @@ Current authority為v1.1。本節原v1.0 Status Honesty及§21.1 implementation 
 
 | Version | Date | Status | Change |
 |---|---|---|---|
+| v1.1-based amendment | 2026-10-28（approval date） | Approved — Minimum Necessary Competition Scope Reset Amendment | SPEC Lead正式採納Consolidated Independent Semantic Audit PASS／Findings NONE並核准§13.5適用註記及§17.5；僅完成Approval／Status收尾，保留下列draft與歷史approval；不構成Real S2、Full Acceptance、Formal PASS或Production Ready。 |
+| v1.1-based draft | 2026-10-28 | Draft — Scope Reset Approval Pending | 依PM-AIOPS-COMPETITION-SCOPE-RESET-20261028僅增補§13.5適用註記與§17.5 Milestone A Technical Handoff；不改AC-004-A～X，不授權implementation或Live execution。 |
 | 1.1 | 2026-10-22 | Approved — Scoped Compatibility Migration | PM-RAG-EMBEDDING-MIGRATION-20261022核准gemini-embedding-2方向、新AC-014-X四人驗證與既有Formal Scope保留。§13.5記錄narrow-scope amendment；v1.0 approval、產品語意及歷史implementation evidence保留。新模型implementation／validation／activation未完成。 |
 | 0.1 | 2026-09-18 | Working Draft | PM D1～D10 decision baseline；未進Repository。 |
 | 0.2 | 2026-09-18 | Draft — PM Review Pending | 正式Repository Draft；整合current authority、D1～D10與PM-approved Revision Round 1。 |
@@ -635,6 +639,8 @@ Default regression不依賴live API。Domain／orchestration tests可用Fake ada
 
 ## 13.5 PM-approved Embedding Compatibility Migration（Additive）
 
+**2026-10-28 Scope Reset amendment — Approved：** 本次文件amendment已獲SPEC Lead正式核准，不改既有v1.1 approval及historical execution status。下列第5點的Milestone A Competition readiness採SPEC-014 §24.5已核准amendment的必要四人獨立Build→Validate→Activate→Retrieve證據，不等於完整Formal／Production Acceptance；第6點的fresh preregistration／source-bound preparation／Final Admission限定於SPEC-017 §19.6已核准amendment的B Formal branch，不作為A technical handoff前置條件。其餘compatibility、calibration、isolation、Knowledge／Domain authority與正式acceptance不變；本次不產生任何execution PASS或Live authorization。
+
 Decision ID：`PM-RAG-EMBEDDING-MIGRATION-20261022`；Approval Date：`2026-10-22`；Approval Authority：AIOps Project PM；Decision：`APPROVED — Scoped Compatibility Migration`；Owner：SPEC Lead 富裕。此為既有RAG Scope的narrow-scope amendment，不重新設計RCA。原v1.0 approval、D1～D10及AC-004-A～X的產品語意完整保留。
 
 本amendment補充§8、§13.4、§14.2～§14.4、§15～§16及§21.1：
@@ -790,6 +796,19 @@ Future controlled manual refresh若需要，須透過RCA public semantic command
 ## 17.4 Knowledge Workflow Handoff
 
 PRD-004輸出`knowledge_gap`、Knowledge provenance及`MODEL_SUGGESTED` distinction。Human-facing Knowledge Improvement Candidate creation／review、Dashboard workflow及approved future ingestion由PRD-005或後續governance負責；PRD-004不自動修改Corpus。
+
+## 17.5 Milestone A Technical Handoff（Approved — 2026-10-28）
+
+Authority：`PM-AIOPS-COMPETITION-SCOPE-RESET-20261028`。本段已正式核准；Milestone A Technical Handoff獨立於§20的PRD-004 Full Acceptance；不得稱為SPEC-017 Formal PASS或Production Ready。須交付以下六項可執行／可追溯內容給PM：
+
+1. 既有SPEC-011 singular Runtime內的RCA trigger／Runtime操作步驟。
+2. Incident／RCA public semantic reads與sample payload，含必要identity／lineage及狀態區分；不得以private DB直讀替代。
+3. Knowledge Build／Validate／Explicit Activate／bounded Retrieve操作，附SPEC-014要求的新模型與精簡四人驗證證據。
+4. 至少一條真實S2 Evidence→RAG→Gemini→Validated RCA→durable publication→public read成功證據，來源與Incident／RCA ID可追溯。
+5. 非敏感環境、工具／model／config與credential profile配置說明；不保存API Key或其他secret。
+6. 失敗案例、已知限制及尚未完成的Formal Acceptance清單；失敗／未執行不得冒稱PASS。
+
+富裕負責上述PRD-004技術交付及必要SPEC-014修復／SPEC-017 Milestone A驗證；PM接手後續SPEC Lead Governance及PRD-005，由其指定成員負責PRD-005規格、implementation與integration。Dashboard、Jira、Discord／ChatOps、Knowledge Improvement Candidate workflow及PRD-005 E2E不列為本工作線implementation或handoff條件。§17.1～§17.4 public semantic boundary、§20 AC-004-A～X及完整正式驗收義務保留；本amendment不宣告handoff已通過，不授權implementation、Live Provider或Formal Evaluation。
 
 ---
 
