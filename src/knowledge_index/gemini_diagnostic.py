@@ -40,6 +40,7 @@ from .google_embedding_adapter import (
     _create_guarded_diagnostic_offline_sdk_client, _values,
     _DiagnosticHttpxClient, _DiagnosticAsyncDenyTransport,
     _close_offline_resources, _create_diagnostic_live_sdk_client,
+    _validated_vectors,
 )
 from .identity import document_identity
 
@@ -582,7 +583,7 @@ def _preflight(
 
 
 def _reserve(prepared: _PreparedEligibility, usage: TemporaryDiagnosticUsage,
-             request_id: str) -> None:
+             request_id: str, *, campaign_requirement: tuple[int, int, int, int] | None = None) -> None:
     """Persist an attempt only after all read-only checks; never dispatches."""
     if (type(prepared.usage_units) is not int
             or prepared.usage_units != prepared.safety_decision.aggregate_tokens):
@@ -596,6 +597,7 @@ def _reserve(prepared: _PreparedEligibility, usage: TemporaryDiagnosticUsage,
         payload_bytes=prepared.payload_bytes, safety_basis=prepared.safety_basis,
         conservative_usage_units=prepared.usage_units,
         conservative_cost_micro_units=prepared.cost_micro_units,
+        **({} if campaign_requirement is None else {"campaign_requirement": campaign_requirement}),
     )
 
 
@@ -794,11 +796,21 @@ def _offline_response(prepared: _PreparedEligibility, handle: Any) -> Diagnostic
 def _live_safety(
     record: DiagnosticAuthorizationRecord, texts: tuple[str, ...],
 ) -> tuple[GeminiEmbedding2Verification, DiagnosticSafetyBasis, int, int]:
+    if (not isinstance(record, DiagnosticAuthorizationRecord)
+            or record.bounds_basis == "SYNTHETIC_OFFLINE_ONLY" or record.cost_basis == "SYNTHETIC_OFFLINE_ONLY"):
+        raise DiagnosticDenied("approved live provider safety basis is not provisioned")
+    artifact = load_live_safety_artifact()
+    if "sequential_batch_plan" in artifact.fields:
+        raise DiagnosticDenied("fixed batch plan requires sequential campaign dispatch")
+    return _safety_from_artifact(record, texts, artifact)
+
+
+def _safety_from_artifact(record, texts, artifact):
+    """Shared accepted-evidence evaluation; caller DTOs never enter run_live."""
     if not isinstance(record, DiagnosticAuthorizationRecord):
         raise DiagnosticDenied("approved live provider safety basis is not provisioned")
     if record.bounds_basis == "SYNTHETIC_OFFLINE_ONLY" or record.cost_basis == "SYNTHETIC_OFFLINE_ONLY":
         raise DiagnosticDenied("approved live provider safety basis is not provisioned")
-    artifact = load_live_safety_artifact()
     value = artifact._validated_fields()
     if value["binding"]["authorization_record_sha256"] != _authorization_record_digest(record):
         raise DiagnosticDenied("safety authorization changed")
@@ -891,7 +903,7 @@ class _DiagnosticLiveTransport(httpx.BaseTransport):
             self._delegate.close()
 
 
-def _dispatch_live(prepared, approved, evidence, credential, revalidate) -> DiagnosticObservation:
+def _dispatch_live(prepared, approved, evidence, credential, revalidate, *, _vectors=None) -> DiagnosticObservation:
     guard = _DiagnosticLiveTransport(prepared, approved, evidence, credential, revalidate)
     sdk = sync = async_client = None
     try:
@@ -903,12 +915,15 @@ def _dispatch_live(prepared, approved, evidence, credential, revalidate) -> Diag
             contents=[c.model_copy(deep=True) for c in prepared.contents],
             config=prepared.config.model_copy(deep=True))
         try:
-            vectors = _values(response, strict_numbers=True)
+            vectors = _validated_vectors(response, len(prepared.texts), strict_numbers=True,
+                normalization_tolerance=prepared.record.normalization_tolerance)
         except Exception:
             raise DiagnosticDenied("invalid diagnostic provider response", code="INVALID_PROVIDER_RESPONSE") from None
         if (len(vectors) != len(prepared.texts) or any(len(v) != 768 or
                 abs(math.hypot(*v) - 1.0) > prepared.record.normalization_tolerance for v in vectors)):
             raise DiagnosticDenied("invalid diagnostic provider vectors", code="INVALID_PROVIDER_RESPONSE")
+        if _vectors is not None:
+            _vectors.extend(zip(prepared.identities, vectors, strict=True))
         # Positional vectors are observed, not a real mapping/order acceptance
         # proof. Never apply synthetic cosine markers to real provider output.
         return DiagnosticObservation("SUCCESS", "OBSERVED_MAPPING_REVIEW_REQUIRED", None, None,
@@ -928,6 +943,167 @@ def _dispatch_live(prepared, approved, evidence, credential, revalidate) -> Diag
     finally:
         if _close_offline_resources(sdk, sync, async_client):
             raise DiagnosticDenied("diagnostic cleanup failed; attempt retained for human review") from None
+
+
+_SEQUENTIAL_RUNNER_LOCK = Lock()
+
+
+def _chunk_metadata_commitment(request: ProviderEmbeddingRequest) -> str:
+    """Bind versions, local ordinals and build identity without exporting text."""
+    return sha256(json.dumps([(c.chunk_identity, c.document_identity, c.document_version_identity,
+        c.section_identity, c.ordinal, c.content_hash, c.metadata_commitment) for c in request.chunks],
+        ensure_ascii=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _prepare_sequential_batches(request, binding, artifact, resolve_facts):
+    """Project only approved contiguous slices; projections are NOT new grants.
+
+    PM's existing bounds_basis binds the entire immutable plan digest. Child
+    records retain campaign/source/profile/budgets and change input commitment
+    only. E4 for EVERY child is independently prepared in the protected file.
+    """
+    record, approved = binding.record, binding.approved_input
+    if not isinstance(request, ProviderEmbeddingRequest):
+        raise DiagnosticDenied("sequential diagnostic requires approved document input")
+    kind, identities, texts = _envelopes(request)
+    if (identities != approved.identities or texts != approved.envelopes
+            or len(identities) != 54 or len(set(identities)) != 54
+            or len({c.document_identity for c in request.chunks}) != 6):
+        raise DiagnosticDenied("sequential diagnostic requires six sources and 54 unique ordered chunks", code="INPUT_MISMATCH")
+    facts = resolve_facts(record, request)
+    artifact.matches_record_input(record, approved, binding.sdk_byte_evidence, facts.source_revision)
+    plan = artifact.batch_plan()
+    plan.matches_record_input(record, approved)
+    fields = plan.fields
+    if (fields["embedding_profile_identity"] != request.capability.embedding_profile_identity
+            or fields["build_identity"] != request.build_identity
+            or fields["chunk_metadata_commitment"] != _chunk_metadata_commitment(request)):
+        raise DiagnosticDenied("batch build, chunk version or embedding profile mismatch", code="PROFILE_MISMATCH")
+    proof, basis, _, _ = _safety_from_artifact(record, texts, artifact)
+    # Enforce the intersection of accepted provider limits and approved plan.
+    proof = replace(proof,
+        max_provider_items=min(proof.max_provider_items, fields["maximum_batch_items"]),
+        max_aggregate_tokens=min(proof.max_aggregate_tokens, fields["maximum_batch_tokens"]),
+        max_payload_bytes=min(proof.max_payload_bytes, fields["maximum_batch_payload_bytes"]))
+    evidence = artifact.batch_sdk_evidence()
+    prepared = []
+    for ordinal, (start, end, commitment) in enumerate(plan.ranges):
+        child_record = replace(record, input_commitment=commitment)
+        child_input = replace(approved, identities=identities[start:end],
+                              envelopes=texts[start:end], commitment=commitment)
+        chunks = request.chunks[start:end]
+        documents = {c.document_identity for c in chunks}
+        child_request = replace(request, chunks=chunks,
+            approved_document_ids=tuple(pair for pair in request.approved_document_ids if pair[0] in documents))
+        child_e4 = evidence[ordinal]
+        child_e4.matches_record_input(child_record, child_input)
+        child_proof = proof
+        child_basis = replace(basis, input_commitment=commitment,
+            authorization_record_sha256=_authorization_record_digest(child_record),
+            serialized_request_sha256=child_e4.canonical_json_sha256,
+            provider_item_limit=proof.max_provider_items,
+            provider_aggregate_token_limit=proof.max_aggregate_tokens,
+            provider_payload_byte_limit=proof.max_payload_bytes)
+        tokens = sum(proof.count_tokens(t) for t in texts[start:end])
+        cost = max(1, (tokens * basis.price_micro_units_per_million_tokens + 999_999) // 1_000_000)
+        item = _preflight(load_record=lambda r=child_record: r, resolve_facts=resolve_facts,
+            safety=lambda r, t, p=child_proof, b=child_basis, u=tokens, c=cost: (p, b, u, c),
+            request=child_request, live_opt_in=True,
+            host_byte_binding=lambda r, f, k, ids, ts, s, a=child_input, e=child_e4:
+                validate_host_sdk_evidence(r, f, a, e, k, ids, ts, s))
+        _validate_sdk_evidence_binding(item, child_input, child_e4)
+        prepared.append((item, child_input, child_e4))
+    total_tokens = sum(item.usage_units for item, _, _ in prepared)
+    quota = fields["quota"]
+    # Conservative admission: ALL planned requests fit one declared quota
+    # window. Accounting units require reviewed source evidence; never infer
+    # that one HTTP send consumes one RPM. No clock/scheduler/quota domain.
+    if (len(prepared) > record.maximum_invocations
+            or sum(len(item.texts) for item, _, _ in prepared) > record.maximum_items
+            or total_tokens > record.maximum_usage_units or total_tokens > quota["tpm"]
+            or len(prepared) * quota["request_units_per_invocation"] > min(quota["rpm"], quota["rpd"])
+            or sum(item.cost_micro_units for item, _, _ in prepared) > record.maximum_cost_micro_units):
+        raise DiagnosticDenied("batch campaign token, invocation, quota or cost bound exceeded", code="INPUT_BOUNDS_EXCEEDED")
+    return plan, tuple(prepared)
+
+
+def _validate_global_batch_vectors(request, collected, tolerance):
+    expected = tuple(c.chunk_identity for c in request.chunks)
+    if (len(collected) != 54 or len(expected) != 54 or len(set(expected)) != 54
+            or tuple(identity for identity, _ in collected) != expected
+            or any(len(vector) != 768 or any(type(n) not in (int, float) or not math.isfinite(n) for n in vector)
+                   or not math.isfinite(math.hypot(*vector)) or math.hypot(*vector) == 0
+                   or abs(math.hypot(*vector) - 1.0) > tolerance for _, vector in collected)):
+        raise DiagnosticDenied("global 54-to-54 diagnostic validation failed", code="INVALID_PROVIDER_RESPONSE")
+
+
+def _run_sequential_campaign(request, binding, artifact, resolve_facts):
+    if not _SEQUENTIAL_RUNNER_LOCK.acquire(blocking=False):
+        raise DiagnosticDenied("sequential diagnostic runner conflict", code="RUNNER_CONFLICT")
+    try:
+        plan, batches = _prepare_sequential_batches(request, binding, artifact, resolve_facts)
+        usage, collected, observations = LiveDiagnosticUsage(), [], []
+        for ordinal, (prepared, approved, evidence) in enumerate(batches):
+            def refresh():
+                if load_live_binding() != binding or load_live_safety_artifact().fields != artifact.fields:
+                    raise DiagnosticDenied("batch source, plan or campaign authority changed")
+                current = replace(prepared, facts=resolve_facts(prepared.record, request))
+                validate_authorization(current.record, current.facts, live_opt_in=True,
+                    kind=current.kind, input_scope_identity=current.input_scope_identity,
+                    commitment=input_commitment(current.kind, current.identities, current.texts),
+                    item_count=len(current.texts), item_bytes=current.item_bytes,
+                    item_tokens=current.item_tokens, payload_bytes=current.payload_bytes,
+                    safety_basis=current.safety_basis, conservative_usage_units=current.usage_units,
+                    conservative_cost_micro_units=current.cost_micro_units)
+                return current
+
+            prepared = refresh()
+            remaining = batches[ordinal:]
+            required = (len(remaining), sum(len(p.texts) for p, _, _ in remaining),
+                        sum(p.usage_units for p, _, _ in remaining), sum(p.cost_micro_units for p, _, _ in remaining))
+            # Stable IDs deny duplicate/restart of a successful slice; this
+            # entry always starts at ordinal zero and has no resume/cache API.
+            request_id = "batch." + plan.commitment + "." + str(ordinal)
+            _reserve(prepared, usage, request_id, campaign_requirement=required)
+            try:
+                credential = resolve_diagnostic_credential(binding.record, artifact)
+            except DiagnosticDenied:
+                usage.finish(prepared.record, request_id, "FAILED")
+                raise
+            except Exception:
+                usage.finish(prepared.record, request_id, "FAILED")
+                raise DiagnosticDenied("batch credential resolution failed; attempt retained",
+                                       code="CREDENTIAL_UNAVAILABLE") from None
+            observation = _dispatch_live(prepared, approved, evidence, credential, refresh, _vectors=collected)
+            usage.finish(prepared.record, request_id, observation.outcome)
+            observations.append(observation)
+            if observation.outcome != "SUCCESS":
+                return replace(observation, vector_count=0,
+                    provider_attempts=sum(o.provider_attempts for o in observations),
+                    ordered_identities=binding.approved_input.identities,
+                    input_commitment=binding.record.input_commitment,
+                    cost_estimate_micro_units=sum(o.cost_estimate_micro_units for o in observations))
+            # Production finish() records UNKNOWN; only existing human
+            # adjudication can clear it. Mock tests may use numeric fixtures.
+            state = usage._completion_state(prepared.record, request_id)
+            if (state is None or state[0] != "SUCCESS" or state[1] == "UNKNOWN"
+                    or not state[1].isdigit() or int(state[1]) > prepared.usage_units):
+                return replace(observation, outcome="BLOCKED", category="UNKNOWN_USAGE",
+                    failure_code=BuildFailureCode.PROVIDER_UNAVAILABLE,
+                    failure_field="UNKNOWN_USAGE", failure_detail="batch usage requires human adjudication",
+                    retry_safety=RetrySafetyDisposition.DO_NOT_RETRY, vector_count=0,
+                    provider_attempts=sum(o.provider_attempts for o in observations),
+                    ordered_identities=binding.approved_input.identities,
+                    cost_estimate_micro_units=sum(o.cost_estimate_micro_units for o in observations),
+                    input_commitment=binding.record.input_commitment)
+        _validate_global_batch_vectors(request, collected, binding.record.normalization_tolerance)
+        return replace(observations[-1], category="BATCHED_OBSERVATION_MAPPING_REVIEW_REQUIRED",
+            ordered_identities=tuple(identity for identity, _ in collected), vector_count=54,
+            provider_attempts=sum(o.provider_attempts for o in observations),
+            cost_estimate_micro_units=sum(o.cost_estimate_micro_units for o in observations),
+            input_commitment=binding.record.input_commitment)
+    finally:
+        _SEQUENTIAL_RUNNER_LOCK.release()
 
 
 def run_live(
@@ -969,6 +1145,10 @@ def run_live(
             credential_profile_identity=actual.capability.profile_reference.value,
             now=datetime.now(timezone.utc),
         )
+
+    if record.bounds_basis.startswith("SEQUENTIAL_BATCH_PLAN_V1:"):
+        artifact = load_live_safety_artifact()
+        return _run_sequential_campaign(request, binding, artifact, live_facts)
 
     def prepare():
         return _preflight(

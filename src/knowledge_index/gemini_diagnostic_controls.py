@@ -872,6 +872,68 @@ _FREE_TIER_SCHEMA = dict(
                             source=_SAFETY_SOURCE),
 )
 
+# No live batch size/default is supplied by code. This plan lives in the SAME
+# protected safety file; its digest is the PM record's existing bounds_basis.
+_BATCH_PLAN_SCHEMA = dict(schema_version=(1,), total_inputs=(54,),
+    input_commitment="H64", chunk_metadata_commitment="H64", build_identity="S256",
+    model=("gemini-embedding-2",), api=("v1",), embedding_profile_identity="S256",
+    maximum_batches="I64+", maximum_batch_items="I64+", maximum_batch_tokens="I64+",
+    maximum_batch_payload_bytes="I64+",
+    quota=dict(rpm="I64+", tpm="I64+", rpd="I64+",
+               request_units_per_invocation="I64+", source=_SAFETY_SOURCE))
+
+
+@dataclass(frozen=True, slots=True)
+class DiagnosticBatchPlan:
+    """Fixed half-open global ranges. Metadata alone never grants live I/O."""
+
+    fields: Any
+    ranges: tuple[tuple[int, int, str], ...]
+    commitment: str
+
+    @classmethod
+    def from_mapping(cls, value: Any) -> "DiagnosticBatchPlan":
+        try:
+            value = dict(value)
+            batches = value.pop("batches")
+            _validate_safety_wire(value, _BATCH_PLAN_SCHEMA)
+            if type(batches) is not list or not 1 <= len(batches) <= min(54, value["maximum_batches"]):
+                raise DiagnosticDenied("batch count is empty or exceeds plan")
+            ranges, cursor = [], 0
+            for ordinal, batch in enumerate(batches):
+                if (type(batch) is not dict or set(batch) != {"ordinal", "start", "end", "input_commitment"}
+                        or type(batch["ordinal"]) is not int or batch["ordinal"] != ordinal
+                        or type(batch["start"]) is not int or batch["start"] != cursor
+                        or type(batch["end"]) is not int or not cursor < batch["end"] <= 54
+                        or batch["end"] - cursor > value["maximum_batch_items"]):
+                    raise DiagnosticDenied("batch ranges overlap, are empty or unordered")
+                _validate_safety_wire(batch["input_commitment"], "H64")
+                ranges.append((cursor, batch["end"], batch["input_commitment"]))
+                cursor = batch["end"]
+            if cursor != 54:
+                raise DiagnosticDenied("batch plan does not cover all 54 inputs")
+            value["batches"] = batches
+            digest = hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"),
+                                              ensure_ascii=True).encode()).hexdigest()
+            return cls(_safety_freeze(value), tuple(ranges), digest)
+        except (TypeError, KeyError, ValueError, OverflowError):
+            raise DiagnosticDenied("fixed batch plan is invalid") from None
+
+    def matches_record_input(self, record: DiagnosticAuthorizationRecord,
+                             approved: ApprovedDiagnosticInput) -> None:
+        approved.matches_record(record)
+        if (record.bounds_basis != "SEQUENTIAL_BATCH_PLAN_V1:" + self.commitment
+                or approved.kind != "document" or len(approved.identities) != 54
+                or len(set(approved.identities)) != 54
+                or self.fields["input_commitment"] != approved.commitment
+                or self.fields["model"] != record.model_identity or self.fields["api"] != record.api_version
+                or self.fields["maximum_batches"] > record.maximum_invocations):
+            raise DiagnosticDenied("batch plan is not bound to approved campaign", code="INPUT_MISMATCH")
+        for start, end, commitment in self.ranges:
+            if input_commitment("document", approved.identities[start:end],
+                                approved.envelopes[start:end]) != commitment:
+                raise DiagnosticDenied("batch input commitment differs from global inputs", code="INPUT_MISMATCH")
+
 
 def _safety_time(value: Any) -> datetime:
     if type(value) is not str or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", value):
@@ -918,7 +980,11 @@ def _validate_safety_wire(value: Any, rule: Any = _SAFETY_SCHEMA) -> None:
 
 
 def _safety_freeze(value: dict) -> Any:
-    return MappingProxyType({k: _safety_freeze(v) if type(v) is dict else v for k, v in value.items()})
+    if type(value) is list:
+        return tuple(_safety_freeze(v) for v in value)
+    if type(value) is dict:
+        return MappingProxyType({k: _safety_freeze(v) for k, v in value.items()})
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -944,7 +1010,16 @@ class DiagnosticSafetyArtifact:
             # but cannot enable live execution without accepted bound evidence.
             bounds = value.pop("accepted_input_token_bounds", None) if type(value) is dict else None
             free = value.pop("free_tier_evidence", None) if type(value) is dict else None
+            plan = value.pop("sequential_batch_plan", None) if type(value) is dict else None
+            batch_e4 = value.pop("batch_sdk_evidence", None) if type(value) is dict else None
             _validate_safety_wire(value)
+            if plan is not None or batch_e4 is not None:
+                parsed_plan = DiagnosticBatchPlan.from_mapping(plan)
+                if type(batch_e4) is not list or len(batch_e4) != len(parsed_plan.ranges):
+                    raise DiagnosticDenied("batch SDK evidence is incomplete")
+                for evidence in batch_e4:
+                    DiagnosticSdkByteEvidence.from_json(json.dumps(evidence).encode())
+                value["sequential_batch_plan"], value["batch_sdk_evidence"] = plan, batch_e4
             pricing = value["pricing_evidence"]
             if pricing["price_tier"] == "FREE_TIER_TEXT_V1":
                 _validate_safety_wire(free, _FREE_TIER_SCHEMA)
@@ -981,6 +1056,13 @@ class DiagnosticSafetyArtifact:
                 source = value[key]["source"]
                 if not _safety_time(source["effective_from"]) <= start < end <= _safety_time(source["expires_at"]):
                     raise DiagnosticDenied("safety evidence source validity does not contain artifact")
+            if plan is not None:
+                source = plan["quota"]["source"]
+                if not _safety_time(source["effective_from"]) <= start < end <= _safety_time(source["expires_at"]):
+                    raise DiagnosticDenied("batch quota source validity does not contain artifact")
+                if free is not None and any(plan["quota"][key] != free["quota_evidence"][key]
+                                            for key in ("rpm", "tpm", "rpd")):
+                    raise DiagnosticDenied("batch quota differs from Free Tier project evidence")
             if free is not None:
                 for key in ("quota_evidence", "data_use_permission"):
                     source = free[key]["source"]
@@ -1031,6 +1113,11 @@ class DiagnosticSafetyArtifact:
             raise DiagnosticDenied("safety or authorization validity is unavailable")
         count = len(approved.identities)
         limits = value["provider_limits"]
+        if "sequential_batch_plan" in value:
+            self.batch_plan().matches_record_input(record, approved)
+            # The full-corpus E4 is an input commitment, NOT a request to send.
+            # Actual per-batch provider/payload bounds are checked before I/O.
+            return
         if (count != (54 if approved.kind == "document" else 1)
                 or count > min(limits["item_limit"], record.maximum_items, 128)
                 or e4.sdk_body_bytes > min(limits["payload_byte_limit"], record.maximum_payload_bytes, 1_000_000)):
@@ -1040,12 +1127,34 @@ class DiagnosticSafetyArtifact:
         def thaw(value: Any) -> Any:
             if type(value) in (dict, MappingProxyType):
                 return {k: thaw(v) for k, v in value.items()}
+            if type(value) is tuple:
+                return [thaw(v) for v in value]
             return value
         try:
             data = json.dumps(thaw(self.fields), ensure_ascii=True, separators=(",", ":")).encode()
             return type(self).from_json(data).fields
         except (ValueError, TypeError, RecursionError, OverflowError):
             raise DiagnosticDenied("safety artifact is invalid") from None
+
+    def batch_plan(self) -> DiagnosticBatchPlan:
+        value = self._validated_fields()
+        def thaw(v):
+            if type(v) in (dict, MappingProxyType):
+                return {k: thaw(child) for k, child in v.items()}
+            return [thaw(child) for child in v] if type(v) is tuple else v
+        if "sequential_batch_plan" not in value:
+            raise DiagnosticDenied("approved batch plan is missing")
+        return DiagnosticBatchPlan.from_mapping(thaw(value["sequential_batch_plan"]))
+
+    def batch_sdk_evidence(self) -> tuple[DiagnosticSdkByteEvidence, ...]:
+        # Wire parsing and duplicate rejection already happened on trusted load.
+        value = self._validated_fields()
+        result = []
+        for raw in value.get("batch_sdk_evidence", ()):
+            raw = dict(raw)
+            raw["ordered_identities"] = list(raw["ordered_identities"])
+            result.append(DiagnosticSdkByteEvidence.from_json(json.dumps(raw).encode()))
+        return tuple(result)
 
     def matches_method_metadata(self, *, method_id: str, method_revision: str,
                                 implementation_sha256: str, data_sha256: str | None) -> None:
@@ -1483,11 +1592,21 @@ class TemporaryDiagnosticUsage:
     def reserve(
         self, record: DiagnosticAuthorizationRecord, request_id: str, *,
         items: int, usage_units: int, cost_micro_units: int,
+        campaign_requirement: tuple[int, int, int, int] | None = None,
     ) -> None:
         if type(request_id) is not str or not request_id or len(request_id) > 128:
             raise DiagnosticDenied("diagnostic request identity is invalid")
         for label, value in (("items", items), ("usage", usage_units), ("cost", cost_micro_units)):
             _positive(value, label)
+        required = (1, items, usage_units, cost_micro_units)
+        if campaign_requirement is not None:
+            if type(campaign_requirement) is not tuple or len(campaign_requirement) != 4:
+                raise DiagnosticDenied("remaining batch campaign bounds are invalid")
+            for value in campaign_requirement:
+                _positive(value, "remaining batch campaign bound")
+            if any(left < right for left, right in zip(campaign_requirement, required)):
+                raise DiagnosticDenied("remaining batch campaign bounds omit this attempt")
+            required = campaign_requirement
         try:
             with closing(self._connect()) as db:
                 db.execute("BEGIN IMMEDIATE")
@@ -1505,10 +1624,10 @@ class TemporaryDiagnosticUsage:
                     (record.campaign_id,),
                 ).fetchone()
                 if (
-                    totals[0] + 1 > record.maximum_invocations
-                    or totals[1] + items > record.maximum_items
-                    or totals[2] + usage_units > record.maximum_usage_units
-                    or totals[3] + cost_micro_units > record.maximum_cost_micro_units
+                    totals[0] + required[0] > record.maximum_invocations
+                    or totals[1] + required[1] > record.maximum_items
+                    or totals[2] + required[2] > record.maximum_usage_units
+                    or totals[3] + required[3] > record.maximum_cost_micro_units
                 ):
                     raise DiagnosticDenied("diagnostic campaign budget is exhausted", code="BUDGET_EXHAUSTED")
                 db.execute(
@@ -1679,6 +1798,7 @@ def reserve_eligible_attempt(
     safety_basis: str,
     conservative_usage_units: int,
     conservative_cost_micro_units: int,
+    campaign_requirement: tuple[int, int, int, int] | None = None,
 ) -> None:
     """One shared pre-transport eligibility and persistent reservation flow."""
     validate_authorization(
@@ -1689,8 +1809,10 @@ def reserve_eligible_attempt(
         conservative_usage_units=conservative_usage_units,
         conservative_cost_micro_units=conservative_cost_micro_units,
     )
+    remaining = {} if campaign_requirement is None else {"campaign_requirement": campaign_requirement}
     usage.reserve(
         record, request_id, items=len(item_bytes),
         usage_units=conservative_usage_units,
         cost_micro_units=conservative_cost_micro_units,
+        **remaining,
     )
