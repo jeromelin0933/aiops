@@ -95,6 +95,7 @@ class DiagnosticSafetyBasis:
     price_currency: str
     price_micro_units_per_million_tokens: int | None
     valid_until: datetime
+    free_tier_permission_reference: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,8 +148,8 @@ def evaluate_diagnostic_safety(
         raise DiagnosticDenied("safety evidence identity, method or validity mismatch")
     if (
         basis.price_currency != "USD" or basis.price_currency != record.cost_currency
-        or basis.price_tier != ("SYNTHETIC_OFFLINE_ONLY" if allow_synthetic
-                                else "STANDARD_PAID_TEXT")
+        or basis.price_tier not in (("SYNTHETIC_OFFLINE_ONLY",) if allow_synthetic
+                                   else ("STANDARD_PAID_TEXT", "FREE_TIER_TEXT_V1"))
     ):
         raise DiagnosticDenied("cost price, account tier or currency is unverified")
     item_limit = _checked_positive(basis.provider_item_limit, "provider item limit")
@@ -157,8 +158,16 @@ def evaluate_diagnostic_safety(
                                         "provider aggregate token limit")
     payload_limit = _checked_positive(basis.provider_payload_byte_limit,
                                       "provider payload limit")
-    rate = _checked_positive(basis.price_micro_units_per_million_tokens,
-                             "applicable text price")
+    if basis.price_tier == "FREE_TIER_TEXT_V1":
+        if (type(basis.price_micro_units_per_million_tokens) is not int
+                or basis.price_micro_units_per_million_tokens != 0
+                or basis.free_tier_permission_reference != record.pm_approval_reference):
+            raise DiagnosticDenied("Free Tier rate or controlled data-use permission is invalid")
+        rate = 0
+    else:
+        rate = _checked_positive(basis.price_micro_units_per_million_tokens,
+                                 "applicable text price")
+    _checked_positive(record.maximum_cost_micro_units, "campaign cost limit")
     if len(texts) != len(contents) or not texts or len(texts) > min(
         item_limit, record.maximum_items, 128,
     ):
@@ -205,6 +214,7 @@ def evaluate_diagnostic_safety(
     if (
         conservative_cost > 2**63 - 1
         or type(reserved_cost_micro_units) is not int
+        or reserved_cost_micro_units <= 0
         or reserved_cost_micro_units < conservative_cost
         or reserved_cost_micro_units > record.maximum_cost_micro_units
     ):
@@ -793,12 +803,16 @@ def _live_safety(
     if value["binding"]["authorization_record_sha256"] != _authorization_record_digest(record):
         raise DiagnosticDenied("safety authorization changed")
     bounds = artifact.require_accepted_evidence()
+    free_permission = artifact.require_free_tier_permission(record)
     digests = tuple(sha256(text.encode("utf-8")).hexdigest() for text in texts)
     if set(bounds) != set(digests):
         raise DiagnosticDenied("accepted token bounds do not cover exact enveloped inputs")
     limits, pricing = value["provider_limits"], value["pricing_evidence"]
     total = sum(bounds[digest] for digest in digests)
-    cost = (total * pricing["rate_micro_units_per_million_tokens"] + 999_999) // 1_000_000
+    # Preserve positive, non-refundable attempt reservations in the existing
+    # store. One micro-USD is a conservative budget hold, NOT a unit price,
+    # known token usage or Google billing charge (the Free Tier rate is zero).
+    cost = max(1, (total * pricing["rate_micro_units_per_million_tokens"] + 999_999) // 1_000_000)
     proof = GeminiEmbedding2Verification(
         count_tokens=lambda text: bounds[sha256(text.encode("utf-8")).hexdigest()],
         serialize_payload=_serialized,
@@ -820,6 +834,7 @@ def _live_safety(
         limits["payload_byte_limit"], pricing["price_tier"], pricing["currency"],
         pricing["rate_micro_units_per_million_tokens"],
         datetime.fromisoformat(value["validity"]["expires_at"].replace("Z", "+00:00")),
+        free_permission,
     )
     return proof, basis, total, cost
 

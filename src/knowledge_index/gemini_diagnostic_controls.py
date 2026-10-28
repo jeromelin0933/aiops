@@ -850,9 +850,9 @@ _SAFETY_SCHEMA = {
         data_sha256="NULLABLE_H64", overhead_coverage=("INCLUDED_IN_ITEM_BOUNDS",), source=_SAFETY_SOURCE),
     "provider_limits": dict(item_limit="I64+", per_item_token_limit="I64+",
         aggregate_token_limit="I64+", payload_byte_limit="I64+", source=_SAFETY_SOURCE),
-    "pricing_evidence": dict(account_reference="S256", price_tier=("STANDARD_PAID_TEXT",),
+    "pricing_evidence": dict(account_reference="S256", price_tier=("STANDARD_PAID_TEXT", "FREE_TIER_TEXT_V1"),
         currency=("USD",), pricing_unit=("MICRO_USD_PER_MILLION_INPUT_TOKENS",),
-        rate_micro_units_per_million_tokens="I64+", fee_coverage=("ALL_APPLICABLE_CHARGES_INCLUDED",),
+        rate_micro_units_per_million_tokens="I64_NONNEGATIVE", fee_coverage=("ALL_APPLICABLE_CHARGES_INCLUDED",),
         source=_SAFETY_SOURCE),
     "credential_binding": dict(profile_identity="S256", secret_revision="ID128"),
     "e4_reference": dict(reference="ID128", sdk_body_sha256="H64", canonical_json_sha256="H64",
@@ -860,6 +860,17 @@ _SAFETY_SCHEMA = {
     "validity": dict(not_before="UTCSEC", expires_at="UTCSEC"),
     "lifecycle_state": ("ACTIVE", "REVOKED"),
 }
+
+# Additive, versioned Free Tier evidence in the SAME protected safety artifact.
+# Quota is project evidence, never an authorization or a campaign budget.
+_FREE_TIER_SCHEMA = dict(
+    pricing_identity=("FREE_TIER_TEXT_V1",),
+    account_context=dict(account_reference="S256", profile_identity="S256",
+                         secret_revision="ID128", project_tier=("FREE",)),
+    quota_evidence=dict(rpm="I64+", tpm="I64+", rpd="I64+", source=_SAFETY_SOURCE),
+    data_use_permission=dict(pm_approval_reference="S256", authority_identity="S256",
+                            source=_SAFETY_SOURCE),
+)
 
 
 def _safety_time(value: Any) -> datetime:
@@ -886,6 +897,10 @@ def _validate_safety_wire(value: Any, rule: Any = _SAFETY_SCHEMA) -> None:
         return
     if rule == "I64+":
         _positive(value, "safety integer")
+        return
+    if rule == "I64_NONNEGATIVE":
+        if type(value) is not int or not 0 <= value <= 2**63 - 1:
+            raise DiagnosticDenied("safety nonnegative integer is invalid")
         return
     if type(value) is not str or any(0xD800 <= ord(c) <= 0xDFFF for c in value):
         raise DiagnosticDenied("safety string type or Unicode is invalid")
@@ -928,7 +943,21 @@ class DiagnosticSafetyArtifact:
             # Optional exact-input bound table. Old metadata remains readable,
             # but cannot enable live execution without accepted bound evidence.
             bounds = value.pop("accepted_input_token_bounds", None) if type(value) is dict else None
+            free = value.pop("free_tier_evidence", None) if type(value) is dict else None
             _validate_safety_wire(value)
+            pricing = value["pricing_evidence"]
+            if pricing["price_tier"] == "FREE_TIER_TEXT_V1":
+                _validate_safety_wire(free, _FREE_TIER_SCHEMA)
+                context = free["account_context"]
+                credential = value["credential_binding"]
+                if (pricing["rate_micro_units_per_million_tokens"] != 0
+                        or context["account_reference"] != pricing["account_reference"]
+                        or context["profile_identity"] != credential["profile_identity"]
+                        or context["secret_revision"] != credential["secret_revision"]):
+                    raise DiagnosticDenied("Free Tier pricing, account or profile mismatch")
+                value["free_tier_evidence"] = free
+            elif free is not None or pricing["rate_micro_units_per_million_tokens"] <= 0:
+                raise DiagnosticDenied("Paid Tier requires positive pricing and no Free Tier evidence")
             if bounds is not None:
                 if type(bounds) is not dict or not 1 <= len(bounds) <= 128:
                     raise DiagnosticDenied("accepted token bounds are invalid")
@@ -952,6 +981,11 @@ class DiagnosticSafetyArtifact:
                 source = value[key]["source"]
                 if not _safety_time(source["effective_from"]) <= start < end <= _safety_time(source["expires_at"]):
                     raise DiagnosticDenied("safety evidence source validity does not contain artifact")
+            if free is not None:
+                for key in ("quota_evidence", "data_use_permission"):
+                    source = free[key]["source"]
+                    if not _safety_time(source["effective_from"]) <= start < end <= _safety_time(source["expires_at"]):
+                        raise DiagnosticDenied("Free Tier evidence source validity does not contain artifact")
             e4 = value["e4_reference"]
             if not _safety_time(e4["valid_from"]) <= start < end <= _safety_time(e4["valid_until"]):
                 raise DiagnosticDenied("safety E4 validity does not contain artifact")
@@ -1048,6 +1082,23 @@ class DiagnosticSafetyArtifact:
                     dict(bounds), sort_keys=True, separators=(",", ":")).encode()).hexdigest()):
             raise DiagnosticDenied("accepted safety evidence and trusted credential metadata are not provisioned")
         return bounds
+
+    def require_free_tier_permission(self, record: DiagnosticAuthorizationRecord) -> str | None:
+        """Bind protected data-use approval to the actual PM campaign authority.
+
+        References are human-published evidence, not self-authenticating grants.
+        Production loads this artifact only through the existing host ACL boundary.
+        """
+        value = self._validated_fields()
+        if value["pricing_evidence"]["price_tier"] != "FREE_TIER_TEXT_V1":
+            return None
+        permission = value["free_tier_evidence"]["data_use_permission"]
+        if (value["binding"]["authorization_record_sha256"] != authorization_record_digest(record)
+                or permission["pm_approval_reference"] != record.pm_approval_reference
+                or permission["authority_identity"] != record.spec_lead_identity
+                or value["credential_binding"]["profile_identity"] != record.credential_profile_identity):
+            raise DiagnosticDenied("Free Tier data-use permission or campaign profile mismatch")
+        return permission["pm_approval_reference"]
 
 
 def _safety_unique(pairs: list[tuple[str, Any]]) -> dict:
