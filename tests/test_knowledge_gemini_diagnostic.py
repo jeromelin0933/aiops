@@ -35,6 +35,71 @@ def _s2_fixed_case(tmp_path, kind="document", count=2):
     return prepared, approved, evidence, observation
 
 
+@pytest.mark.parametrize("invalid", [None, "revoked", "raw_digest", "synthetic", "mixed_revision"])
+def test_g4s1_safety_loading_has_no_reservation_credential_or_provider_authority(
+    offline_sdk, tmp_path, monkeypatch, invalid,
+):
+    import knowledge_index.gemini_diagnostic_controls as controls
+    from test_knowledge_gemini_diagnostic_controls import safety_host_fixture
+    paths, _, _, _, value, _ = safety_host_fixture(tmp_path, monkeypatch)
+    calls = dict(reservation=0, completion=0, construction=0, credential=0)
+    before = paths.attempts.read_bytes()
+    def forbidden(stage):
+        def call(*args, **kwargs):
+            calls[stage] += 1
+            pytest.fail("safety parsing/loading must not execute an attempt")
+        return call
+    monkeypatch.setattr(TemporaryDiagnosticUsage, "reserve", forbidden("reservation"))
+    monkeypatch.setattr(TemporaryDiagnosticUsage, "finish", forbidden("completion"))
+    monkeypatch.setattr(diagnostic, "_create_diagnostic_offline_sdk_client", forbidden("construction"))
+    monkeypatch.setattr(adapter, "create_google_client", forbidden("credential"))
+    if invalid == "revoked":
+        value["lifecycle_state"] = "REVOKED"
+    if invalid == "raw_digest":
+        # Canonical digest stays correct; raw digest remains independently mandatory.
+        value["e4_reference"]["sdk_body_sha256"] = "0" * 64
+    if invalid == "synthetic":
+        value["token_evidence"]["token_method"] = "SYNTHETIC_BYTES_NOT_TOKENS"
+    if invalid == "mixed_revision":
+        e4 = json.loads(paths.sdk_request_evidence.read_bytes())
+        e4["reference"] = "changed-e4"
+        paths.sdk_request_evidence.write_text(json.dumps(e4), encoding="utf-8")
+    paths.safety_evidence.write_text(json.dumps(value), encoding="utf-8")
+    if invalid is None:
+        metadata = controls.load_live_safety_artifact()
+        # Both declared acceptance references are present; neither is proof.
+        assert metadata.fields["publication"]["evidence_acceptance_reference"]
+        with pytest.raises(DiagnosticDenied, match="not provisioned"):
+            metadata.require_accepted_evidence()
+        for key in ("safety", "artifact", "safety_source", "accepted_evidence"):
+            with pytest.raises(TypeError):
+                run_live(live_opt_in=True, **{key: metadata})
+        with pytest.raises(DiagnosticDenied):
+            diagnostic._live_safety(None, ())
+    else:
+        with pytest.raises(DiagnosticDenied):
+            controls.load_live_safety_artifact()
+    assert calls == dict(reservation=0, completion=0, construction=0, credential=0)
+    assert paths.attempts.read_bytes() == before and offline_sdk.blocked_calls == []
+
+
+def test_g4s1_safety_metadata_cannot_upgrade_synthetic_to_formal_or_offline_authority(offline_sdk, tmp_path, monkeypatch):
+    from test_knowledge_gemini_diagnostic_controls import safety_case, safety_parse
+    import knowledge_index.gemini_diagnostic_controls as controls
+    artifact = safety_parse(safety_case()[3])
+    request, grant, _, _ = request_and_record(tmp_path, kind="query")
+    e4 = synthetic_host_evidence(request, grant)
+    with pytest.raises(DiagnosticDenied):
+        artifact.matches_record_input(grant, approved_input(request, grant), e4, grant.source_revision)
+    for key in ("expected_sdk_evidence", "approved_input"):
+        with pytest.raises(DiagnosticDenied):
+            execute(tmp_path, request, grant, **{key: artifact})
+    assert ledger_rows(tmp_path / "isolated-usage.sqlite") == []
+    with pytest.raises(DiagnosticDenied):
+        artifact.require_accepted_evidence()
+    assert offline_sdk.blocked_calls == []
+
+
 @pytest.mark.parametrize("mutation", ["arbitrary_transport", "arbitrary_delegate", "entry_override",
                                       "instance_entry", "close_override", "used_guard"])
 def test_r01_adapter_bridge_rejects_uncontrolled_transport_handoff(
@@ -1688,7 +1753,7 @@ def test_offline_shared_core_reserves_before_mocktransport(offline_sdk, tmp_path
     assert order == ["preflight", "preflight", "reserve", "mock_client"]
 
 
-def test_run_live_reaches_shared_preflight_but_never_reserves_or_dispatches(
+def test_run_live_rejects_incomplete_document_batch_before_credentials_or_reservation(
     offline_sdk, tmp_path, monkeypatch,
 ):
     request, grant, _, _ = request_and_record(tmp_path)
@@ -1722,7 +1787,7 @@ def test_run_live_reaches_shared_preflight_but_never_reserves_or_dispatches(
         diagnostic, "_create_gemini_offline_mock_client",
         lambda *args: pytest.fail("live dispatch must not construct a client"),
     )
-    with pytest.raises(DiagnosticDenied, match="dispatch remains unauthorized"):
+    with pytest.raises(DiagnosticDenied, match="exactly 54"):
         run_live(request, live_opt_in=True)
     assert order == ["preflight"]
 

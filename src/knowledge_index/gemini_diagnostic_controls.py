@@ -1,4 +1,4 @@
-"""Single-host diagnostic controls; production authority remains unprovisioned."""
+"""Single-host diagnostic controls; host/PM authority is provisioned by humans."""
 
 from __future__ import annotations
 
@@ -6,15 +6,17 @@ import hashlib
 import json
 import os
 import re
+import socket
 import sqlite3
 import subprocess
 import ctypes
 from contextlib import closing, contextmanager
 import stat
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 from urllib.parse import quote
 
@@ -56,6 +58,10 @@ _FORMAL_ATTEMPTS_DDL = """CREATE TABLE attempts (
 class DiagnosticDenied(ValueError):
     """A bounded, non-secret denial before credential or transport access."""
 
+    def __init__(self, detail: str, *, code: str = "AUTHORIZATION_DENIED") -> None:
+        super().__init__(detail)
+        self.code = code
+
 
 @dataclass(frozen=True, slots=True)
 class FixedHostPaths:
@@ -69,6 +75,10 @@ class FixedHostPaths:
     @property
     def sdk_request_evidence(self) -> Path:
         return self.authority / "sdk_request_evidence.json"
+
+    @property
+    def safety_evidence(self) -> Path:
+        return self.authority / "safety_evidence.json"
 
 
 @dataclass(frozen=True, slots=True)
@@ -426,7 +436,8 @@ def _validate_path_facts(
         raise DiagnosticDenied("diagnostic runner lacks required host access")
 
 
-def validate_host_paths(paths: FixedHostPaths, runner_sid: str) -> dict[Path, WindowsPathFacts]:
+def validate_host_paths(paths: FixedHostPaths, runner_sid: str, *,
+                        _include_safety: bool = False) -> dict[Path, WindowsPathFacts]:
     """Validate the fixed hierarchy, never a caller-selected live directory."""
     if os.name != "nt" or not runner_sid.startswith("S-1-") or runner_sid in _ADMIN_SIDS:
         raise DiagnosticDenied("dedicated Windows runner identity is required")
@@ -437,6 +448,7 @@ def validate_host_paths(paths: FixedHostPaths, runner_sid: str) -> dict[Path, Wi
         paths.campaign != paths.authority / "campaign.json"
         or paths.approved_input != paths.authority / "approved_input.json"
         or paths.sdk_request_evidence != paths.authority / "sdk_request_evidence.json"
+        or paths.safety_evidence != paths.authority / "safety_evidence.json"
         or paths.state != expected_root / "state"
         or paths.attempts != paths.state / "attempts.sqlite"
     ):
@@ -450,6 +462,7 @@ def validate_host_paths(paths: FixedHostPaths, runner_sid: str) -> dict[Path, Wi
         (paths.root, True, False), (paths.authority, True, False),
         (paths.campaign, False, False), (paths.approved_input, False, False),
         (paths.sdk_request_evidence, False, False),
+        *(((paths.safety_evidence, False, False),) if _include_safety else ()),
         (paths.state, True, True), (paths.attempts, False, True),
         ):
             facts = _windows_path_facts(path, token)
@@ -816,6 +829,237 @@ class DiagnosticSdkByteEvidence:
             raise DiagnosticDenied("SDK byte evidence does not match campaign and approved input")
 
 
+# G3-CL01: this table is the closed wire appendix, not an evidence registry.
+# Labels describe serialization only; no label can select executable code.
+_SAFETY_URL = "https://generativelanguage.googleapis.com/v1/models/gemini-embedding-2:batchEmbedContents"
+_SAFETY_SOURCE = dict(reference="S256", revision="S256", content_sha256="H64",
+                      issuer_identity="S256", effective_from="UTCSEC", expires_at="UTCSEC")
+_SAFETY_SCHEMA = {
+    "schema_version": (1,), "artifact_type": ("DIAGNOSTIC_SAFETY_EVIDENCE",),
+    "artifact_revision": "ID128",
+    "publication": dict(creator_identity="S256", method_acceptance_reference="S256",
+        evidence_acceptance_reference="S256", publisher_identity="S256", published_at="UTCSEC"),
+    "binding": dict(campaign_id="S256", authorization_record_sha256="H64",
+        source_revision="COMMIT40", provider=("google",), model=("gemini-embedding-2",),
+        sdk=("google-genai==2.25.0",), api=("v1",), request_url=(_SAFETY_URL,),
+        kind=("document", "query"), input_scope_identity="S256", input_commitment="H64",
+        bounds_basis="S256", cost_basis="S256"),
+    "token_evidence": dict(token_method=("MODEL_COMPATIBLE_UPPER_BOUND",),
+        method_category=("MODEL_COMPATIBLE_LOCAL_COUNTER", "PROVABLE_CONSERVATIVE_UPPER_BOUND"),
+        method_id="ID128", method_revision="ID128", implementation_sha256="H64",
+        data_sha256="NULLABLE_H64", overhead_coverage=("INCLUDED_IN_ITEM_BOUNDS",), source=_SAFETY_SOURCE),
+    "provider_limits": dict(item_limit="I64+", per_item_token_limit="I64+",
+        aggregate_token_limit="I64+", payload_byte_limit="I64+", source=_SAFETY_SOURCE),
+    "pricing_evidence": dict(account_reference="S256", price_tier=("STANDARD_PAID_TEXT",),
+        currency=("USD",), pricing_unit=("MICRO_USD_PER_MILLION_INPUT_TOKENS",),
+        rate_micro_units_per_million_tokens="I64+", fee_coverage=("ALL_APPLICABLE_CHARGES_INCLUDED",),
+        source=_SAFETY_SOURCE),
+    "credential_binding": dict(profile_identity="S256", secret_revision="ID128"),
+    "e4_reference": dict(reference="ID128", sdk_body_sha256="H64", canonical_json_sha256="H64",
+        sdk_body_bytes="I64+", valid_from="UTCSEC", valid_until="UTCSEC"),
+    "validity": dict(not_before="UTCSEC", expires_at="UTCSEC"),
+    "lifecycle_state": ("ACTIVE", "REVOKED"),
+}
+
+
+def _safety_time(value: Any) -> datetime:
+    if type(value) is not str or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", value):
+        raise DiagnosticDenied("safety UTCSEC time is invalid")
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        raise DiagnosticDenied("safety UTCSEC time is invalid") from None
+
+
+def _validate_safety_wire(value: Any, rule: Any = _SAFETY_SCHEMA) -> None:
+    if type(rule) is dict:
+        if type(value) is not dict or set(value) != set(rule):
+            raise DiagnosticDenied("safety object fields are incomplete or extra")
+        for key, child in rule.items():
+            _validate_safety_wire(value[key], child)
+        return
+    if type(rule) is tuple:
+        if not any(type(value) is type(allowed) and value == allowed for allowed in rule):
+            raise DiagnosticDenied("safety enum or version is invalid")
+        return
+    if rule == "NULLABLE_H64" and value is None:
+        return
+    if rule == "I64+":
+        _positive(value, "safety integer")
+        return
+    if type(value) is not str or any(0xD800 <= ord(c) <= 0xDFFF for c in value):
+        raise DiagnosticDenied("safety string type or Unicode is invalid")
+    if rule == "UTCSEC":
+        _safety_time(value)
+        return
+    patterns = {"ID128": r"[A-Za-z0-9._-]{1,128}", "H64": r"[0-9a-f]{64}",
+                "NULLABLE_H64": r"[0-9a-f]{64}", "COMMIT40": r"[0-9a-f]{40}"}
+    if rule == "S256":
+        valid = 1 <= len(value) <= 256 and value == value.strip()
+    else:
+        valid = re.fullmatch(patterns[rule], value) is not None
+    if not valid:
+        raise DiagnosticDenied("safety string format or bound is invalid")
+
+
+def _safety_freeze(value: dict) -> Any:
+    return MappingProxyType({k: _safety_freeze(v) if type(v) is dict else v for k, v in value.items()})
+
+
+@dataclass(frozen=True, slots=True)
+class DiagnosticSafetyArtifact:
+    """Parsed metadata only: neither technical acceptance nor live authority.
+
+    Source/acceptance references and hashes describe fixed evidence. No counter,
+    proof, credential resolver, PM authorization or execution grant is created.
+    """
+
+    fields: Any
+
+    @classmethod
+    def from_json(cls, data: bytes) -> "DiagnosticSafetyArtifact":
+        try:
+            if type(data) is not bytes or len(data) > 1_000_000 or data.startswith(b"\xef\xbb\xbf"):
+                raise DiagnosticDenied("safety artifact encoding or size is invalid")
+            def constant(_: str) -> None:
+                raise DiagnosticDenied("safety JSON numeric constant is invalid")
+            value = json.loads(data.decode("utf-8"), object_pairs_hook=_safety_unique,
+                               parse_constant=constant)
+            # Optional exact-input bound table. Old metadata remains readable,
+            # but cannot enable live execution without accepted bound evidence.
+            bounds = value.pop("accepted_input_token_bounds", None) if type(value) is dict else None
+            _validate_safety_wire(value)
+            if bounds is not None:
+                if type(bounds) is not dict or not 1 <= len(bounds) <= 128:
+                    raise DiagnosticDenied("accepted token bounds are invalid")
+                for digest, bound in bounds.items():
+                    if type(digest) is not str or not re.fullmatch(r"[0-9a-f]{64}", digest):
+                        raise DiagnosticDenied("accepted token input digest is invalid")
+                    _positive(bound, "accepted token bound")
+                value["accepted_input_token_bounds"] = bounds
+            profile = value["credential_binding"]["profile_identity"]
+            if any(word in profile.lower() for word in (
+                "api_key", "secret", "bearer", "token", "authorization", ":", "=",
+            )):
+                raise DiagnosticDenied("safety credential profile must be opaque and non-secret")
+            start = _safety_time(value["validity"]["not_before"])
+            end = _safety_time(value["validity"]["expires_at"])
+            if (not start <= datetime.now(timezone.utc) < end
+                    or _safety_time(value["publication"]["published_at"]) > start
+                    or value["lifecycle_state"] != "ACTIVE"):
+                raise DiagnosticDenied("safety publication, validity or revocation is invalid")
+            for key in ("token_evidence", "provider_limits", "pricing_evidence"):
+                source = value[key]["source"]
+                if not _safety_time(source["effective_from"]) <= start < end <= _safety_time(source["expires_at"]):
+                    raise DiagnosticDenied("safety evidence source validity does not contain artifact")
+            e4 = value["e4_reference"]
+            if not _safety_time(e4["valid_from"]) <= start < end <= _safety_time(e4["valid_until"]):
+                raise DiagnosticDenied("safety E4 validity does not contain artifact")
+            return cls(_safety_freeze(value))
+        except (ValueError, TypeError, UnicodeError, RecursionError, OverflowError):
+            raise DiagnosticDenied("safety artifact is invalid") from None
+
+    def matches_record_input(self, record: DiagnosticAuthorizationRecord,
+                             approved: ApprovedDiagnosticInput, e4: DiagnosticSdkByteEvidence,
+                             source_revision: str) -> None:
+        """Pure metadata comparison, never a caller-supplied formal safety grant."""
+        if (type(record) is not DiagnosticAuthorizationRecord
+                or type(approved) is not ApprovedDiagnosticInput
+                or type(e4) is not DiagnosticSdkByteEvidence):
+            raise DiagnosticDenied("safety binding context is unavailable")
+        # Reparse also protects validation of a manually constructed DTO.
+        value = self._validated_fields()
+        approved.matches_record(record)
+        e4.matches_record_input(record, approved)  # Preserve ALL original E4 checks.
+        binding = value["binding"]
+        expected = dict(campaign_id=record.campaign_id,
+            authorization_record_sha256=authorization_record_digest(record),
+            source_revision=record.source_revision, provider=record.provider_identity,
+            model=record.model_identity, sdk=record.sdk_baseline, api=record.api_version,
+            request_url=e4.request_url, kind=approved.kind,
+            input_scope_identity=approved.scope_identity, input_commitment=approved.commitment,
+            bounds_basis=record.bounds_basis, cost_basis=record.cost_basis)
+        if (binding != expected or source_revision != record.source_revision
+                or value["credential_binding"]["profile_identity"] != record.credential_profile_identity
+                or value["pricing_evidence"]["currency"] != record.cost_currency):
+            raise DiagnosticDenied("safety authorization, source, input or profile binding mismatch")
+        ref = value["e4_reference"]
+        for key in ("reference", "sdk_body_sha256", "canonical_json_sha256", "sdk_body_bytes"):
+            if ref[key] != getattr(e4, key):
+                raise DiagnosticDenied("safety E4 reference binding mismatch")
+        if (_safety_time(ref["valid_from"]) != e4.valid_from
+                or _safety_time(ref["valid_until"]) != e4.valid_until):
+            raise DiagnosticDenied("safety E4 time binding mismatch")
+        start, end = (_safety_time(value["validity"][key]) for key in ("not_before", "expires_at"))
+        now = datetime.now(timezone.utc)
+        if not (_timestamp(record.valid_from) <= start < end <= _timestamp(record.expires_at)
+                and start <= now < end):
+            raise DiagnosticDenied("safety or authorization validity is unavailable")
+        count = len(approved.identities)
+        limits = value["provider_limits"]
+        if (count != (54 if approved.kind == "document" else 1)
+                or count > min(limits["item_limit"], record.maximum_items, 128)
+                or e4.sdk_body_bytes > min(limits["payload_byte_limit"], record.maximum_payload_bytes, 1_000_000)):
+            raise DiagnosticDenied("safety request cardinality differs from frozen contract")
+
+    def _validated_fields(self) -> Any:
+        def thaw(value: Any) -> Any:
+            if type(value) in (dict, MappingProxyType):
+                return {k: thaw(v) for k, v in value.items()}
+            return value
+        try:
+            data = json.dumps(thaw(self.fields), ensure_ascii=True, separators=(",", ":")).encode()
+            return type(self).from_json(data).fields
+        except (ValueError, TypeError, RecursionError, OverflowError):
+            raise DiagnosticDenied("safety artifact is invalid") from None
+
+    def matches_method_metadata(self, *, method_id: str, method_revision: str,
+                                implementation_sha256: str, data_sha256: str | None) -> None:
+        """Comparison for later accepted-method wiring; proves no applicability."""
+        token = self._validated_fields()["token_evidence"]
+        if any(token[k] != v for k, v in dict(method_id=method_id, method_revision=method_revision,
+                implementation_sha256=implementation_sha256, data_sha256=data_sha256).items()):
+            raise DiagnosticDenied("safety method metadata mismatch")
+
+    def matches_credential_metadata(self, *, profile_identity: str,
+                                    secret_revision: str, account_reference: str) -> None:
+        """Pure comparison only; caller metadata cannot establish trusted facts."""
+        value = self._validated_fields()
+        if (value["credential_binding"] != dict(profile_identity=profile_identity, secret_revision=secret_revision)
+                or value["pricing_evidence"]["account_reference"] != account_reference):
+            raise DiagnosticDenied("safety credential metadata mismatch")
+
+    def require_accepted_evidence(self) -> Any:
+        """Consume operator-accepted bounds for exact enveloped inputs only.
+
+        This method does not approve a tokenizer, provider limit or price. The
+        fixed host authority must publish reviewed, model-compatible upper
+        bounds (including overhead) and their original evidence references.
+        No byte count is silently treated as a token count.
+        """
+        value = self._validated_fields()
+        bounds = value.get("accepted_input_token_bounds")
+        token = value["token_evidence"]
+        if (bounds is None or token["method_id"] != "APPROVED_FIXED_INPUT_UPPER_BOUNDS_V1"
+                or token["method_revision"] != "v1"
+                or token["method_category"] != "PROVABLE_CONSERVATIVE_UPPER_BOUND"
+                or token["implementation_sha256"] != hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+                or token["data_sha256"] != hashlib.sha256(json.dumps(
+                    dict(bounds), sort_keys=True, separators=(",", ":")).encode()).hexdigest()):
+            raise DiagnosticDenied("accepted safety evidence and trusted credential metadata are not provisioned")
+        return bounds
+
+
+def _safety_unique(pairs: list[tuple[str, Any]]) -> dict:
+    # Reuse the existing duplicate-field policy without changing old artifacts.
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise DiagnosticDenied("safety artifact contains duplicate fields")
+        result[key] = value
+    return result
+
+
 def _read_record(path: Path) -> DiagnosticAuthorizationRecord:
     try:
         if path.is_symlink() or path.parent.is_symlink() or not path.is_file():
@@ -987,6 +1231,12 @@ def load_live_binding() -> LiveHostBinding:
     paths = fixed_host_paths()
     runner_sid = process_runner_sid()
     observed = validate_host_paths(paths, runner_sid)
+    return _load_validated_host_binding(paths, runner_sid, observed)
+
+
+def _load_validated_host_binding(paths: FixedHostPaths, runner_sid: str,
+                                 observed: dict[Path, WindowsPathFacts]) -> LiveHostBinding:
+    """Read the existing D-A/E4 context using this validation's file identities."""
     record = DiagnosticAuthorizationRecord.from_json(
         _read_trusted_file(paths.campaign, observed[paths.campaign]))
     approved_input = ApprovedDiagnosticInput.from_json(
@@ -1002,9 +1252,76 @@ def load_live_binding() -> LiveHostBinding:
     return LiveHostBinding(record, approved_input, paths, runner_sid, sdk_byte_evidence)
 
 
+def load_live_safety_artifact() -> DiagnosticSafetyArtifact:
+    """Load fixed trusted metadata; never return technical proof/live eligibility.
+
+    No caller path, root, evidence, method, credential or safety override exists.
+    Accepted exact-input bounds and credential binding are consumed separately
+    by the runner; loading metadata alone never authorizes an invocation.
+    """
+    paths = fixed_host_paths()
+    runner_sid = process_runner_sid()
+    observed = validate_host_paths(paths, runner_sid, _include_safety=True)
+    binding = _load_validated_host_binding(paths, runner_sid, observed)
+    record = binding.record
+    if (record.authorized_host != socket.gethostname()
+            or record.bounds_basis == "SYNTHETIC_OFFLINE_ONLY"
+            or record.cost_basis == "SYNTHETIC_OFFLINE_ONLY"):
+        raise DiagnosticDenied("safety host or formal evidence scope is unavailable")
+    artifact = DiagnosticSafetyArtifact.from_json(
+        _read_trusted_file(paths.safety_evidence, observed[paths.safety_evidence]))
+    revision, clean = resolve_repository_source(Path(__file__).resolve().parents[2])
+    if clean is not True:
+        raise DiagnosticDenied("safety source revision is not clean")
+    artifact.matches_record_input(record, binding.approved_input, binding.sdk_byte_evidence, revision)
+    return artifact
+
+
 def load_live_authorization() -> DiagnosticAuthorizationRecord:
     """Compatibility read: the same fixed host boundary validates all inputs."""
     return load_live_binding().record
+
+
+@dataclass(frozen=True, repr=False)
+class DiagnosticCredential:
+    """An invocation-local secret; never serialize or persist this object."""
+
+    profile_identity: str
+    secret_revision: str
+    value: str = field(repr=False)
+
+    def __repr__(self) -> str:
+        return "<DiagnosticCredential redacted>"
+
+
+def resolve_diagnostic_credential(record: DiagnosticAuthorizationRecord,
+                                  artifact: DiagnosticSafetyArtifact) -> DiagnosticCredential:
+    """One explicit environment profile, no ADC/key selection or fallback.
+
+    Call only after authorization/safety preflight. The operator binds their
+    account/tier and secret revision in the protected safety evidence; this is
+    not an online authentication/account verification operation.
+    """
+    try:
+        binding = artifact._validated_fields()["credential_binding"]
+        profile = os.environ.get("GEMINI_CREDENTIAL_PROFILE")
+        revision = os.environ.get("GEMINI_CREDENTIAL_REVISION")
+        if (profile != record.credential_profile_identity
+                or binding["profile_identity"] != profile
+                or binding["secret_revision"] != revision):
+            raise DiagnosticDenied("diagnostic credential profile or revision mismatch",
+                                   code="CREDENTIAL_PROFILE_MISMATCH")
+        value = os.environ.get("GEMINI_API_KEY")
+        if value is None:
+            raise DiagnosticDenied("diagnostic credential is unavailable", code="CREDENTIAL_UNAVAILABLE")
+        if (type(value) is not str or not 1 <= len(value) <= 4096
+                or any(not 0x21 <= ord(c) <= 0x7e for c in value)):
+            raise DiagnosticDenied("diagnostic credential is invalid", code="CREDENTIAL_INVALID")
+        return DiagnosticCredential(profile, revision, value)
+    except DiagnosticDenied:
+        raise
+    except Exception:
+        raise DiagnosticDenied("diagnostic credential resolution failed", code="CREDENTIAL_UNAVAILABLE") from None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1049,7 +1366,7 @@ def validate_authorization(
     if type(facts.now) is not datetime or facts.now.tzinfo is None:
         raise DiagnosticDenied("trusted current time is unavailable")
     if not facts.clean_tree or facts.source_revision != record.source_revision:
-        raise DiagnosticDenied("clean committed source revision does not match authorization")
+        raise DiagnosticDenied("clean committed source revision does not match authorization", code="SOURCE_MISMATCH")
     if (
         facts.pm_approval_reference != record.pm_approval_reference
         or facts.spec_lead_identity != record.spec_lead_identity
@@ -1060,13 +1377,13 @@ def validate_authorization(
     ):
         raise DiagnosticDenied("runner, host, or credential profile is unauthorized")
     if not _timestamp(record.valid_from) <= facts.now.astimezone(timezone.utc) < _timestamp(record.expires_at):
-        raise DiagnosticDenied("diagnostic authorization is not currently valid")
+        raise DiagnosticDenied("diagnostic authorization is not currently valid", code="AUTHORIZATION_EXPIRED")
     if (
         kind != record.input_kind
         or input_scope_identity != record.input_scope_identity
         or commitment != record.input_commitment
     ):
-        raise DiagnosticDenied("ordered diagnostic input commitment mismatch")
+        raise DiagnosticDenied("ordered diagnostic input commitment mismatch", code="INPUT_MISMATCH")
     if (
         type(item_count) is not int or item_count <= 0
         or item_count > record.maximum_items or len(item_bytes) != item_count
@@ -1088,7 +1405,7 @@ def validate_authorization(
         or type(conservative_cost_micro_units) is not int or conservative_cost_micro_units <= 0
         or conservative_cost_micro_units > record.maximum_cost_micro_units
     ):
-        raise DiagnosticDenied("diagnostic request or cost exceeds approved bounds")
+        raise DiagnosticDenied("diagnostic request or cost exceeds approved bounds", code="INPUT_BOUNDS_EXCEEDED")
 
 
 class TemporaryDiagnosticUsage:
@@ -1130,7 +1447,7 @@ class TemporaryDiagnosticUsage:
                     "OR (usage_observed != 'UNKNOWN' AND "
                     "CAST(usage_observed AS INTEGER) > usage_reserved) LIMIT 1"
                 ).fetchone():
-                    raise DiagnosticDenied("active or unknown diagnostic attempt requires human review")
+                    raise DiagnosticDenied("active or unknown diagnostic attempt requires human review", code="RUNNER_CONFLICT")
                 totals = db.execute(
                     "SELECT COUNT(*), COALESCE(SUM(items),0), COALESCE(SUM(usage_reserved),0), "
                     "COALESCE(SUM(cost_reserved),0) FROM attempts WHERE campaign_id=?",
@@ -1142,7 +1459,7 @@ class TemporaryDiagnosticUsage:
                     or totals[2] + usage_units > record.maximum_usage_units
                     or totals[3] + cost_micro_units > record.maximum_cost_micro_units
                 ):
-                    raise DiagnosticDenied("diagnostic campaign budget is exhausted")
+                    raise DiagnosticDenied("diagnostic campaign budget is exhausted", code="BUDGET_EXHAUSTED")
                 db.execute(
                     "INSERT INTO attempts (campaign_id,request_id,outcome,items,usage_reserved,cost_reserved) "
                     "VALUES (?,?, 'IN_FLIGHT',?,?,?)",

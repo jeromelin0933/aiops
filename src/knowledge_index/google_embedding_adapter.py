@@ -142,6 +142,29 @@ def _gemini_http_options(*, timeout_seconds: float) -> Any:
     )
 
 
+def _create_diagnostic_live_sdk_client(api_key: str, sync: Any, async_client: Any) -> Any:
+    """SDK ownership stays in this adapter; runner owns authorization/attempts.
+
+    No configurable endpoint, retry policy, ADC, replay or alternate client is
+    admitted. Construction alone grants no campaign/provider PASS authority.
+    """
+    if (type(sync) is not _DiagnosticHttpxClient
+            or type(async_client) is not httpx.AsyncClient
+            or type(async_client._transport) is not _DiagnosticAsyncDenyTransport):
+        raise DiagnosticDenied("controlled diagnostic clients are required")
+    from google import genai
+    from google.genai.client import DebugConfig
+    options = _gemini_http_options(timeout_seconds=30)
+    options.base_url = "https://generativelanguage.googleapis.com"
+    options.httpx_client, options.httpx_async_client = sync, async_client
+    try:
+        return genai.Client(vertexai=False, api_key=api_key,
+            debug_config=DebugConfig(client_mode=None, replays_directory=None, replay_id=None),
+            http_options=options)
+    except Exception:
+        raise DiagnosticDenied("diagnostic SDK construction failed") from None
+
+
 def _close_offline_resources(sdk: Any = None, sync: Any = None,
                              async_client: Any = None) -> tuple[str, ...]:
     """Attempt each acquired owner's cleanup once, without masking its peers.

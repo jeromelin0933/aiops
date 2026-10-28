@@ -139,6 +139,516 @@ def e4_host_fixture(tmp_path, monkeypatch):
     return paths, grant, approved, host_facts
 
 
+def safety_case():
+    """Entirely synthetic metadata, including apparently formal wire labels.
+
+    This is schema/binding test data, NEVER accepted E1/E2/E3 evidence.
+    """
+    grant, _, approved = e4_query_case()
+    grant = replace(grant, bounds_basis="fixture-method-scope", cost_basis="fixture-price-scope",
+                    valid_from="2000-01-01T00:00:00+00:00", expires_at="2099-01-01T00:00:00+00:00")
+    e4 = controls.DiagnosticSdkByteEvidence.from_json(json.dumps(e4_host_material(grant, approved)).encode())
+    source = dict(reference="fixture-proof", revision="v1", content_sha256="d" * 64,
+                  issuer_identity="fixture-issuer", effective_from="2000-01-01T00:00:00Z",
+                  expires_at="2099-01-01T00:00:00Z")
+    value = dict(schema_version=1, artifact_type="DIAGNOSTIC_SAFETY_EVIDENCE",
+        artifact_revision="fixture-safety-r1",
+        publication=dict(creator_identity="fixture-creator", method_acceptance_reference="fixture-method-review",
+            evidence_acceptance_reference="fixture-evidence-review", publisher_identity="fixture-admin",
+            published_at="2000-01-01T00:00:00Z"),
+        binding=dict(campaign_id=grant.campaign_id, authorization_record_sha256=controls.authorization_record_digest(grant),
+            source_revision=grant.source_revision, provider="google", model="gemini-embedding-2",
+            sdk="google-genai==2.25.0", api="v1", request_url=e4.request_url, kind=approved.kind,
+            input_scope_identity=approved.scope_identity, input_commitment=approved.commitment,
+            bounds_basis=grant.bounds_basis, cost_basis=grant.cost_basis),
+        token_evidence=dict(token_method="MODEL_COMPATIBLE_UPPER_BOUND", method_category="PROVABLE_CONSERVATIVE_UPPER_BOUND",
+            method_id="fixture-bound", method_revision="v1", implementation_sha256="c" * 64,
+            data_sha256=None, overhead_coverage="INCLUDED_IN_ITEM_BOUNDS", source=dict(source)),
+        provider_limits=dict(item_limit=54, per_item_token_limit=1000, aggregate_token_limit=54000,
+            payload_byte_limit=1_000_000, source=dict(source)),
+        pricing_evidence=dict(account_reference="fixture-account", price_tier="STANDARD_PAID_TEXT", currency="USD",
+            pricing_unit="MICRO_USD_PER_MILLION_INPUT_TOKENS", rate_micro_units_per_million_tokens=1000,
+            fee_coverage="ALL_APPLICABLE_CHARGES_INCLUDED", source=dict(source)),
+        credential_binding=dict(profile_identity=grant.credential_profile_identity, secret_revision="r1"),
+        e4_reference=dict(reference=e4.reference, sdk_body_sha256=e4.sdk_body_sha256,
+            canonical_json_sha256=e4.canonical_json_sha256, sdk_body_bytes=e4.sdk_body_bytes,
+            valid_from="2000-01-01T00:00:00Z", valid_until="2099-01-01T00:00:00Z"),
+        validity=dict(not_before="2000-01-01T00:00:00Z", expires_at="2099-01-01T00:00:00Z"), lifecycle_state="ACTIVE")
+    return grant, approved, e4, value
+
+
+def safety_parse(value):
+    return controls.DiagnosticSafetyArtifact.from_json(json.dumps(value, ensure_ascii=True).encode())
+
+
+def safety_host_fixture(tmp_path, monkeypatch):
+    paths, _, _, host_facts = e4_host_fixture(tmp_path, monkeypatch)
+    grant, approved, e4, value = safety_case()
+    paths.campaign.write_text(json.dumps(asdict(grant)), encoding="utf-8")
+    paths.sdk_request_evidence.write_text(json.dumps(e4_host_material(grant, approved)), encoding="utf-8")
+    paths.safety_evidence.write_text(json.dumps(value), encoding="utf-8")
+    monkeypatch.setattr(controls.socket, "gethostname", lambda: grant.authorized_host)
+    monkeypatch.setattr(controls, "resolve_repository_source", lambda _: (grant.source_revision, True))
+    return paths, grant, approved, e4, value, host_facts
+
+
+def safety_objects():
+    """Independent expected wire shape, not introspection of the implementation."""
+    return [(), ("publication",), ("binding",), ("token_evidence",), ("token_evidence", "source"),
+        ("provider_limits",), ("provider_limits", "source"), ("pricing_evidence",), ("pricing_evidence", "source"),
+        ("credential_binding",), ("e4_reference",), ("validity",)]
+
+
+def at_path(value, path):
+    for key in path:
+        value = value[key]
+    return value
+
+
+SAFETY_LEAVES = [path + (key,) for path in safety_objects()
+                 for key, value in at_path(safety_case()[3], path).items() if not isinstance(value, dict)]
+SAFETY_KEYS = [path + (key,) for path in safety_objects() for key in at_path(safety_case()[3], path)]
+
+
+def test_g4s1_schema_valid_metadata_is_immutable_and_not_accepted_evidence():
+    grant, approved, e4, value = safety_case()
+    artifact = safety_parse(value)
+    artifact.matches_record_input(grant, approved, e4, grant.source_revision)
+    assert artifact.fields["token_evidence"]["data_sha256"] is None
+    with pytest.raises(TypeError):
+        artifact.fields["binding"]["campaign_id"] = "changed"
+    with pytest.raises(DiagnosticDenied, match="not provisioned"):
+        artifact.require_accepted_evidence()
+
+
+@pytest.mark.parametrize("path", SAFETY_KEYS, ids=lambda p: ".".join(p))
+def test_g4s1_every_required_key_missing_denies(path):
+    value = safety_case()[3]
+    del at_path(value, path[:-1])[path[-1]]
+    with pytest.raises(DiagnosticDenied):
+        safety_parse(value)
+
+
+@pytest.mark.parametrize("path", safety_objects(), ids=lambda p: ".".join(p) or "root")
+@pytest.mark.parametrize("operation", ["extra", "duplicate", "wrong_type"])
+def test_g4s1_each_closed_object_rejects_extra_duplicate_and_nonobject(path, operation):
+    value = safety_case()[3]
+    if operation == "wrong_type":
+        if path:
+            at_path(value, path[:-1])[path[-1]] = []
+        else:
+            value = []
+        data = json.dumps(value).encode()
+    elif operation == "extra":
+        at_path(value, path)["unapproved_extension"] = "synthetic-secret"
+        data = json.dumps(value).encode()
+    else:
+        # Replace one exact serialized subtree with an identical duplicate key.
+        obj = at_path(value, path)
+        key = next(iter(obj))
+        subtree = json.dumps(obj)
+        bad = subtree[:-1] + ", " + json.dumps(key) + ": " + json.dumps(obj[key]) + "}"
+        data = json.dumps(value).replace(subtree, bad, 1).encode()
+    with pytest.raises(DiagnosticDenied) as failure:
+        controls.DiagnosticSafetyArtifact.from_json(data)
+    assert "synthetic-secret" not in str(failure.value)
+
+
+@pytest.mark.parametrize("path", SAFETY_LEAVES, ids=lambda p: ".".join(p))
+def test_g4s1_each_leaf_rejects_invalid_type_and_unapproved_null(path):
+    value = safety_case()[3]
+    at_path(value, path[:-1])[path[-1]] = {}  # Wrong type for every primitive, including nullable digest.
+    with pytest.raises(DiagnosticDenied):
+        safety_parse(value)
+    if path != ("token_evidence", "data_sha256"):
+        at_path(value, path[:-1])[path[-1]] = None
+        with pytest.raises(DiagnosticDenied):
+            safety_parse(value)
+
+
+@pytest.mark.parametrize("number", [True, False, 0, -1, 1.0, "1", 2**63, float("nan"), float("inf"), -float("inf")])
+@pytest.mark.parametrize("path", [
+    ("provider_limits", "item_limit"), ("provider_limits", "per_item_token_limit"),
+    ("provider_limits", "aggregate_token_limit"), ("provider_limits", "payload_byte_limit"),
+    ("pricing_evidence", "rate_micro_units_per_million_tokens"), ("e4_reference", "sdk_body_bytes"),
+])
+def test_g4s1_each_positive_integer_rejects_bool_float_overflow_and_constants(path, number):
+    value = safety_case()[3]
+    at_path(value, path[:-1])[path[-1]] = number
+    with pytest.raises(DiagnosticDenied):
+        safety_parse(value)
+
+
+@pytest.mark.parametrize("path", [("schema_version",), ("artifact_type",), ("lifecycle_state",),
+    ("binding", "provider"), ("binding", "model"), ("binding", "sdk"), ("binding", "api"), ("binding", "kind"),
+    ("token_evidence", "token_method"), ("token_evidence", "method_category"), ("token_evidence", "overhead_coverage"),
+    ("pricing_evidence", "price_tier"), ("pricing_evidence", "currency"), ("pricing_evidence", "pricing_unit"),
+    ("pricing_evidence", "fee_coverage")])
+@pytest.mark.parametrize("replacement", [True, "APPROVED", "VERIFIED", "SYNTHETIC_OFFLINE_ONLY"])
+def test_g4s1_exact_enums_and_versions_have_no_authority_aliases(path, replacement):
+    value = safety_case()[3]
+    at_path(value, path[:-1])[path[-1]] = replacement
+    with pytest.raises(DiagnosticDenied):
+        safety_parse(value)
+
+
+@pytest.mark.parametrize("path,bad", [
+    (("publication", "creator_identity"), "x" * 257),
+    (("publication", "publisher_identity"), " x"),
+    (("publication", "method_acceptance_reference"), "x "),
+    (("publication", "evidence_acceptance_reference"), ""),
+    (("artifact_revision",), "x" * 129), (("artifact_revision",), "has space"),
+    (("token_evidence", "method_id"), "https://offline.invalid/"),
+    (("token_evidence", "method_revision"), "版本"),
+    (("token_evidence", "implementation_sha256"), "A" * 64),
+    (("token_evidence", "data_sha256"), ""), (("token_evidence", "data_sha256"), "g" * 64),
+    (("token_evidence", "source", "content_sha256"), "a" * 63),
+    (("binding", "source_revision"), "A" * 40),
+    (("binding", "request_url"), "https://generativelanguage.googleapis.com/v1/models/gemini-embedding-2:batchEmbedContents?x=1"),
+    (("e4_reference", "reference"), "x" * 129),
+    (("credential_binding", "secret_revision"), "r:1"),
+    (("credential_binding", "profile_identity"), "api_key=synthetic-secret"),
+    (("credential_binding", "profile_identity"), "Bearer-profile"),
+    (("publication", "creator_identity"), "\ud800"),
+    (("publication", "creator_identity"), "\udfff"),
+])
+def test_g4s1_primitive_lexical_boundaries_and_unicode_denial(path, bad):
+    value = safety_case()[3]
+    at_path(value, path[:-1])[path[-1]] = bad
+    with pytest.raises(DiagnosticDenied) as failure:
+        safety_parse(value)
+    assert "synthetic-secret" not in str(failure.value)
+
+
+def test_g4s1_primitive_upper_boundaries_nullable_and_no_normalization():
+    _, _, _, value = safety_case()
+    value["artifact_revision"] = "X" * 128
+    value["publication"]["creator_identity"] = "😀" * 256
+    value["publication"]["publisher_identity"] = "e\u0301"
+    for key in ("item_limit", "per_item_token_limit", "aggregate_token_limit", "payload_byte_limit"):
+        value["provider_limits"][key] = 2**63 - 1
+    value["pricing_evidence"]["rate_micro_units_per_million_tokens"] = 2**63 - 1
+    value["token_evidence"]["data_sha256"] = "a" * 64
+    value["token_evidence"]["method_category"] = "MODEL_COMPATIBLE_LOCAL_COUNTER"
+    artifact = safety_parse(value)
+    assert artifact.fields["publication"]["creator_identity"] == "😀" * 256
+    assert artifact.fields["publication"]["publisher_identity"] != "é"
+    assert artifact.fields["artifact_revision"] == "X" * 128
+    assert artifact.fields["provider_limits"]["aggregate_token_limit"] == 2**63 - 1
+
+
+@pytest.mark.parametrize("data", [b"\xef\xbb\xbf{}", b"\xff", b"{} trailing", b"null", b"[]",
+    b'{"schema_version":NaN}', b'{"schema_version":Infinity}', b'{"schema_version":-Infinity}',
+    b'{"schema_version":' + b"9" * 5000 + b"}", b"[" * 1100 + b"0" + b"]" * 1100])
+def test_g4s1_strict_decoder_is_bounded_and_secret_safe(data):
+    with pytest.raises(DiagnosticDenied) as failure:
+        controls.DiagnosticSafetyArtifact.from_json(data)
+    assert str(failure.value) == "safety artifact is invalid" and failure.value.__cause__ is None
+
+
+def test_g4s1_exact_size_limit_and_json_whitespace_key_order():
+    value = safety_case()[3]
+    compact = json.dumps(value, separators=(",", ":")).encode()
+    assert len(compact) < 1_000_000
+    controls.DiagnosticSafetyArtifact.from_json(compact + b" " * (1_000_000 - len(compact)))
+    with pytest.raises(DiagnosticDenied):
+        controls.DiagnosticSafetyArtifact.from_json(compact + b" " * (1_000_001 - len(compact)))
+    reordered = json.dumps(value, sort_keys=True, indent=2).encode()
+    assert controls.DiagnosticSafetyArtifact.from_json(compact).fields == controls.DiagnosticSafetyArtifact.from_json(reordered).fields
+
+
+@pytest.mark.parametrize("time", ["2026-10-26T00:00:00+00:00", "2026-10-26T00:00:00.0Z", "2026-10-26",
+    "2026-10-26T00:00:60Z", "2026-02-30T00:00:00Z", "0000-01-01T00:00:00Z", "2026-10-26t00:00:00z"])
+def test_g4s1_utcsec_requires_exact_legal_calendar_wire(time):
+    value = safety_case()[3]
+    value["validity"]["not_before"] = time
+    with pytest.raises(DiagnosticDenied):
+        safety_parse(value)
+
+
+@pytest.mark.parametrize("path,time", [
+    (("validity", "not_before"), "2098-01-01T00:00:00Z"),
+    (("validity", "expires_at"), "2001-01-01T00:00:00Z"),
+    (("validity", "expires_at"), "2000-01-01T00:00:00Z"),
+    (("publication", "published_at"), "2001-01-01T00:00:00Z"),
+    (("token_evidence", "source", "effective_from"), "2001-01-01T00:00:00Z"),
+    (("provider_limits", "source", "expires_at"), "2098-01-01T00:00:00Z"),
+    (("pricing_evidence", "source", "expires_at"), "2000-01-01T00:00:00Z"),
+    (("e4_reference", "valid_from"), "2001-01-01T00:00:00Z"),
+    (("e4_reference", "valid_until"), "2098-01-01T00:00:00Z"),
+])
+def test_g4s1_cross_field_intervals_and_freshness_fail_closed(path, time):
+    value = safety_case()[3]
+    at_path(value, path[:-1])[path[-1]] = time
+    with pytest.raises(DiagnosticDenied):
+        safety_parse(value)
+
+
+@pytest.mark.parametrize("key,replacement", [
+    ("campaign_id", "wrong"), ("authorization_record_sha256", "0" * 64), ("source_revision", "a" * 40),
+    ("kind", "document"), ("input_scope_identity", "wrong"), ("input_commitment", "0" * 64),
+    ("bounds_basis", "wrong"), ("cost_basis", "wrong"),
+])
+def test_g4s1_binding_context_mismatches_are_denied(key, replacement):
+    grant, approved, e4, value = safety_case()
+    value["binding"][key] = replacement
+    artifact = safety_parse(value)
+    with pytest.raises(DiagnosticDenied):
+        artifact.matches_record_input(grant, approved, e4, grant.source_revision)
+
+
+@pytest.mark.parametrize("key,replacement", [
+    ("reference", "other-e4"), ("sdk_body_sha256", "0" * 64),
+    ("canonical_json_sha256", "0" * 64), ("sdk_body_bytes", 257),
+    ("valid_from", "1999-01-01T00:00:00Z"), ("valid_until", "2100-01-01T00:00:00Z"),
+])
+def test_g4s1_all_six_e4_fields_are_compared_exactly(key, replacement):
+    grant, approved, e4, value = safety_case()
+    value["e4_reference"][key] = replacement
+    artifact = safety_parse(value)
+    with pytest.raises(DiagnosticDenied):
+        artifact.matches_record_input(grant, approved, e4, grant.source_revision)
+
+
+@pytest.mark.parametrize("change", ["source", "order", "profile", "authorization_window", "currency", "body_length", "payload_limit", "missing_e4"])
+def test_g4s1_context_validation_preserves_original_e4_and_authorization(change):
+    grant, approved, e4, value = safety_case()
+    source = grant.source_revision
+    if change == "source":
+        source = "a" * 40
+    if change == "order":
+        e4 = replace(e4, ordered_identities=("wrong-build",))
+    if change == "profile":
+        value["credential_binding"]["profile_identity"] = "wrong-profile"
+    if change in ("authorization_window", "currency"):
+        grant = replace(grant, **({"expires_at": "2098-01-01T00:00:00+00:00"} if change == "authorization_window" else {"cost_currency": "EUR"}))
+        e4 = controls.DiagnosticSdkByteEvidence.from_json(json.dumps(e4_host_material(grant, approved)).encode())
+        value["binding"]["authorization_record_sha256"] = controls.authorization_record_digest(grant)
+    if change == "body_length":
+        value["e4_reference"]["sdk_body_bytes"] = 2**63 - 1
+    if change == "payload_limit":
+        value["provider_limits"]["payload_byte_limit"] = 1
+    if change == "missing_e4":
+        e4 = None
+    artifact = safety_parse(value)
+    with pytest.raises(DiagnosticDenied):
+        artifact.matches_record_input(grant, approved, e4, source)
+
+
+@pytest.mark.parametrize("key", ["method_id", "method_revision", "implementation_sha256", "data_sha256"])
+def test_g4s1_method_revision_and_digest_comparisons_never_establish_acceptance(key):
+    artifact = safety_parse(safety_case()[3])
+    token = artifact.fields["token_evidence"]
+    expected = {k: token[k] for k in ("method_id", "method_revision", "implementation_sha256", "data_sha256")}
+    artifact.matches_method_metadata(**expected)
+    expected[key] = "wrong" if "sha256" not in key else "0" * 64
+    with pytest.raises(DiagnosticDenied):
+        artifact.matches_method_metadata(**expected)
+    with pytest.raises(DiagnosticDenied):
+        artifact.require_accepted_evidence()
+
+
+@pytest.mark.parametrize("key", ["profile_identity", "secret_revision", "account_reference"])
+def test_g4s1_credential_metadata_mixed_revision_or_account_denies(key):
+    artifact = safety_parse(safety_case()[3])
+    expected = dict(artifact.fields["credential_binding"], account_reference=artifact.fields["pricing_evidence"]["account_reference"])
+    artifact.matches_credential_metadata(**expected)
+    expected[key] = "wrong"
+    with pytest.raises(DiagnosticDenied):
+        artifact.matches_credential_metadata(**expected)
+    with pytest.raises(DiagnosticDenied):
+        artifact.require_accepted_evidence()
+
+
+def test_g4s1_e4_utc_instant_mapping_does_not_modify_original_parser_or_require_revision():
+    grant, approved, e4, value = safety_case()
+    raw = e4_host_material(grant, approved)
+    raw["valid_from"] = "2000-01-01T08:00:00+08:00"
+    raw["valid_until"] = "2099-01-01T08:00:00+08:00"
+    e4 = controls.DiagnosticSdkByteEvidence.from_json(json.dumps(raw).encode())
+    safety_parse(value).matches_record_input(grant, approved, e4, grant.source_revision)
+    assert set(value["e4_reference"]) == {"reference", "sdk_body_sha256", "canonical_json_sha256", "sdk_body_bytes", "valid_from", "valid_until"}
+    for key in ("revision", "artifact_sha256"):
+        bad = safety_case()[3]
+        bad["e4_reference"][key] = "unapproved"
+        with pytest.raises(DiagnosticDenied):
+            safety_parse(bad)
+
+
+def test_g4s1_fixed_loader_returns_only_trusted_metadata_without_new_write_authority(tmp_path, monkeypatch):
+    paths, grant, approved, e4, value, _ = safety_host_fixture(tmp_path, monkeypatch)
+    before = {p: p.read_bytes() for p in (paths.campaign, paths.approved_input, paths.sdk_request_evidence,
+                                         paths.safety_evidence, paths.attempts)}
+    reads = []
+    read = controls._read_trusted_file
+    def observed_read(path, facts):
+        reads.append(path)
+        return read(path, facts)
+    monkeypatch.setattr(controls, "_read_trusted_file", observed_read)
+    assert len(controls.validate_host_paths(paths, "S-1-5-21-100")) == 10  # Existing D-A scope unchanged.
+    observed = controls.validate_host_paths(paths, "S-1-5-21-100", _include_safety=True)
+    assert len(observed) == 11 and paths.safety_evidence in observed
+    artifact = controls.load_live_safety_artifact()
+    assert artifact.fields == safety_parse(value).fields
+    assert reads == [paths.campaign, paths.approved_input, paths.sdk_request_evidence, paths.safety_evidence]
+    assert {p: p.read_bytes() for p in before} == before
+    artifact.matches_record_input(grant, approved, e4, grant.source_revision)
+    with pytest.raises(DiagnosticDenied, match="not provisioned"):
+        artifact.require_accepted_evidence()
+
+
+@pytest.mark.parametrize("override", ["path", "root", "source", "artifact", "method", "credential_metadata", "evidence"])
+@pytest.mark.parametrize("value", ["../safety_evidence.json", "https://offline.invalid/safety", "caller.json"])
+def test_g4s1_loader_has_no_caller_path_search_or_authority_override(override, value):
+    with pytest.raises(TypeError):
+        controls.load_live_safety_artifact(**{override: value})
+
+
+@pytest.mark.parametrize("unsafe", ["missing", "ordinary", "runner_write", "owner", "reparse", "identity",
+    "parent_write", "ancestor_reparse", "wrong_host", "wrong_runner", "source", "dirty", "synthetic_scope", "synthetic_e4"])
+def test_g4s1_fixed_loader_reuses_all_trust_and_context_checks(tmp_path, monkeypatch, unsafe):
+    paths, grant, approved, _, value, original = safety_host_fixture(tmp_path, monkeypatch)
+    if unsafe == "missing":
+        paths.safety_evidence.unlink()
+    if unsafe == "wrong_host":
+        monkeypatch.setattr(controls.socket, "gethostname", lambda: "wrong-host")
+    if unsafe == "wrong_runner":
+        grant = replace(grant, runner_identity="S-1-5-21-999")
+        paths.campaign.write_text(json.dumps(asdict(grant)), encoding="utf-8")
+        paths.sdk_request_evidence.write_text(json.dumps(e4_host_material(grant, approved)), encoding="utf-8")
+    if unsafe in ("source", "dirty"):
+        monkeypatch.setattr(controls, "resolve_repository_source", lambda _: (
+            "a" * 40 if unsafe == "source" else grant.source_revision, unsafe != "dirty"))
+    if unsafe == "synthetic_scope":
+        grant = replace(grant, bounds_basis="SYNTHETIC_OFFLINE_ONLY")
+        paths.campaign.write_text(json.dumps(asdict(grant)), encoding="utf-8")
+        paths.sdk_request_evidence.write_text(json.dumps(e4_host_material(grant, approved)), encoding="utf-8")
+    if unsafe == "synthetic_e4":
+        paths.sdk_request_evidence.write_text(json.dumps(e4_host_material(grant, approved) | {"status": "SYNTHETIC_OFFLINE_ONLY"}), encoding="utf-8")
+
+    def altered(path, token=None):
+        facts = original(path, token)
+        if path == paths.safety_evidence:
+            if unsafe == "ordinary":
+                return replace(facts, allowed_aces=facts.allowed_aces + (("S-1-5-32-545", 0x2, 0),))
+            if unsafe == "runner_write":
+                return replace(facts, effective_rights=facts.effective_rights | 0x2)
+            if unsafe == "owner":
+                return replace(facts, owner_sid="S-1-5-21-999")
+            if unsafe == "reparse":
+                return replace(facts, is_reparse=True)
+            if unsafe == "identity":
+                return replace(facts, identity=(facts.identity[0], facts.identity[1] + 1))
+        if path == paths.authority and unsafe == "parent_write":
+            return replace(facts, effective_rights=facts.effective_rights | 0x40)
+        if path == paths.root.parent and unsafe == "ancestor_reparse":
+            return replace(facts, is_reparse=True)
+        return facts
+    monkeypatch.setattr(controls, "_windows_path_facts", altered)
+    with pytest.raises(DiagnosticDenied):
+        controls.load_live_safety_artifact()
+
+
+def test_g4s1_opened_file_replacement_between_validation_and_open_is_denied(tmp_path, monkeypatch):
+    paths, _, _, _, _, _ = safety_host_fixture(tmp_path, monkeypatch)
+    read = controls._read_trusted_file
+    def replacement(path, facts):
+        if path == paths.safety_evidence:
+            new = tmp_path / "replacement.json"
+            new.write_bytes(path.read_bytes())
+            new.replace(path)
+        return read(path, facts)
+    monkeypatch.setattr(controls, "_read_trusted_file", replacement)
+    with pytest.raises(DiagnosticDenied, match="changed after validation"):
+        controls.load_live_safety_artifact()
+
+
+def test_g4s1_loader_reopens_current_revision_without_cache_or_revocation_fallback(tmp_path, monkeypatch):
+    paths, _, _, _, value, _ = safety_host_fixture(tmp_path, monkeypatch)
+    first = controls.load_live_safety_artifact()
+    value["artifact_revision"] = "fixture-safety-r2"
+    paths.safety_evidence.write_text(json.dumps(value), encoding="utf-8")
+    second = controls.load_live_safety_artifact()
+    assert first.fields["artifact_revision"] != second.fields["artifact_revision"]
+    for change in ({"lifecycle_state": "REVOKED"}, {"validity": dict(not_before="2000-01-01T00:00:00Z", expires_at="2001-01-01T00:00:00Z")}):
+        paths.safety_evidence.write_text(json.dumps(value | change), encoding="utf-8")
+        with pytest.raises(DiagnosticDenied):
+            controls.load_live_safety_artifact()
+    paths.safety_evidence.unlink()
+    with pytest.raises(DiagnosticDenied):
+        controls.load_live_safety_artifact()
+
+
+@pytest.mark.parametrize("key", ["sdk_body_sha256", "canonical_json_sha256", "sdk_body_bytes", "reference"])
+def test_g4s1_e4_publication_change_cannot_use_old_safety_reference(tmp_path, monkeypatch, key):
+    paths, grant, approved, _, _, _ = safety_host_fixture(tmp_path, monkeypatch)
+    controls.load_live_safety_artifact()
+    e4 = e4_host_material(grant, approved)
+    e4[key] = 257 if key == "sdk_body_bytes" else "new-reference" if key == "reference" else "0" * 64
+    paths.sdk_request_evidence.write_text(json.dumps(e4), encoding="utf-8")
+    with pytest.raises(DiagnosticDenied, match="E4 reference binding mismatch"):
+        controls.load_live_safety_artifact()
+
+
+@pytest.mark.parametrize("count,item_limit,passes", [(54, 54, True), (54, 53, False), (53, 54, False)])
+def test_g4s1_document_cardinality_and_provider_item_bound_are_independent(tmp_path, count, item_limit, passes):
+    from test_knowledge_gemini_diagnostic import request_and_record, approved_input
+    request, grant, _, _ = request_and_record(tmp_path, count=count)
+    grant = replace(grant, valid_from="2000-01-01T00:00:00+00:00", expires_at="2099-01-01T00:00:00+00:00",
+        bounds_basis="fixture-method-scope", cost_basis="fixture-price-scope")
+    approved = approved_input(request, grant)
+    e4 = controls.DiagnosticSdkByteEvidence.from_json(json.dumps(e4_host_material(grant, approved)).encode())
+    value = safety_case()[3]
+    value["binding"].update(campaign_id=grant.campaign_id,
+        authorization_record_sha256=controls.authorization_record_digest(grant), source_revision=grant.source_revision,
+        kind="document", input_scope_identity=approved.scope_identity, input_commitment=approved.commitment)
+    value["credential_binding"]["profile_identity"] = grant.credential_profile_identity
+    for key in ("reference", "sdk_body_sha256", "canonical_json_sha256", "sdk_body_bytes"):
+        value["e4_reference"][key] = getattr(e4, key)
+    value["provider_limits"]["item_limit"] = item_limit
+    artifact = safety_parse(value)
+    if passes:
+        artifact.matches_record_input(grant, approved, e4, grant.source_revision)
+    else:
+        with pytest.raises(DiagnosticDenied, match="cardinality"):
+            artifact.matches_record_input(grant, approved, e4, grant.source_revision)
+
+
+@pytest.mark.parametrize("instant,passes", [
+    ("2026-10-26T00:00:00Z", True), ("2026-10-26T00:00:01Z", True),
+    ("2026-10-25T23:59:59Z", False), ("2026-10-27T00:00:00Z", False),
+])
+def test_g4s1_safety_interval_is_half_open_using_fixture_clock(monkeypatch, instant, passes):
+    fixed = datetime.fromisoformat(instant.replace("Z", "+00:00"))
+    class FixtureClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls.fromtimestamp(fixed.timestamp(), tz=tz)
+    monkeypatch.setattr(controls, "datetime", FixtureClock)
+    value = safety_case()[3]
+    value["validity"] = dict(not_before="2026-10-26T00:00:00Z", expires_at="2026-10-27T00:00:00Z")
+    if passes:
+        safety_parse(value)
+    else:
+        with pytest.raises(DiagnosticDenied):
+            safety_parse(value)
+
+
+@pytest.mark.parametrize("boundary", ["valid_from", "valid_until"])
+def test_g4s1_original_e4_runtime_boundaries_remain_strict(monkeypatch, boundary):
+    grant, approved, _, value = safety_case()
+    instant = datetime(2026, 10, 26, tzinfo=timezone.utc)
+    class FixtureClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls.fromtimestamp(instant.timestamp(), tz=tz)
+    monkeypatch.setattr(controls, "datetime", FixtureClock)
+    raw = e4_host_material(grant, approved)
+    raw[boundary] = "2026-10-26T00:00:00+00:00"
+    with pytest.raises(DiagnosticDenied):
+        controls.DiagnosticSdkByteEvidence.from_json(json.dumps(raw).encode())
+
+
 def validate(item, actual=None, **changes):
     args = dict(
         live_opt_in=True, kind="query", input_scope_identity=item.input_scope_identity,

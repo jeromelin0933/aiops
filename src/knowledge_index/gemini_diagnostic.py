@@ -1,8 +1,9 @@
-"""Offline diagnostic simulation; live Google execution remains unprovisioned.
+"""Diagnostic orchestration with closed offline simulation and guarded live I/O.
 
 Only a fixed in-memory HTTPX MockTransport and an explicit synthetic key are
-constructed here. No Candidate-C stage, runtime, Chroma, or credential source
-is imported. A fake record passed to this module can never select live I/O.
+constructed by the offline path. The live entry loads fixed host authority;
+no public caller-supplied authorization, client or transport can select I/O.
+Neither path mutates Candidate-C, Runtime, Chroma or Formal Evaluation stores.
 """
 
 from __future__ import annotations
@@ -10,6 +11,8 @@ from __future__ import annotations
 import json
 import math
 import socket
+from threading import Lock
+from uuid import uuid4
 from hashlib import sha256
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -28,12 +31,15 @@ from .gemini_diagnostic_controls import (
     OfflineAuthorizationSource, TemporaryDiagnosticUsage, input_commitment,
     load_live_binding, reserve_eligible_attempt, resolve_repository_source,
     validate_authorization,
+    LiveDiagnosticUsage, load_live_safety_artifact, resolve_diagnostic_credential,
 )
 from .google_embedding_adapter import (
     GEMINI_MODEL, GeminiEmbedding2Verification, GoogleEmbeddingAdapter,
     _GeminiEmbedding2OfflineClient, _create_gemini_offline_mock_client,
     _DiagnosticGuardedMockTransport, _DiagnosticMockResponse,
     _create_guarded_diagnostic_offline_sdk_client, _values,
+    _DiagnosticHttpxClient, _DiagnosticAsyncDenyTransport,
+    _close_offline_resources, _create_diagnostic_live_sdk_client,
 )
 from .identity import document_identity
 
@@ -61,8 +67,8 @@ class DiagnosticObservation:
 class DiagnosticSafetyBasis:
     """Technical evidence for one request; never a live execution grant.
 
-    Production does not accept this object from a caller. Until a controlled,
-    model-applicable source is provisioned, _live_safety always denies.
+    Production does not accept this object from a caller. A controlled,
+    accepted exact-input bound source must be provisioned before live I/O.
     """
 
     status: str
@@ -308,9 +314,9 @@ def _validate_sdk_evidence_binding(
     if not isinstance(evidence, DiagnosticSdkByteEvidence):
         raise DiagnosticDenied("SDK byte evidence is missing")
     if not offline_harness:
-        # A host-controlled E4 evidence source is not in the approved schema.
-        # An arbitrary object marked VERIFIED is never sufficient live authority.
-        raise DiagnosticDenied("trusted live SDK byte evidence source is not provisioned")
+        if (prepared.safety_decision.evidence_status != "VERIFIED"
+                or evidence.status != "HOST_CONTROLLED_E4_ONLY"):
+            raise DiagnosticDenied("trusted live SDK byte evidence source is not provisioned")
     if evidence.status not in ("SYNTHETIC_OFFLINE_ONLY", "HOST_CONTROLLED_E4_ONLY"):
         raise DiagnosticDenied("SDK byte evidence is not live applicable")
     if evidence.status == "HOST_CONTROLLED_E4_ONLY":
@@ -517,11 +523,11 @@ def _preflight(
     if not isinstance(facts, DiagnosticExecutionFacts):
         raise DiagnosticDenied("repository or execution facts are unavailable")
     if not facts.clean_tree or facts.source_revision != record.source_revision:
-        raise DiagnosticDenied("clean committed source revision does not match authorization")
+        raise DiagnosticDenied("clean committed source revision does not match authorization", code="SOURCE_MISMATCH")
     if request.capability.model != GEMINI_MODEL or request.capability.provider != "google":
-        raise DiagnosticDenied("diagnostic request capability is invalid")
+        raise DiagnosticDenied("diagnostic request capability is invalid", code="MODEL_MISMATCH")
     if request.capability.profile_reference.value != record.credential_profile_identity:
-        raise DiagnosticDenied("diagnostic credential profile identity mismatch")
+        raise DiagnosticDenied("diagnostic credential profile identity mismatch", code="PROFILE_MISMATCH")
     kind, identities, texts = _envelopes(request)
     scope = (
         request.approved_corpus_id if isinstance(request, ProviderEmbeddingRequest)
@@ -776,20 +782,147 @@ def _offline_response(prepared: _PreparedEligibility, handle: Any) -> Diagnostic
 
 
 def _live_safety(
-    _: DiagnosticAuthorizationRecord, __: tuple[str, ...],
+    record: DiagnosticAuthorizationRecord, texts: tuple[str, ...],
 ) -> tuple[GeminiEmbedding2Verification, DiagnosticSafetyBasis, int, int]:
-    # No model-compatible, approved live token/cost proof exists in this slice.
-    raise DiagnosticDenied("approved live provider safety basis is not provisioned")
+    if not isinstance(record, DiagnosticAuthorizationRecord):
+        raise DiagnosticDenied("approved live provider safety basis is not provisioned")
+    if record.bounds_basis == "SYNTHETIC_OFFLINE_ONLY" or record.cost_basis == "SYNTHETIC_OFFLINE_ONLY":
+        raise DiagnosticDenied("approved live provider safety basis is not provisioned")
+    artifact = load_live_safety_artifact()
+    value = artifact._validated_fields()
+    if value["binding"]["authorization_record_sha256"] != _authorization_record_digest(record):
+        raise DiagnosticDenied("safety authorization changed")
+    bounds = artifact.require_accepted_evidence()
+    digests = tuple(sha256(text.encode("utf-8")).hexdigest() for text in texts)
+    if set(bounds) != set(digests):
+        raise DiagnosticDenied("accepted token bounds do not cover exact enveloped inputs")
+    limits, pricing = value["provider_limits"], value["pricing_evidence"]
+    total = sum(bounds[digest] for digest in digests)
+    cost = (total * pricing["rate_micro_units_per_million_tokens"] + 999_999) // 1_000_000
+    proof = GeminiEmbedding2Verification(
+        count_tokens=lambda text: bounds[sha256(text.encode("utf-8")).hexdigest()],
+        serialize_payload=_serialized,
+        max_item_tokens=min(limits["per_item_token_limit"], record.maximum_item_tokens),
+        max_aggregate_tokens=min(limits["aggregate_token_limit"], record.maximum_aggregate_tokens),
+        max_provider_items=min(limits["item_limit"], record.maximum_items),
+        max_item_bytes=record.maximum_item_bytes,
+        max_payload_bytes=min(limits["payload_byte_limit"], record.maximum_payload_bytes),
+        normalization_tolerance=record.normalization_tolerance,
+        evidence_identity=value["artifact_revision"],
+    )
+    basis = DiagnosticSafetyBasis(
+        "VERIFIED", value["artifact_revision"], record.campaign_id, record.source_revision,
+        record.input_scope_identity, _authorization_record_digest(record),
+        record.provider_identity, record.model_identity, record.sdk_baseline, record.api_version,
+        record.input_kind, record.input_commitment, value["e4_reference"]["canonical_json_sha256"],
+        record.bounds_basis, record.cost_basis, "MODEL_COMPATIBLE_UPPER_BOUND",
+        limits["item_limit"], limits["per_item_token_limit"], limits["aggregate_token_limit"],
+        limits["payload_byte_limit"], pricing["price_tier"], pricing["currency"],
+        pricing["rate_micro_units_per_million_tokens"],
+        datetime.fromisoformat(value["validity"]["expires_at"].replace("Z", "+00:00")),
+    )
+    return proof, basis, total, cost
+
+
+def _create_live_transport() -> httpx.BaseTransport:
+    """Internal construction seam; public runner accepts no transport override."""
+    return httpx.HTTPTransport(retries=0, trust_env=False)
+
+
+class _DiagnosticLiveTransport(httpx.BaseTransport):
+    """One synchronous send after final source/authority/body verification."""
+
+    def __init__(self, prepared, approved, evidence, credential, revalidate) -> None:
+        self._prepared, self._approved, self._evidence = prepared, approved, evidence
+        self._credential, self._revalidate = credential, revalidate
+        self._lock, self._entered = Lock(), False
+        self.delegations = 0
+        self._delegate = None
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        if not self._lock.acquire(blocking=False):
+            raise DiagnosticDenied("diagnostic runner lock conflict", code="RUNNER_CONFLICT")
+        try:
+            if self._entered:
+                raise DiagnosticDenied("diagnostic resend denied", code="RUNNER_CONFLICT")
+            self._entered = True
+            self._revalidate()
+            compare_sdk_request_bytes(self._prepared, self._approved, self._evidence, request)
+            if (request.headers.get("x-goog-api-key") != self._credential.value
+                    or request.headers.get("x-server-timeout") != "30"
+                    or request.headers.get("content-length") != str(len(request.content))
+                    or any(k in request.headers for k in ("authorization", "proxy-authorization", "transfer-encoding"))):
+                raise DiagnosticDenied("diagnostic request credential or header mismatch")
+            self._delegate = _create_live_transport()
+            self.delegations += 1
+            response = self._delegate.handle_request(request)
+            try:
+                # Bound the provider body before the SDK decodes it. Never log
+                # headers, provider messages, request objects or raw responses.
+                body = bytearray()
+                for chunk in response.iter_bytes():
+                    body.extend(chunk)
+                    if len(body) > 1_000_000:
+                        raise DiagnosticDenied("diagnostic provider response exceeds bound", code="INVALID_PROVIDER_RESPONSE")
+                return httpx.Response(response.status_code, headers=response.headers,
+                                      content=bytes(body), request=request)
+            finally:
+                response.close()
+        finally:
+            self._lock.release()
+
+    def close(self) -> None:
+        if self._delegate is not None:
+            self._delegate.close()
+
+
+def _dispatch_live(prepared, approved, evidence, credential, revalidate) -> DiagnosticObservation:
+    guard = _DiagnosticLiveTransport(prepared, approved, evidence, credential, revalidate)
+    sdk = sync = async_client = None
+    try:
+        sync = _DiagnosticHttpxClient(guard)
+        async_client = httpx.AsyncClient(transport=_DiagnosticAsyncDenyTransport(),
+                                         trust_env=False, follow_redirects=False, max_redirects=0)
+        sdk = _create_diagnostic_live_sdk_client(credential.value, sync, async_client)
+        response = sdk.models.embed_content(model=GEMINI_MODEL,
+            contents=[c.model_copy(deep=True) for c in prepared.contents],
+            config=prepared.config.model_copy(deep=True))
+        try:
+            vectors = _values(response, strict_numbers=True)
+        except Exception:
+            raise DiagnosticDenied("invalid diagnostic provider response", code="INVALID_PROVIDER_RESPONSE") from None
+        if (len(vectors) != len(prepared.texts) or any(len(v) != 768 or
+                abs(math.hypot(*v) - 1.0) > prepared.record.normalization_tolerance for v in vectors)):
+            raise DiagnosticDenied("invalid diagnostic provider vectors", code="INVALID_PROVIDER_RESPONSE")
+        # Positional vectors are observed, not a real mapping/order acceptance
+        # proof. Never apply synthetic cosine markers to real provider output.
+        return DiagnosticObservation("SUCCESS", "OBSERVED_MAPPING_REVIEW_REQUIRED", None, None,
+            None, None, guard.delegations, prepared.identities, len(vectors), "UNKNOWN",
+            prepared.cost_micro_units, prepared.record.campaign_id, prepared.record.source_revision,
+            prepared.record.input_commitment)
+    except Exception as exc:
+        code, field, detail, retry = prepared.adapter._gemini_invocation_failure(exc, query=True)
+        if field == "provider_rate_limit" and getattr(exc, "status", None) == "RESOURCE_EXHAUSTED":
+            field = "provider_quota"
+        if isinstance(exc, DiagnosticDenied):
+            field, detail = exc.code, "diagnostic local guard or response rejected"
+        outcome = "TIMEOUT" if "timeout" in field.lower() else "UNKNOWN" if field == "transport" else "FAILED"
+        return DiagnosticObservation(outcome, field, code, field, detail, retry,
+            guard.delegations, prepared.identities, 0, "UNKNOWN", prepared.cost_micro_units,
+            prepared.record.campaign_id, prepared.record.source_revision, prepared.record.input_commitment)
+    finally:
+        if _close_offline_resources(sdk, sync, async_client):
+            raise DiagnosticDenied("diagnostic cleanup failed; attempt retained for human review") from None
 
 
 def run_live(
     request: ProviderEmbeddingRequest | QueryEmbeddingRequest | None = None,
     *, live_opt_in: bool = False,
-) -> None:
-    """Use shared read-only preflight, then deny dispatch without budget spend.
+) -> DiagnosticObservation:
+    """Load protected campaign facts; reserve once before controlled dispatch.
 
     This public entry accepts no source, resolver, safety proof, ledger, client,
-    or transport override. Formal host and PM campaign facts are unprovisioned.
+    or transport override. Missing host/PM/safety facts deny before credentials.
     """
     if live_opt_in is not True:
         raise DiagnosticDenied("explicit live diagnostic opt-in is required")
@@ -806,13 +939,13 @@ def run_live(
         or identities != approved.identities or envelopes != approved.envelopes
         or input_commitment(kind, identities, envelopes) != approved.commitment
     ):
-        raise DiagnosticDenied("actual request differs from host-approved diagnostic input")
+        raise DiagnosticDenied("actual request differs from host-approved diagnostic input", code="INPUT_MISMATCH")
 
     def live_facts(approved: DiagnosticAuthorizationRecord, actual: Any) -> DiagnosticExecutionFacts:
         head, clean = resolve_repository_source(Path(__file__).resolve().parents[2])
         host = socket.gethostname()
         if host != approved.authorized_host:
-            raise DiagnosticDenied("diagnostic Windows host identity does not match authorization")
+            raise DiagnosticDenied("diagnostic Windows host identity does not match authorization", code="HOST_MISMATCH")
         return DiagnosticExecutionFacts(
             source_revision=head, clean_tree=clean,
             pm_approval_reference=approved.pm_approval_reference,
@@ -822,18 +955,57 @@ def run_live(
             now=datetime.now(timezone.utc),
         )
 
-    _preflight(
-        load_record=lambda: record, resolve_facts=live_facts,
-        safety=_live_safety, request=request, live_opt_in=live_opt_in,
-        host_byte_binding=lambda approved_record, facts, actual_kind, actual_ids,
-                                 actual_texts, actual_scope: validate_host_sdk_evidence(
-            approved_record, facts, approved, binding.sdk_byte_evidence,
-            actual_kind, actual_ids, actual_texts, actual_scope,
-        ),
-    )
-    # Even a complete read-only preflight cannot authorize this slice's real
-    # dispatch. In particular, never reserve formal campaign budget here.
-    raise DiagnosticDenied("live Gemini provider dispatch remains unauthorized")
+    def prepare():
+        return _preflight(
+            load_record=lambda: record, resolve_facts=live_facts,
+            safety=_live_safety, request=request, live_opt_in=live_opt_in,
+            host_byte_binding=lambda approved_record, facts, actual_kind, actual_ids,
+                                     actual_texts, actual_scope: validate_host_sdk_evidence(
+                approved_record, facts, approved, binding.sdk_byte_evidence,
+                actual_kind, actual_ids, actual_texts, actual_scope,
+            ),
+        )
+
+    prepared = prepare()
+    if prepared.kind == "document" and len(prepared.identities) != 54:
+        raise DiagnosticDenied("diagnostic document request requires exactly 54 chunks")
+    artifact = load_live_safety_artifact()
+    artifact.matches_record_input(record, approved, binding.sdk_byte_evidence, prepared.facts.source_revision)
+    artifact.require_accepted_evidence()
+    usage = LiveDiagnosticUsage()
+    refreshed = prepare()
+    if (prepared.record != refreshed.record or prepared.safety_decision != refreshed.safety_decision):
+        raise DiagnosticDenied("diagnostic authority or safety changed before attempt")
+    _validate_sdk_evidence_binding(refreshed, approved, binding.sdk_byte_evidence)
+    request_id = uuid4().hex
+    # MAJOR-01: existing SQLite eligibility + reservation is one atomic gate.
+    # Cumulative budget and active/unknown runner fences must reject BEFORE
+    # credential discovery, not through a separate racy read-only check.
+    _reserve(refreshed, usage, request_id)
+    try:
+        credential = resolve_diagnostic_credential(record, artifact)
+    except DiagnosticDenied:
+        # The committed attempt/budget is never refunded or retried. Unknown
+        # usage keeps the campaign fenced for human review even without I/O.
+        usage.finish(record, request_id, "FAILED")
+        raise
+    except Exception:
+        usage.finish(record, request_id, "FAILED")
+        raise DiagnosticDenied("diagnostic credential resolution failed", code="CREDENTIAL_UNAVAILABLE") from None
+
+    def revalidate():
+        current = load_live_binding()
+        if current != binding:
+            raise DiagnosticDenied("diagnostic host authorization changed before transport")
+        latest = prepare()
+        if latest.record != refreshed.record or latest.safety_decision != refreshed.safety_decision:
+            raise DiagnosticDenied("diagnostic source or safety changed before transport")
+        if load_live_safety_artifact().fields != artifact.fields:
+            raise DiagnosticDenied("diagnostic safety metadata changed before transport")
+
+    observation = _dispatch_live(refreshed, approved, binding.sdk_byte_evidence, credential, revalidate)
+    usage.finish(record, request_id, observation.outcome)
+    return observation
 
 
 def main() -> int:
@@ -841,7 +1013,7 @@ def main() -> int:
     try:
         run_live()
     except DiagnosticDenied as exc:
-        print(json.dumps({"outcome": "DENIED", "detail": str(exc), "provider_attempts": 0}))
+        print(json.dumps({"outcome": "DENIED", "code": exc.code, "detail": str(exc), "provider_attempts": 0}))
         return 2
     return 0
 
