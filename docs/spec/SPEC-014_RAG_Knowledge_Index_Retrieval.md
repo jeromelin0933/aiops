@@ -25,11 +25,16 @@
 | Controlled Batching Approval Record | SPEC Lead 2026-10-28正式採納既有Combined Independent Document Audit — PASS／Findings NONE；依PM「APPROVE — SPEC-014 Controlled Batching Narrow Amendment Direction」及最新「APPROVE WITH MINIMUM NECESSARY CONTROLS — SPEC-014 Independent Counting Observation」對正式文件收尾的授權，核准EMD-06、§24.2／§24.3／§24.5／§24.6／§24.6.1與AC-014-AD的既有batching修訂；未新增PM Decision ID，未重新執行Audit，不授權Live execution。 |
 | Counting Observation Amendment | v1.4-based Approved — COUNTING_OBSERVATION Minimum Narrow Amendment；核准範圍為§24.2／§24.6.1新增Counting條款及必要文件狀態；baseline version不變，不構成Implementation或PM Live Campaign Authorization。 |
 | Counting Observation Approval Record | Approval Authority：AIOps SPEC Lead；Approval Date：2026-10-28；PM Authority：APPROVE WITH MINIMUM NECESSARY CONTROLS — SPEC-014 Independent Counting Observation；Decision：APPROVE — SPEC-014 COUNTING_OBSERVATION Minimum Narrow Amendment；正式採納Independent Document Audit：PASS — READY FOR SPEC LEAD FORMAL DOCUMENT APPROVAL；Audit Findings：NONE。僅核准§24.2／§24.6.1新增Counting契約及必要文件資訊／History／Status，不新增PM Decision ID，不授權Implementation或任何Live Provider Calls。 |
+| Prototype Local Host Amendment | v1.4-based Approved — Prototype Local Host Simplification Narrow Amendment；Approval Date：2026-10-29；baseline version及既有Approved Amendments不變。 |
+| Prototype Local Host Approval Record | Approval Authority：SPEC Lead；Decision：APPROVE — SPEC-014 Prototype Local Host Simplification Narrow Amendment；正式採納Independent Document Audit：PASS — SPEC-014 PROTOTYPE LOCAL HOST SIMPLIFICATION INDEPENDENT DOCUMENT AUDIT；Findings：NONE。PM Authority：APPROVE — Prototype Local Host Simplification。核准原49行新增範圍，Normative Contract不變；文件批准不等於Implementation Acceptance、Host初始化或Live授權。 |
+| Prototype Local Host Authority／Scope | PM：APPROVE — Prototype Local Host Simplification；取代先前Option A中要求完整保留Windows Host Validator的部分。正式核准§24.2適用性、§24.6／§24.6.1 Host／SQLite部署及AC-014-AD直接相關補充；起草時僅授權文件的歷史紀錄保留。後續工程依SPEC Lead獨立Implementation Authorization執行，不由文件批准取得Implementation Acceptance、Host初始化或Live授權；不虛構PM Decision ID。 |
 
 ### Change History
 
 | Version | Date | Status | Change |
 |---|---|---|---|
+| v1.4-based prototype local host amendment | 2026-10-29（approval date） | Approved — Prototype Local Host Simplification Narrow Amendment | SPEC Lead採納Independent Document Audit PASS／Findings NONE並依PM Authority正式核准原49行新增契約；僅完成Approval Metadata／Status收尾，不改Normative Contract。以下歷史Draft／PENDING／BLOCK及既有Approval保留，不宣稱Host Implementation PASS、SQLite已初始化或PM Live Authorization。 |
+| v1.4-based prototype local host draft | 2026-10-29（draft date；非approval date） | Draft — Independent Narrow Document Audit／SPEC Lead Amendment Approval Pending | 依PM「APPROVE — Prototype Local Host Simplification」提出Non-Elevated vincent Runner、依Token屬性與實際能力拒絕、LocalApplicationData Known Folder單一SQLite authority及Fresh-only簡化初始化；明列PM接受的同帳號竄改風險與最小驗收。僅調整Host／Identity threat model，既有Counting／Batching／Provider／Formal契約及歷史紀錄保留；未授權程式修訂或Live。 |
 | v1.4-based counting observation amendment | 2026-10-28（approval date） | Approved — COUNTING_OBSERVATION Minimum Narrow Amendment | SPEC Lead正式採納Independent Document Audit PASS／Findings NONE並依上列PM Authority核准§24.2／§24.6.1新增Counting契約；本輪僅作Approval Status Reconciliation，已審查技術正文不變，下列draft、Controlled Batching／Scope Reset／v1.4及歷史Approval／Audit／BLOCK／Remediation紀錄保留。Counting Runner未實作，Live仍NOT AUTHORIZED／NOT EXECUTED，不產生Provider、G8、Knowledge或Formal PASS。 |
 | v1.4-based counting observation draft | 2026-10-28（draft date；非approval date） | Draft — Independent Document Audit／SPEC Lead Amendment Approval Pending | 依PM已核准的Independent Counting Observation方向與最低控制（D2／D3；D4授權的batching Approval收尾已保留），於§24.2／§24.6.1新增單筆COUNTING_OBSERVATION scope、固定input／payload commitments、operation-specific admission及result／usage邊界。完整54→54、既有安全／Knowledge／Runtime／Formal authority不變；本輪只修文件，不授權Implementation或Live，不宣稱Audit／Provider PASS。 |
 | v1.4-based batching amendment | 2026-10-28（approval date） | Approved — Controlled Batching Narrow Amendment | SPEC Lead依本次PM授權採納既有Combined Independent Document Audit PASS／Findings NONE，僅完成既有batching修訂的Approval／Status收尾；技術條款不變，下列draft及歷史Approval／BLOCK／Audit／Skip紀錄保留。不新增Counting條款，不產生Provider／RAG／RCA或Formal PASS，不授權Live。 |
@@ -46,6 +51,12 @@
 | 1.2 | 2026-09-26 | Implemented — Documentation-only Closure | Post-integration reconciliation：記錄approved six-document corpus、governed manifest、Google embedding／Chroma adapters、local lifecycle CLI、Knowledge Snapshot及public provenance已實作。AC-014-X未執行，依PM指示以explicit verification exception完成current repository closure；不修改Approved AC或Frozen D1～D4／G1～G4。 |
 
 ### Status Honesty
+
+**Prototype Local Host current approval status — Approved，2026-10-29：** SPEC Lead已採納Independent Document Audit PASS／Findings NONE並正式核准Amendment。Implementation Acceptance尚未取得，正式SQLite NOT INITIALIZED，Host Readiness未驗證，PM Live Authorization NOT AUTHORIZED。以下Draft status及其原Authority／Scope保留為核准前快照，不代表現行文件仍Pending；本次文件收尾不代表工程或Host執行完成。
+
+**Historical Prototype Local Host draft status（以下原文保留）：**
+
+**Prototype Local Host current status — Draft，2026-10-29：** PM已核准Simplification Direction；本SPEC窄幅Amendment尚待Independent Document Audit及SPEC Lead正式Approval，不得當作Approved Contract或Implementation Authorization。以下新增的Host條款只定義待審目標，不宣稱現行程式已支援。依SPEC Lead本次交接，既有Counting Offline Implementation已ACCEPTED／Independent Implementation Audit PASS，Human Source Checkpoint為`aa89808153374b6873df33e6a45c501f6170e338`；這些既有成果不重判，也不代表本次Host改版已實作。現行Human Runner Precheck因Deny-only Administrators被BLOCKED；正式SQLite NOT INITIALIZED；Human已觀察`C:\ProgramData\AIOps`不存在，執行前仍須重查。Host Ready未取得，Google Live Calls = 0，PM Live Authorization = NOT AUTHORIZED；Counting／Embedding Provider Compatibility與G8均無新增PASS，Formal Evaluation仍NOT EXECUTED。下列Counting approval-time「NOT IMPLEMENTED」及其他歷史status原文保留為當時快照，不覆蓋本段最新交接狀態。
 
 **COUNTING_OBSERVATION current status — Approved，2026-10-28：** COUNTING_OBSERVATION Contract：APPROVED；SPEC Lead已正式採納Independent Document Audit PASS／Findings NONE並完成本次文件核准，僅作狀態收尾，技術契約不變。Counting Runner Implementation：NOT IMPLEMENTED；Offline Implementation PASS：未取得；Counting Live：NOT AUTHORIZED／NOT EXECUTED；Provider Counting Compatibility：NOT VERIFIED；Embedding 54→54 Compatibility：NOT PASS；G8：NOT PASS；本次新模型Knowledge Build／Activation：NOT EXECUTED；Formal Evaluation：NOT EXECUTED。所有Live Google Provider Calls仍為NOT AUTHORIZED；文件Approval不代替後續Implementation授權或PM Live Campaign Authorization。Controlled Batching Approval及歷史紀錄不變；下段只保留當時Counting draft狀態。
 
@@ -1052,6 +1063,8 @@ Embedding／provider contract tests驗證timeout、request／batch bound、rate�
 
 **Controlled Batching amendment — Approved：** 新模型依§24.2驗證固定Sequential Synchronous Batching、每request最多一次physical attempt／30秒、campaign累積限額及全域54→54完整mapping／order；partial result、未授權split或UNKNOWN／TIMEOUT後自動繼續均不得通過。既有domain／retry authority不變。
 
+**Prototype Local Host amendment — Draft：** Diagnostic Host／Local Identity／SQLite部署須依§24.6.1末段的Prototype契約及最小驗收核對；僅修訂直接受影響的Windows admission／部署要求，不降低本AC的Provider Safety，也不改Candidate C／SPEC-011 Runtime ownership。該段尚待Audit與正式Amendment Approval，不能以本次方向核准放行Live。
+
 ## AC-014-AE — Finalized Unavailable Knowledge Lineage
 
 Transient provider failure不建立unavailable Snapshot；只有authoritative terminal degraded／unavailable finalization可為既有frozen operation建立exactly one Snapshot，且包含`source_status=UNAVAILABLE`、`resolution=RETRIEVAL_UNAVAILABLE`、selected non-secret Profile、zero retrieved refs及required lineage。Equivalent replay回傳same Snapshot；contradictory finalization及`INVALID / REPAIR_REQUIRED` Fail Closed。
@@ -1194,6 +1207,8 @@ Decision ID：`PM-RAG-EMBEDDING-MIGRATION-20261022`；Approval Date：`2026-10-2
 
 **Operation applicability（COUNTING_OBSERVATION approved amendment）：** 本節既有document／query、54→54、vector／768／normalization、batch與Embedding token admission條款維持適用於Embedding Diagnostic及Knowledge相關流程。獨立`COUNTING_OBSERVATION`僅適用本節末段及§24.6.1明列的Counting scope／minimum admission，不以單筆Counting取代上述契約；Counting不是隱藏附加API呼叫，也不因本amendment而取得Live授權。
 
+**Prototype Host applicability — Draft：** §24.6.1末段僅調整本機Host／Runner admission及Diagnostic SQLite部署；不改本節Counting／Embedding的operation、Golden input、commitment、SDK serialization、token／payload admission或完整54→54驗收。Counting仍為獨立Observation，不能以Host preflight或Counting結果完成Embedding Usage Receipt／Compatibility。
+
 - Backend target為Gemini Developer API stable `v1`，model為`gemini-embedding-2`；使用pinned `google-genai==2.25.0`進行離線serialization verification。API target／SDK static support不等於實際HTTP相容；SDK升級不在本baseline內，須另行SPEC Lead engineering approval，不得silent upgrade。
 - 明確設定`output_dimensionality=768`，採新模型provider-side normalization semantics。每個vector須驗證dimension、finite values、nonzero norm及依已聲明numeric tolerance檢查normalization；不得以client-side renormalization掩蓋provider mismatch。Provider normalization結果尚未驗證，tolerance須版本化並在結果判讀前固定。
 - Document exact template：`title: {approved document_id} | text: {chunk_content}`。Query exact template：`task: search result | query: {canonical_query}`。先依§9.1 canonicalize query，再套固定envelope；兩者使用同一model/profile family。固定literal、空白、encoding及envelope revisions須commitment，不允許依scenario／Ground Truth改prefix。`task_type`與`auto_truncate`均不傳送。
@@ -1257,6 +1272,8 @@ Calibration freeze之後，Candidate C在新授權scope內建立新的immutable 
 新AC-014-X為Migration Production Activation及正式Competition Readiness必要Gate。§19原AC-014-X與Current Closure Disposition逐字保留；historical `NOT EXECUTED — PM-DIRECTED SKIP FOR CURRENT CLOSURE`不是新模型例外。新的PASS必須是新的source/profile-bound四人evidence，不能改寫歷史。無法滿足時BLOCK並聯絡PM。
 
 ## 24.6 Gate Sequence與Slice 0 Boundary
+
+**Prototype Host preparation — Draft：** 在另行取得本次Amendment正式Approval及實作／操作授權後，Host準備採§24.6.1末段五步驟，可由符合條件的Non-Elevated本機Runner完成Fresh初始化，不預設Administrator Bootstrap。此為既有Host readiness工作的精簡，不新增G／S／E Gate；Source checkpoint、首次PM Live Campaign Authorization及後續Provider Acceptance的獨立邊界不變。本輪僅文件草案，不能依本段執行初始化或Provider Call。
 
 **Scope Reset amendment — Approved 2026-10-28：** 下列原順序的安全／資料依賴保留，但Milestone A不要求每個微步驟各自audit或checkpoint。同一整合風險可合併affected regression與一次independent audit；不強制在已涵蓋相同風險的audit外再做獨立Cumulative Audit。Human Git Checkpoint依實際source/config revision及完整change set決定，可覆蓋多項相關修改。首次Live仍須鎖定exact clean committed execution revision；後續policy/config若變更，須記錄實際新revision並重評受影響evidence，不能rebind舊checkpoint或沿用stale證據。
 
@@ -1346,3 +1363,43 @@ Provider未回傳usage時，該usage事實記為`UNKNOWN`而非已知零值；�
 Counting失敗、Malformed Response、Model Unsupported／Unsupported Operation、429／Quota、Timeout、Network／UNKNOWN或Persistence Ambiguity均MUST記錄適當typed outcome並STOP；未知結果、crash／restart或已占用budget不自動重送、退款、恢復額度、改模型／API、改input或啟動Embedding。無法確證durable write時保留既有IN_FLIGHT／UNKNOWN等保守fence供human adjudication，不假造記錄成功。一次Counting成功後亦無下一個自動request；後續Embedding Diagnostic須另行授權並通過其原Token／Payload／Quota／Batch／Usage admission。
 
 **Acceptance／delivery preservation。** 本amendment不修改Controlled Sequential Batching、Trusted Usage Metadata、54→54／768／normalization、Knowledge Build／Validate／Activate、AC-014-X、Knowledge Governance、SPEC-011 singular Runtime或SPEC-017 Formal Acceptance。單筆Counting不是G7完整Embedding Diagnostic、G8 Compatibility PASS、Candidate-C Build、RAG／RCA PASS或Production Ready；不是Formal Evaluation evidence或slot consumption。本輪只完成已通過Audit的Counting Amendment正式文件Approval Status收尾，不授權Counting Runner Implementation或任何Provider Execution，不新增G／S／E Gate、Persistent Resume、Multi-key Pool或獨立Accounting Framework。
+
+**Prototype Local Host Simplification — Narrow Amendment Approved（2026-10-29）**
+
+**Approval applicability。** 上列SPEC Lead Approval Record已正式核准以下原Normative Contract，以及§24.2／§24.6與AC-014-AD的Prototype Host補充。上述及下文原「Draft／草案／待Audit／待Approval」與末段交付狀態保留起草時授權快照，不代表現行文件仍Pending；技術契約不變，文件批准本身不授予Implementation Acceptance、Host操作或Live授權。後續工程依SPEC Lead獨立Implementation Authorization執行。
+
+**窄幅優先規則。** 僅在本Amendment正式核准及另行實作／操作授權後，Prototype Host部署依本段優先判讀；原文泛用JSONL／SQLite選項在本Prototype限用同一SQLite authority，不授權切換JSONL或第二Store。所有非Host範圍契約保持原有authority，歷史狀態與決策不回溯改寫。
+
+**Authority／適用範圍。** PM「APPROVE — Prototype Local Host Simplification」取代先前「APPROVE — Option A：保留SQLite及現有Host Validator」中要求完整保留Windows Validator的部分；SQLite及必要Provider Safety維持。以下僅為待Audit／SPEC Lead Approval的Host修訂草案：適用單機Prototype Diagnostic的本機Identity、authority/evidence檔案與同一SQLite Attempt／Usage／Budget部署，不取得Knowledge／Incident／RCA authority，不改Counting與Embedding Operation scope。既有Accepted Source仍採舊Validator／ProgramData resolver；不得停用它們或偽造Token／Path facts取得PASS。後續程式變更須另行明確授權，完成受影響離線驗證及適用Human Source Checkpoint後，才可使用新契約執行。歷史Approval／Audit／BLOCK／Failure／NOT EXECUTED紀錄完整保留。
+
+**Local Runner admission。** 允許既有`LAPTOP-C5CUESSG\vincent`帳號，實際執行時以Windows取得的primary process user SID綁定，不只比較名稱。不強制Dedicated Standard Account或跨帳號部署；每次preflight及送出前Final Guard仍核對唯一Host、相同Runner SID／execution identity、Source與PM Campaign。Token facts須由Windows真實程序Token取得，無法取得或存在thread impersonation／不明執行身分即拒絕。Process必須Non-Elevated；真正Elevated、Enabled Administrators群組（`S-1-5-32-544`具Enabled屬性）均拒絕。Deny-only Administrators／`S-1-5-114`只參與拒絕ACE，不能當作Allow權限；其存在不再單獨拒絕。不得藉由關閉UAC、修改User Rights Assignment或偽造facts符合本條款。
+
+Privilege判讀MUST保留名稱與Enabled／Disabled屬性，不能沿用「名稱存在即全部視為Enabled」或「所有非Allowlist Disabled均拒絕」。最小高風險拒絕集合為`SeBackupPrivilege`、`SeRestorePrivilege`、`SeTakeOwnershipPrivilege`、`SeDebugPrivilege`、`SeSecurityPrivilege`、`SeManageVolumePrivilege`、`SeImpersonatePrivilege`、`SeTcbPrivilege`、`SeLoadDriverPrivilege`、`SeAssignPrimaryTokenPrivilege`、`SeCreateTokenPrivilege`、`SeTrustedCredManAccessPrivilege`：Enabled時拒絕；即使Disabled，只要仍存在且可由該程序啟用，也拒絕，因其可繞過檔案保護、取得其他身分／Credential或控制程序／系統，不能僅以當下Disabled視為安全。已移除的Privilege不當作仍持有。`SeChangeNotifyPrivilege`及常見`SeShutdownPrivilege`、`SeUndockPrivilege`、`SeIncreaseWorkingSetPrivilege`、`SeTimeZonePrivilege`的Disabled狀態不單獨拒絕；它們不等同上述檔案／身分安全界線的繞過能力，仍保留availability／本機設定風險。其他Privilege若具上述繞過能力或Token屬性無法可靠判讀，須typed fail closed，不能因不在列舉中自動允許；不建立通用Privilege Registry／全面Allowlist Framework。
+
+**唯一正式Path Resolver／Store authority。** 正式Root為目前已綁定Runner使用者的Windows `LocalApplicationData` Known Folder（`FOLDERID_LocalAppData`）加`AIOps\Diagnostic`；唯一Store為`<LocalApplicationData Known Folder>\AIOps\Diagnostic\state\attempts.sqlite`，authority/evidence位置維持同Root下`authority`與既有相對檔名。從Windows Known Folder API解析，不信任`LOCALAPPDATA`字串覆寫、CLI任意path、目前目錄或TEMP；不得silently fallback到ProgramData或建立另一個authority。Resolver／PM binding／attempt evidence須一致記錄canonical Root、Runner SID及Store file identity；非預期reparse／symlink或路徑identity變動即拒絕。Google Project／Credential Profile及其他既有非敏感binding維持，不讀取或保存Secret於此Root。
+
+**Existing state／Fresh-only。** Fresh Initialization與Normal Diagnostic Invocation必須為分離的明確操作。初始化前重新檢查新Root及舊Windows `ProgramData` Known Folder下`AIOps\Diagnostic`（含原`state\attempts.sqlite`／authority／sidecars），不能只相信先前目錄不存在的觀察。新Root已存在任何Store、空檔、殘留目錄或不明資料即STOP；舊Diagnostic位置若存在任何可能authority／Attempt／Budget／UNKNOWN狀態，或無法可靠判定其不存在，也STOP，待Human確認唯一Store Authority與相容性，不能另建第二個有效Store。此草案不授權Migration、複製、刪除、reset或自動搬移；不以改名／換路徑逃避fence。
+
+在後續Human明確Fresh操作授權下，以CreateNew／exclusive no-overwrite建立全新空Store，並以SQLite排他初始化及既有exact `_COUNTING_ATTEMPTS_DDL`建立Schema；不改`observation_json`、constraints、`STRICT`、`WITHOUT ROWID`、`journal_mode=delete`或Accounting語意。使用既有exact DDL／Integrity／row consistency validation；初始化失敗保留狀態供Human判讀，不自動cleanup或重試。正常Diagnostic僅開啟已存在且相容的正式Store，缺失、不相容或sidecar／recovery ambiguity時fail closed，不暗中初始化、重建、修復或Migration。正常SQLite已核准transaction中的journal建立／刪除不等同允許刪除既有不明sidecar。
+
+**基本本機檔案保護。** 允許該Runner使用者擁有及管理LocalAppData Root／Store，不要求Administrator ownership、獨立帳號或禁止owner一切刪除權限。檢查實際owner／ACL及有效存取：綁定Runner、SYSTEM與Administrators可有必要管理權，不允許Everyone／Users／Authenticated Users或其他未授權主體寫入、修改ACL或替換authority／Store；不得以Everyone Full Control或開放整個個人Profile解決。Runner須具Store read/write及SQLite journal在state內的必要create/write/delete權，驗證journal實際適用的繼承／權限，不能機械沿用原Administrator-owned state mask。Invocation持續以既有file-identity／不分享delete的DB handle guard防止操作期間pathname被普通流程替換，並維持SQLite atomic eligibility／reservation、duplicate prevention與single active runner；owner在操作外仍可竄改／替換的風險另如下文揭露，不能宣稱guard提供企業級不可竄改性。
+
+**簡化Host Preparation。** 只需：(1) 核對exact Source Revision、腳本integrity、Host／Runner SID；(2) 封網確認必要Python／SQLite版本、Diagnostic／pinned SDK依賴與既有Exact Counting serialization；(3) 重新確認新舊Store位置不存在或已按唯一authority規則停止；(4) Human explicit Fresh SQLite initialization；(5) 一次combined Host／SQLite preflight。符合admission的Non-Elevated同帳號Session可完成；沒有預設必要的Administrator步驟。Dedicated account、跨帳號ACL、Administrator-owned directory bootstrap、多層Approval Manifest、完整OS Dependency Inventory及重複Script／Token／ACL Approval不作必要條件；保留簡單、可核對且對照Human已確認版本的script hash／Source檢查，不以自算hash冒充核准，不執行未核對的程式。這五步不建立新治理Gate或Live Authorization。
+
+Combined preflight一次核對Source／script、Host／SID／真實Token、必要Runtime／Golden payload、唯一正式path／ACL／Store file identity／journal safety、exact DDL／Integrity及Attempt／Usage／Budget／UNKNOWN一致性；不得在正式Store建立測試Attempt。首次Fresh驗證可要求Attempt及reserved Usage／Cost皆為零；後續已有合法Attempt的Health檢查不得要求零筆，亦不清除fence。唯讀檢查不觸發recovery／repair、初始化或Provider；若還缺PM Campaign／Profile／其他Live evidence，標明缺項，不假造Host Live Ready。
+
+**保留的Provider／Authorization控制。** 原§24.6.1受控human-governed PM record不是CLI caller的`approved=true`或自製verification object；本機檔案仍須驗證其正式授權來源、內容、Source／Host／Runner SID／Profile／Model／Operation／Input／Payload／scope／有效期與有限budget。PM Explicit Live Campaign Authorization、Default Live DENIED及explicit opt-in不變。改用使用者擁有檔案不使caller self-approval合法，也不宣稱可抵擋同帳號惡意偽造。保留同一SQLite durable Attempt／Usage／Budget、single active runner、credential discovery前atomic eligibility／reservation、duplicate／budget／IN_FLIGHT／UNKNOWN／TIMEOUT拒絕、Final Guard及必要typed outcome。Counting最多一次physical attempt；各Embedding request最多一次、受固定batch plan及campaign累積上限約束；30秒timeout、no hidden retry／fallback、crash／UNKNOWN／TIMEOUT不自動重送、退款、reset或恢復budget，既有`1 micro-USD` internal hold及有限正值cost limit不變。Counting `totalTokens`不是Embedding Actual Usage，不解除其他fence，不自動Embedding，也不形成54→54或G8 PASS。API Key不入Git／Logs／Reports，不新增Credential Framework或第二套Store。
+
+**PM接受的Prototype風險。** 本契約提供Prototype Operational Safety：正常受控流程必須遵守授權、限額、持久化與防重送；違反仍fail closed。PM接受使用單一既有帳號及其LocalAppData、缺少企業級Windows Account Isolation與完整OS Dependency Attestation，亦接受對具有該本機使用者存取能力之惡意竄改者的防護降低；該使用者可在流程外修改自身檔案／DB／程式，單純hash、ACL或SQLite不能提供企業級不可竄改承諾。這項Protection Against Malicious Local User Tampering的取捨不豁免未授權重複呼叫、持久化缺失、Secret洩漏、自動清紀錄／退款／重送、超scope／budget或caller self-approval；不宣稱上述風險不存在，不擴張為Production Ready或Formal Acceptance豁免。
+
+**最小Acceptance（AC-014-AD直接相關補充，Draft）。** 後續僅驗證受影響範圍，不新增完整Windows Security Test Framework：
+
+| Area | 必要判準；尚未執行本次新Host實作／驗收 |
+|---|---|
+| Local identity／Token | 實際vincent Non-Elevated Session在其他條件成立時可admit；Deny-only Administrators及上述一般Disabled privileges不單獨拒絕；Elevated／Enabled Administrators、不可確認的身分／Token、高風險Enabled及仍可啟用的上述高風險Disabled均拒絕。不得用synthetic facts冒充Human PASS。 |
+| Resolver／唯一authority | 真實Runner LocalApplicationData Known Folder及固定相對路徑；環境／caller覆寫、舊ProgramData state、雙Store或未知state均不會silent admission／fresh重建。 |
+| Fresh／Schema／File safety | 新Root／Store或殘留已存在即拒絕且不overwrite／cleanup／Migration；exclusive Fresh建立exact DDL、STRICT／WITHOUT ROWID／observation_json／delete journal；驗證Integrity、基本ACL、journal必要權限及操作中的file identity穩定。 |
+| Persistence／Concurrency | 同一SQLite保留Attempt／Budget／Usage／UNKNOWN；duplicate、超budget、IN_FLIGHT／UNKNOWN／TIMEOUT、lock／persistence ambiguity於Credential前拒絕；single active runner及crash／restart fence不退化。Fresh zero-state不套用日後合法非空Store。 |
+| Authorization／Provider boundary | Source／Input／Operation／Model／Profile／Host／SID／有效期／PM Authority及Final Guard維持；未有PM explicit Live Authorization或opt-in時Provider Calls = 0；不接受caller self-approval。保持reservation-before-credential、一次attempt、30秒、no retry／fallback、internal hold及Secret Safety；Counting Result不記作Embedding Usage／54→54 PASS。 |
+
+**本草案交付狀態。** PM方向已核准；Independent Narrow Document Audit PENDING、SPEC Lead Amendment Approval PENDING、Implementation NOT AUTHORIZED／NOT EXECUTED、Host Initialization NOT EXECUTED、PM Live Authorization NOT AUTHORIZED。本段不回溯變更既有Counting／Batching Approval與Offline Implementation Acceptance，不改PRD-004產品語意、AC-014-X／Knowledge Governance、SPEC-011 Runtime或SPEC-017 Oracle／N／reviewer／denominator／Formal Acceptance；後者仍須依真實證據完成。

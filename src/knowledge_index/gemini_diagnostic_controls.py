@@ -34,8 +34,10 @@ _DANGEROUS_PRIVILEGES = frozenset((
     "SeBackupPrivilege", "SeRestorePrivilege", "SeTakeOwnershipPrivilege",
     "SeDebugPrivilege", "SeManageVolumePrivilege", "SeSecurityPrivilege",
     "SeImpersonatePrivilege", "SeTcbPrivilege", "SeLoadDriverPrivilege",
+    "SeAssignPrimaryTokenPrivilege", "SeCreateTokenPrivilege", "SeTrustedCredManAccessPrivilege",
+    "SeRelabelPrivilege", "SeDelegateSessionUserImpersonatePrivilege",
+    "SeEnableDelegationPrivilege", "SeSyncAgentPrivilege",
 ))
-_ALLOWED_RUNNER_PRIVILEGES = frozenset(("SeChangeNotifyPrivilege",))
 _FILE_GENERIC_MAPPING = (0x00120089, 0x00120116, 0x001200A0, 0x001F01FF)
 _FILE_MODIFY = (0x00000002, 0x00000004, 0x00000010, 0x00000040, 0x00000100,
                 0x00010000, 0x00040000, 0x00080000)
@@ -187,12 +189,12 @@ class WindowsTokenFacts:
     user_sid: str
     groups: tuple[tuple[str, int], ...]
     restricted_sids: tuple[str, ...]
-    privileges: tuple[str, ...]
+    privileges: tuple[tuple[str, int], ...]
     elevated: bool
 
 
-def _programdata_known_folder() -> Path:
-    """Resolve FOLDERID_ProgramData through Shell, never through environment."""
+def _windows_known_folder(folder_id: str) -> Path:
+    """Resolve through Shell for the primary user, never through environment."""
     if os.name != "nt":
         raise DiagnosticDenied("Windows diagnostic host is required")
     from ctypes import wintypes
@@ -203,7 +205,7 @@ def _programdata_known_folder() -> Path:
             ("Data3", wintypes.WORD), ("Data4", ctypes.c_ubyte * 8),
         ]
 
-    raw = uuid.UUID("62ab5d82-fdc1-4dc3-a9dd-070d1d495d97").bytes_le
+    raw = uuid.UUID(folder_id).bytes_le
     guid = GUID.from_buffer_copy(raw)
     result = ctypes.c_wchar_p()
     shell = ctypes.WinDLL("shell32", use_last_error=True)
@@ -214,19 +216,26 @@ def _programdata_known_folder() -> Path:
     ole.CoTaskMemFree.argtypes = [ctypes.c_void_p]
     try:
         if shell.SHGetKnownFolderPath(ctypes.byref(guid), 0, None, ctypes.byref(result)) != 0:
-            raise DiagnosticDenied("ProgramData Known Folder is unavailable")
+            raise DiagnosticDenied("Windows Known Folder is unavailable")
         value = result.value
         if not value or not Path(value).is_absolute():
-            raise DiagnosticDenied("ProgramData Known Folder is invalid")
+            raise DiagnosticDenied("Windows Known Folder is invalid")
         return Path(value)
     finally:
         if result:
             ole.CoTaskMemFree(ctypes.cast(result, ctypes.c_void_p))
 
 
+def _programdata_known_folder() -> Path:
+    return _windows_known_folder("62ab5d82-fdc1-4dc3-a9dd-070d1d495d97")
+
+
+def _localappdata_known_folder() -> Path:
+    return _windows_known_folder("f1b32785-6fba-4fcf-9d55-7b8e7f157091")
+
+
 def fixed_host_paths() -> FixedHostPaths:
-    programdata = _programdata_known_folder()
-    root = programdata.joinpath(*_HOST_SUFFIX)
+    root = _localappdata_known_folder().joinpath(*_HOST_SUFFIX)
     authority, state = root / "authority", root / "state"
     return FixedHostPaths(root, authority, authority / "campaign.json",
                           authority / "approved_input.json", state,
@@ -316,7 +325,7 @@ def _token_facts(token: int) -> WindowsTokenFacts:
         if not advapi.LookupPrivilegeNameW(None, ctypes.byref(entry.luid),
                                             name, ctypes.byref(length)):
             raise DiagnosticDenied("Windows token privilege is unknown")
-        names.append(name.value)
+        names.append((name.value, entry.attributes))
     elevated = _token_information(token, 20)
     if len(elevated) != 4:
         raise DiagnosticDenied("Windows token elevation is unknown")
@@ -381,14 +390,24 @@ def process_runner_sid() -> str:
 def _validate_token_facts(facts: WindowsTokenFacts, runner_sid: str) -> None:
     if (facts.user_sid != runner_sid or facts.elevated or facts.restricted_sids
             or not facts.groups):
-        raise DiagnosticDenied("Windows runner token is not a dedicated trusted identity")
-    if any(sid == "S-1-5-32-544" or attributes & 0x10
+        raise DiagnosticDenied("Windows runner token identity or elevation is not approved")
+    if any(sid == "S-1-5-32-544" and attributes & 0x04
            for sid, attributes in facts.groups):
-        raise DiagnosticDenied("administrator group exposure is not approved")
-    if any(name in _DANGEROUS_PRIVILEGES for name in facts.privileges):
-        raise DiagnosticDenied("Windows runner has a dangerous file-control privilege")
-    if any(name not in _ALLOWED_RUNNER_PRIVILEGES for name in facts.privileges):
-        raise DiagnosticDenied("Windows runner privilege is not approved")
+        raise DiagnosticDenied("enabled administrator group is not approved")
+    for privilege in facts.privileges:
+        if (not isinstance(privilege, tuple) or len(privilege) != 2
+                or not isinstance(privilege[0], str)
+                or not re.fullmatch(r"Se[A-Za-z]+Privilege", privilege[0])
+                or type(privilege[1]) is not int or privilege[1] < 0
+                or privilege[1] & ~0x80000007
+                or privilege[1] & 0x04 and privilege[1] & 0x02):
+            raise DiagnosticDenied("Windows privilege attributes are unknown")
+        name, attributes = privilege
+        # Disabled privileges can be enabled by their holder. Removed ones cannot.
+        if not attributes & 0x04 and name in _DANGEROUS_PRIVILEGES:
+            raise DiagnosticDenied("Windows runner has a dangerous file-control privilege")
+    if any(attributes & 0x10 and attributes & 0x04 for _, attributes in facts.groups):
+        raise DiagnosticDenied("Windows group attributes are contradictory")
     if any(attributes & ~(0x0000007F | 0x20000000 | 0xC0000000)
            for _, attributes in facts.groups):
         raise DiagnosticDenied("Windows token group attributes are unsupported")
@@ -504,73 +523,114 @@ def _windows_path_facts(path: Path, token: int | None = None) -> WindowsPathFact
 
 def _validate_path_facts(
     path: Path, facts: WindowsPathFacts, runner_sid: str, *,
-    directory: bool, writable_state: bool = False,
+    directory: bool, writable_state: bool = False, _prototype_local: bool = False,
 ) -> None:
-    if (
-        facts.is_reparse or facts.is_directory is not directory
-        or facts.owner_sid not in _ADMIN_SIDS or not facts.identity[1]
-        or not facts.allowed_aces
-    ):
+    if not _prototype_local:
+        # Preserve the legacy credential/backend helper policy. Only the fixed
+        # non-secret Prototype host hierarchy opts into the new owner model.
+        if (facts.is_reparse or facts.is_directory is not directory
+                or facts.owner_sid not in _ADMIN_SIDS or not facts.identity[1]
+                or not facts.allowed_aces):
+            raise DiagnosticDenied("diagnostic host path trust is invalid")
+        for sid, mask, flags in facts.allowed_aces:
+            if flags & 0x08:
+                continue
+            if sid not in _ADMIN_SIDS and mask & 0xF0000000:
+                raise DiagnosticDenied("diagnostic host ACE generic rights are unsupported")
+            if sid not in (_ADMIN_SIDS | {runner_sid}):
+                raise DiagnosticDenied("ordinary caller can access diagnostic host control")
+        forbidden = _STATE_FORBIDDEN if writable_state else _FILE_MODIFY
+        if any(facts.effective_rights & bit for bit in forbidden):
+            raise DiagnosticDenied("diagnostic runner can alter protected authority")
+        if (not facts.effective_rights & _FILE_READ_DATA
+                or writable_state and not facts.effective_rights & _FILE_WRITE_DATA):
+            raise DiagnosticDenied("diagnostic runner lacks required host access")
+        return
+    trusted = _ADMIN_SIDS | {runner_sid}
+    if (facts.is_reparse or facts.is_directory is not directory
+            or facts.owner_sid not in trusted or not facts.identity[1]
+            or not facts.allowed_aces):
         raise DiagnosticDenied("diagnostic host path trust is invalid")
+    # The Prototype owner can manage its files. Do not claim local-user tamper resistance.
     for sid, mask, flags in facts.allowed_aces:
-        if flags & 0x08:  # INHERIT_ONLY_ACE is not effective on this object.
+        if flags & 0x08:
             continue
-        if sid not in _ADMIN_SIDS and mask & 0xF0000000:
-            raise DiagnosticDenied("diagnostic host ACE generic rights are unsupported")
-        if sid not in (_ADMIN_SIDS | {runner_sid}):
-            raise DiagnosticDenied("ordinary caller can access diagnostic host control")
+        if sid not in trusted and mask & (0x500D0156 | 0x10000000):
+            raise DiagnosticDenied("unauthorized principal can modify diagnostic host control")
     rights = facts.effective_rights
-    forbidden = _STATE_FORBIDDEN if writable_state else _FILE_MODIFY
-    if any(rights & bit for bit in forbidden):
-        raise DiagnosticDenied("diagnostic runner can alter protected authority")
     if not rights & _FILE_READ_DATA or (writable_state and not rights & _FILE_WRITE_DATA):
         raise DiagnosticDenied("diagnostic runner lacks required host access")
 
 
-def validate_host_paths(paths: FixedHostPaths, runner_sid: str, *,
-                        _include_safety: bool = False) -> dict[Path, WindowsPathFacts]:
-    """Validate the fixed hierarchy, never a caller-selected live directory."""
-    if os.name != "nt" or not runner_sid.startswith("S-1-") or runner_sid in _ADMIN_SIDS:
-        raise DiagnosticDenied("dedicated Windows runner identity is required")
-    programdata = paths.root.parent.parent
-    volume_root = programdata.parent
-    expected_root = programdata.joinpath(*_HOST_SUFFIX)
-    if paths.root != expected_root or paths.authority != expected_root / "authority" or (
-        paths.campaign != paths.authority / "campaign.json"
-        or paths.approved_input != paths.authority / "approved_input.json"
-        or paths.sdk_request_evidence != paths.authority / "sdk_request_evidence.json"
-        or paths.safety_evidence != paths.authority / "safety_evidence.json"
-        or paths.state != expected_root / "state"
-        or paths.attempts != paths.state / "attempts.sqlite"
-    ):
+def _assert_absent(path: Path) -> None:
+    """Missing only, never PermissionError/unknown/reparse-as-missing."""
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise DiagnosticDenied("diagnostic state absence is unknown") from exc
+    raise DiagnosticDenied("existing diagnostic state; preserve and STOP")
+
+
+def _assert_no_legacy_state() -> None:
+    # Checking the whole AIOps ancestor also fences incomplete old bootstraps.
+    _assert_absent(_programdata_known_folder() / "AIOps")
+
+
+def _assert_fixed_paths(paths: FixedHostPaths) -> None:
+    if paths != fixed_host_paths():
         raise DiagnosticDenied("diagnostic host paths are not fixed")
+    _assert_no_legacy_state()
+
+
+def _assert_no_sidecars(path: Path) -> None:
+    for suffix in ("-journal", "-wal", "-shm"):
+        _assert_absent(Path(str(path) + suffix))
+
+
+def _validate_journal_acl(facts: WindowsPathFacts, runner_sid: str) -> None:
+    # Journal files need inherited read/write/Delete, independently of directory access.
+    granted = 0
+    for sid, mask, flags in facts.allowed_aces:
+        if (sid not in (_ADMIN_SIDS | {runner_sid, "S-1-3-0"}) and flags & 0x01
+                and mask & (0x500D0156 | 0x10000000)):
+            raise DiagnosticDenied("unauthorized principal can modify SQLite journals")
+        if sid in {runner_sid, "S-1-3-0"} and flags & 0x01:
+            if mask & 0x10000000:
+                mask |= 0x1F01FF
+            if mask & 0x40000000:
+                mask |= 0x120116
+            if mask & 0x80000000:
+                mask |= 0x120089
+            granted |= mask
+    if not facts.effective_rights & 0x02 or granted & 0x10003 != 0x10003:
+        raise DiagnosticDenied("SQLite journal permissions are unavailable")
+
+
+def validate_host_paths(paths: FixedHostPaths, runner_sid: str, *,
+                        _include_safety: bool = False,
+                        _store_only: bool = False) -> dict[Path, WindowsPathFacts]:
+    """Read-only admission of the one current-user hierarchy, never a caller path."""
+    if os.name != "nt" or not runner_sid.startswith("S-1-") or runner_sid in _ADMIN_SIDS:
+        raise DiagnosticDenied("Windows runner identity is required")
+    _assert_fixed_paths(paths)
+    local = paths.root.parent.parent
+    directories = (local, paths.root.parent, paths.root, paths.authority, paths.state)
+    records = () if _store_only else (paths.campaign, paths.approved_input, paths.sdk_request_evidence,
+                    *((paths.safety_evidence,) if _include_safety else ()))
     result = {}
     with _effective_token() as (token, token_facts):
         _validate_token_facts(token_facts, runner_sid)
-        for path, directory, writable_state in (
-        (volume_root, True, False), (programdata, True, False),
-        (expected_root.parent, True, False),
-        (paths.root, True, False), (paths.authority, True, False),
-        (paths.campaign, False, False), (paths.approved_input, False, False),
-        (paths.sdk_request_evidence, False, False),
-        *(((paths.safety_evidence, False, False),) if _include_safety else ()),
-        (paths.state, True, True), (paths.attempts, False, True),
-        ):
+        for path in (*directories, *records, paths.attempts):
             facts = _windows_path_facts(path, token)
-            # OS-owned ancestors can grant read/create; they must not be replaceable.
-            if path not in (volume_root, programdata):
-                _validate_path_facts(path, facts, runner_sid,
-                                     directory=directory, writable_state=writable_state)
-            elif (
-                facts.is_reparse or not facts.is_directory or not facts.identity[1]
-                or facts.owner_sid not in (_ADMIN_SIDS | {_TRUSTED_INSTALLER_SID})
-                or any(facts.effective_rights & bit for bit in _STATE_FORBIDDEN)
-                or any(sid not in _ADMIN_SIDS and not flags & 0x08
-                       and mask & _FORBIDDEN_STATE_DELETE
-                       for sid, mask, flags in facts.allowed_aces)
-            ):
-                raise DiagnosticDenied("ProgramData root cannot protect the diagnostic hierarchy")
+            _validate_path_facts(path, facts, runner_sid, directory=path in directories,
+                                 writable_state=path in (paths.state, paths.attempts),
+                                 _prototype_local=True)
+            if path == paths.state:
+                _validate_journal_acl(facts, runner_sid)
             result[path] = facts
+    _assert_no_sidecars(paths.attempts)
     return result
 
 
@@ -1720,6 +1780,164 @@ def validate_authorization(
         or conservative_cost_micro_units > record.maximum_cost_micro_units
     ):
         raise DiagnosticDenied("diagnostic request or cost exceeds approved bounds", code="INPUT_BOUNDS_EXCEEDED")
+
+
+def _bootstrap_identity(runner_sid: str, source_revision: str) -> FixedHostPaths:
+    if socket.gethostname() != "LAPTOP-C5CUESSG":
+        raise DiagnosticDenied("Prototype bootstrap host mismatch")
+    with _effective_token() as (_, facts):
+        _validate_token_facts(facts, runner_sid)
+    revision, clean = resolve_repository_source(Path(__file__).resolve().parents[2])
+    if (not re.fullmatch(r"[0-9a-f]{40}", source_revision)
+            or revision != source_revision or clean is not True):
+        raise DiagnosticDenied("bootstrap source must be the exact clean Human checkpoint")
+    if sqlite3.sqlite_version_info < (3, 37, 0):
+        raise DiagnosticDenied("SQLite STRICT compatibility is unavailable")
+    paths = fixed_host_paths()
+    _assert_fixed_paths(paths)
+    return paths
+
+
+def precheck_local_counting_host(*, runner_sid: str, source_revision: str) -> dict:
+    """No directory/DB creation; only eligibility for a future explicit fresh operation."""
+    paths = _bootstrap_identity(runner_sid, source_revision)
+    _fresh_local_parent(paths, runner_sid)
+    with _effective_token() as (token, _):
+        base = _windows_path_facts(paths.root.parent.parent, token)
+        _validate_path_facts(paths.root.parent.parent, base, runner_sid,
+                             directory=True, writable_state=True, _prototype_local=True)
+    return {"host": socket.gethostname(), "runner_sid": runner_sid,
+            "source_revision": source_revision, "store": str(paths.attempts),
+            "fresh_eligible": True, "initialized": False, "live": "NOT AUTHORIZED"}
+
+
+def _fresh_local_parent(paths: FixedHostPaths, runner_sid: str) -> bool:
+    """Reject all target remnants; reuse a safe existing AIOps parent without changing it."""
+    _assert_absent(paths.root)
+    try:
+        paths.root.parent.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise DiagnosticDenied("local parent state is unknown") from exc
+    with _effective_token() as (token, _):
+        _validate_path_facts(paths.root.parent, _windows_path_facts(paths.root.parent, token),
+                             runner_sid, directory=True, writable_state=True,
+                             _prototype_local=True)
+    return True
+
+
+def _create_local_host_object(path: Path, runner_sid: str, *, directory: bool) -> None:
+    """Exclusive native creation with the current user/SYSTEM/Admin DACL at creation.
+
+    Called only by explicit bootstrap. Never changes ACLs of an existing object.
+    """
+    if os.name != "nt" or not re.fullmatch(r"S-1-5-21-(?:[0-9]+-){2,}[0-9]+", runner_sid):
+        raise DiagnosticDenied("local bootstrap identity is invalid")
+    from ctypes import wintypes
+
+    class SecurityAttributes(ctypes.Structure):
+        _fields_ = [("length", wintypes.DWORD), ("descriptor", ctypes.c_void_p),
+                    ("inherit", wintypes.BOOL)]
+
+    advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p]
+    advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW.restype = wintypes.BOOL
+    kernel.CreateDirectoryW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(SecurityAttributes)]
+    kernel.CreateDirectoryW.restype = wintypes.BOOL
+    kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                  ctypes.POINTER(SecurityAttributes), wintypes.DWORD,
+                                  wintypes.DWORD, wintypes.HANDLE]
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.LocalFree.argtypes = [ctypes.c_void_p]
+    inheritance = "OICI" if directory else ""
+    sddl = (f"O:{runner_sid}G:{runner_sid}D:P"
+            + "".join(f"(A;{inheritance};FA;;;{sid})" for sid in (runner_sid, "SY", "BA")))
+    descriptor = ctypes.c_void_p()
+    if not advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, 1,
+            ctypes.byref(descriptor), None):
+        raise DiagnosticDenied("local bootstrap security descriptor is unavailable")
+    try:
+        security = SecurityAttributes(ctypes.sizeof(SecurityAttributes), descriptor.value, False)
+        if directory:
+            if not kernel.CreateDirectoryW(str(path), ctypes.byref(security)):
+                raise DiagnosticDenied("fresh directory creation failed; preserve and STOP")
+        else:
+            handle = kernel.CreateFileW(str(path), 0xC0000000, 0, ctypes.byref(security),
+                                        1, 0x80, None)  # CREATE_NEW, not OPEN_ALWAYS.
+            if handle in (None, 0, ctypes.c_void_p(-1).value):
+                raise DiagnosticDenied("fresh Store creation failed; preserve and STOP")
+            kernel.CloseHandle(handle)
+    finally:
+        kernel.LocalFree(descriptor)
+
+
+def initialize_local_counting_store(*, runner_sid: str, source_revision: str) -> dict:
+    """EXPLICIT Human fresh operation. No authorization record, credential or transport."""
+    precheck_local_counting_host(runner_sid=runner_sid, source_revision=source_revision)
+    paths = fixed_host_paths()
+    # Recheck immediately before mutation. No rollback/cleanup on any later failure.
+    _assert_fixed_paths(paths)
+    parent_exists = _fresh_local_parent(paths, runner_sid)
+    directories = (() if parent_exists else (paths.root.parent,)) + (
+        paths.root, paths.authority, paths.state)
+    for path in directories:
+        _create_local_host_object(path, runner_sid, directory=True)
+        with _effective_token() as (token, _):
+            _validate_path_facts(path, _windows_path_facts(path, token), runner_sid,
+                                 directory=True, writable_state=True, _prototype_local=True)
+    _assert_no_legacy_state()
+    _create_local_host_object(paths.attempts, runner_sid, directory=False)
+    observed = validate_host_paths(paths, runner_sid, _store_only=True)
+    identity = observed[paths.attempts].identity
+    with _guard_db_path(paths.attempts, identity):
+        if paths.attempts.stat().st_size != 0:
+            raise DiagnosticDenied("not a fresh empty Store; preserve and STOP")
+        with closing(sqlite3.connect(_sqlite_uri(paths.attempts, read_only=False), uri=True,
+                                     timeout=0, isolation_level=None)) as db:
+            if db.execute("PRAGMA journal_mode").fetchone() != ("delete",):
+                raise DiagnosticDenied("fresh SQLite journal mode is incompatible")
+            db.execute("BEGIN EXCLUSIVE")
+            if db.execute("SELECT COUNT(*) FROM sqlite_schema").fetchone() != (0,):
+                raise DiagnosticDenied("existing SQLite schema; preserve and STOP")
+            db.execute(_COUNTING_ATTEMPTS_DDL)
+            _validate_formal_connection(db)
+            db.commit()
+    return inspect_local_counting_store(runner_sid=runner_sid, source_revision=source_revision,
+                                        fresh=True)
+
+
+def inspect_local_counting_store(*, runner_sid: str, source_revision: str,
+                                 fresh: bool = False) -> dict:
+    """Combined read-only bootstrap preflight; not PM Live admission."""
+    paths = _bootstrap_identity(runner_sid, source_revision)
+    observed = validate_host_paths(paths, runner_sid, _store_only=True)
+    identity = observed[paths.attempts].identity
+    with _guard_db_path(paths.attempts, identity):
+        before = hashlib.sha256(paths.attempts.read_bytes()).hexdigest()
+        with closing(sqlite3.connect(_sqlite_uri(paths.attempts, read_only=True),
+                                     uri=True, timeout=0)) as db:
+            db.execute("PRAGMA query_only=ON")
+            _validate_formal_connection(db)
+            if db.execute("SELECT sql FROM sqlite_schema WHERE name='attempts'").fetchone() != (_COUNTING_ATTEMPTS_DDL,):
+                raise DiagnosticDenied("Counting schema is incompatible; no repair")
+            count, usage, cost = db.execute("SELECT COUNT(*),COALESCE(SUM(usage_reserved),0),"
+                                           "COALESCE(SUM(cost_reserved),0) FROM attempts").fetchone()
+            fences = db.execute("SELECT COUNT(*) FROM attempts WHERE outcome IN "
+                "('IN_FLIGHT','UNKNOWN','TIMEOUT') OR usage_observed='UNKNOWN'").fetchone()[0]
+            if fresh and (count, usage, cost) != (0, 0, 0):
+                raise DiagnosticDenied("not a fresh Store; preserve existing state")
+        if hashlib.sha256(paths.attempts.read_bytes()).hexdigest() != before:
+            raise DiagnosticDenied("Store changed during read-only preflight")
+    return {"host": socket.gethostname(), "runner_sid": runner_sid,
+            "source_revision": source_revision, "store": str(paths.attempts),
+            "file_identity": identity, "attempts": count, "reserved_usage": usage,
+            "reserved_cost": cost, "fences": fences, "schema_integrity": "PASS",
+            "fresh_check": fresh, "live": "NOT AUTHORIZED",
+            "live_authority": "NOT VERIFIED BY BOOTSTRAP"}
 
 
 class TemporaryDiagnosticUsage:

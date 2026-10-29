@@ -24,6 +24,12 @@ from knowledge_index.gemini_diagnostic_controls import (
 import knowledge_index.gemini_diagnostic_controls as controls
 
 
+@pytest.fixture(autouse=True)
+def isolated_host_roots(tmp_path, monkeypatch):
+    monkeypatch.setattr(controls, "_localappdata_known_folder", lambda: tmp_path)
+    monkeypatch.setattr(controls, "_programdata_known_folder", lambda: tmp_path / "legacy")
+
+
 REVISION = "b" * 40
 NOW = datetime(2026, 10, 23, 12, tzinfo=timezone.utc)
 
@@ -108,7 +114,9 @@ def e4_query_case():
 
 def e4_host_fixture(tmp_path, monkeypatch):
     grant, input_material, approved = e4_query_case()
-    monkeypatch.setattr(controls, "_programdata_known_folder", lambda: tmp_path)
+    monkeypatch.setattr(controls, "_localappdata_known_folder", lambda: tmp_path)
+    # This helper is also called from other modules, without this module's autouse fixture.
+    monkeypatch.setattr(controls, "_programdata_known_folder", lambda: tmp_path / "legacy")
     paths = controls.fixed_host_paths()
     paths.authority.mkdir(parents=True)
     paths.state.mkdir()
@@ -128,8 +136,8 @@ def e4_host_fixture(tmp_path, monkeypatch):
         directory = path.is_dir()
         runner = "S-1-5-21-100"
         aces = (("S-1-5-32-544", 0x10000000, 0),
-                (runner, 0x00120117 if path in (paths.state, paths.attempts)
-                 else 0x00120089, 0))
+                (runner, 0x001301bf if path in (paths.state, paths.attempts)
+                 else 0x00120089, 3 if path == paths.state else 0))
         rights = 0x3 if path in (paths.state, paths.attempts) else 0x1
         return WindowsPathFacts("S-1-5-32-544", aces, (info.st_dev, info.st_ino),
                                 directory, False, rights)
@@ -485,9 +493,9 @@ def test_g4s1_fixed_loader_returns_only_trusted_metadata_without_new_write_autho
         reads.append(path)
         return read(path, facts)
     monkeypatch.setattr(controls, "_read_trusted_file", observed_read)
-    assert len(controls.validate_host_paths(paths, "S-1-5-21-100")) == 10  # Existing D-A scope unchanged.
+    assert len(controls.validate_host_paths(paths, "S-1-5-21-100")) == 9  # Current-user ancestor scope.
     observed = controls.validate_host_paths(paths, "S-1-5-21-100", _include_safety=True)
-    assert len(observed) == 11 and paths.safety_evidence in observed
+    assert len(observed) == 10 and paths.safety_evidence in observed
     artifact = controls.load_live_safety_artifact()
     assert artifact.fields == safety_parse(value).fields
     assert reads == [paths.campaign, paths.approved_input, paths.sdk_request_evidence, paths.safety_evidence]
@@ -504,8 +512,8 @@ def test_g4s1_loader_has_no_caller_path_search_or_authority_override(override, v
         controls.load_live_safety_artifact(**{override: value})
 
 
-@pytest.mark.parametrize("unsafe", ["missing", "ordinary", "runner_write", "owner", "reparse", "identity",
-    "parent_write", "ancestor_reparse", "wrong_host", "wrong_runner", "source", "dirty", "synthetic_scope", "synthetic_e4"])
+@pytest.mark.parametrize("unsafe", ["missing", "ordinary", "owner", "reparse", "identity",
+    "ancestor_reparse", "wrong_host", "wrong_runner", "source", "dirty", "synthetic_scope", "synthetic_e4"])
 def test_g4s1_fixed_loader_reuses_all_trust_and_context_checks(tmp_path, monkeypatch, unsafe):
     paths, grant, approved, _, value, original = safety_host_fixture(tmp_path, monkeypatch)
     if unsafe == "missing":
@@ -757,15 +765,15 @@ def test_offline_source_reads_exact_record_and_rejects_missing_or_malformed(tmp_
 
 
 def test_fixed_known_folder_and_missing_host_fail_closed(tmp_path, monkeypatch):
-    known_folder = controls._programdata_known_folder
+    known_folder = lambda: controls._windows_known_folder("f1b32785-6fba-4fcf-9d55-7b8e7f157091")
     if os.name == "nt":
-        actual = controls._programdata_known_folder()
+        actual = controls._localappdata_known_folder()
         assert actual.is_absolute()
-        monkeypatch.setenv("ProgramData", str(tmp_path))
-        assert controls._programdata_known_folder() == actual
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+        assert controls._localappdata_known_folder() == actual
         assert controls.process_runner_sid().startswith("S-1-")
-        assert controls._windows_path_facts(actual).is_directory
-    monkeypatch.setattr(controls, "_programdata_known_folder", lambda: tmp_path)
+        assert actual == controls.fixed_host_paths().root.parent.parent
+    monkeypatch.setattr(controls, "_localappdata_known_folder", lambda: tmp_path)
     paths = controls.fixed_host_paths()
     assert paths.campaign == tmp_path / "AIOps/Diagnostic/authority/campaign.json"
     assert paths.approved_input == tmp_path / "AIOps/Diagnostic/authority/approved_input.json"
@@ -776,17 +784,17 @@ def test_fixed_known_folder_and_missing_host_fail_closed(tmp_path, monkeypatch):
     with pytest.raises(TypeError):
         controls.fixed_host_paths(tmp_path)
     with monkeypatch.context() as patch:
-        patch.setattr(controls, "_programdata_known_folder", known_folder)
+        patch.setattr(controls, "_localappdata_known_folder", known_folder)
         patch.setattr(controls, "os", SimpleNamespace(name="posix"))
         with pytest.raises(DiagnosticDenied, match="Windows"):
-            controls._programdata_known_folder()
+            controls._localappdata_known_folder()
 
 
 def _fake_host_facts(path, *, runner="S-1-5-21-100", unsafe=None):
     directory = path.suffix not in (".json", ".sqlite")
     aces = (("S-1-5-32-544", 0x10000000, 0), (runner, 0x00120089, 0))
     if path.name in ("state", "attempts.sqlite"):
-        aces = (("S-1-5-32-544", 0x10000000, 0), (runner, 0x00120117, 0))
+        aces = (("S-1-5-32-544", 0x10000000, 0), (runner, 0x001301bf, 3 if path.name == "state" else 0))
     if unsafe == "ordinary":
         aces += (("S-1-5-32-545", 0x00000002, 0),)
     if unsafe == "runner_write":
@@ -801,11 +809,11 @@ def _fake_host_facts(path, *, runner="S-1-5-21-100", unsafe=None):
 @contextmanager
 def _fake_token(runner="S-1-5-21-100"):
     yield 1, controls.WindowsTokenFacts(runner, (("S-1-5-32-545", 7),),
-                                        (), ("SeChangeNotifyPrivilege",), False)
+                                        (), (("SeChangeNotifyPrivilege", 2),), False)
 
 
 @pytest.mark.parametrize("target,unsafe", [
-    ("root", "ordinary"), ("authority", "runner_write"),
+    ("root", "ordinary"), ("authority", "ordinary"),
     ("campaign", "ordinary"), ("approved_input", "reparse"),
     ("state", "reparse"), ("attempts", "ordinary"),
 ])
@@ -837,7 +845,7 @@ def test_host_policy_rejects_wrong_sid_owner_and_path_shape(tmp_path, monkeypatc
     runner = "S-1-5-21-100"
     monkeypatch.setattr(controls, "_effective_token", _fake_token)
     monkeypatch.setattr(controls, "_windows_path_facts", lambda path, token=None: _fake_host_facts(path))
-    assert len(controls.validate_host_paths(paths, runner)) == 10
+    assert len(controls.validate_host_paths(paths, runner)) == 9
     with pytest.raises(DiagnosticDenied, match="fixed"):
         controls.validate_host_paths(replace(paths, attempts=tmp_path / "other.sqlite"), runner)
     monkeypatch.setattr(controls, "_windows_path_facts", lambda path, token=None: controls.WindowsPathFacts(
@@ -922,7 +930,7 @@ def test_e4_artifact_rejects_record_or_approved_input_mismatch(change):
 def test_e4_fixed_host_loader_reads_existing_protected_artifact(tmp_path, monkeypatch):
     paths, grant, approved, _ = e4_host_fixture(tmp_path, monkeypatch)
     assert paths.sdk_request_evidence == paths.authority / "sdk_request_evidence.json"
-    assert len(controls.validate_host_paths(paths, "S-1-5-21-100")) == 10
+    assert len(controls.validate_host_paths(paths, "S-1-5-21-100")) == 9
     binding = controls.load_live_binding()
     assert binding.record == grant and binding.approved_input == approved
     assert binding.sdk_byte_evidence is not None
@@ -951,8 +959,8 @@ def test_e4_fixed_host_loader_rejects_invalid_evidence_payload(
 
 
 @pytest.mark.parametrize("unsafe", [
-    "missing", "ordinary", "runner_write", "owner", "reparse", "identity",
-    "parent_write", "caller_path",
+    "missing", "ordinary", "owner", "reparse", "identity",
+    "caller_path",
 ])
 def test_e4_fixed_host_loader_rejects_untrusted_source(tmp_path, monkeypatch, unsafe):
     paths, _, _, original_facts = e4_host_fixture(tmp_path, monkeypatch)
@@ -990,57 +998,38 @@ def test_e4_fixed_host_loader_rejects_untrusted_source(tmp_path, monkeypatch, un
 
 @pytest.mark.parametrize("changes", [
     {"groups": (("S-1-5-32-544", 7),)},
-    {"groups": (("S-1-5-32-544", 0x10),)},
-    {"groups": (("S-1-5-32-545", 0x10),)},
     {"restricted_sids": ("S-1-1-0",)},
-    {"privileges": ("SeRestorePrivilege",)},
-    {"privileges": ("SeUnknownPrivilege",)},
+    {"privileges": (("SeRestorePrivilege", 0),)},
+    {"privileges": (("SeChangeNotifyPrivilege", 8),)},
     {"groups": (("S-1-5-32-545", 0x10000000),)},
     {"elevated": True},
 ])
 def test_effective_token_rejects_admin_restriction_and_privilege(changes):
     safe = controls.WindowsTokenFacts("S-1-5-21-100", (("S-1-5-32-545", 7),),
-                                     (), ("SeChangeNotifyPrivilege",), False)
+                                     (), (("SeChangeNotifyPrivilege", 2),), False)
     with pytest.raises(DiagnosticDenied):
         controls._validate_token_facts(replace(safe, **changes), safe.user_sid)
 
 
-def test_effective_rights_override_allow_ace_scan(tmp_path):
-    path = tmp_path / "campaign.json"
-    base = WindowsPathFacts("S-1-5-32-544",
-                            (("S-1-5-21-100", 0x00120089, 0),),
-                            (1, 2), False, False, 0)
-    with pytest.raises(DiagnosticDenied, match="required host access"):
-        controls._validate_path_facts(path, base, "S-1-5-21-100", directory=False)
-    with pytest.raises(DiagnosticDenied, match="can alter"):
-        controls._validate_path_facts(path, replace(base, effective_rights=0x3),
-                                      "S-1-5-21-100", directory=False)
-    with pytest.raises(DiagnosticDenied, match="generic rights"):
-        controls._validate_path_facts(path, replace(
-            base, allowed_aces=(("S-1-5-21-100", 0x80000001, 0),),
-            effective_rights=0x1), "S-1-5-21-100", directory=False)
+def test_local_owner_permissions_and_untrusted_writes(tmp_path):
+    runner="S-1-5-21-100"
+    base=WindowsPathFacts(runner, ((runner, 0x1F01FF, 3),), (1,2), False, False, 0x1F01FF)
+    controls._validate_path_facts(tmp_path/"campaign.json",base,runner,directory=False,_prototype_local=True)
+    with pytest.raises(DiagnosticDenied,match="required host access"):
+        controls._validate_path_facts(tmp_path/"campaign.json",replace(base,effective_rights=0),runner,directory=False,_prototype_local=True)
+    with pytest.raises(DiagnosticDenied,match="unauthorized principal"):
+        controls._validate_path_facts(tmp_path/"campaign.json",replace(base,
+            allowed_aces=base.allowed_aces+(("S-1-5-32-545",2,0),)),runner,directory=False,_prototype_local=True)
 
 
-def test_protected_directories_reject_effective_file_delete_child(tmp_path):
-    runner = "S-1-5-21-100"
-    read_only = WindowsPathFacts("S-1-5-32-544",
-                                 ((runner, 0x00120089, 0),),
-                                 (1, 2), True, False, 0x1)
-    for name, rights in (("authority", 0x41), ("authority", 0x40),
-                         ("AIOps", 0x41)):
-        with pytest.raises(DiagnosticDenied, match="can alter"):
-            controls._validate_path_facts(tmp_path / name,
-                                          replace(read_only, effective_rights=rights),
-                                          runner, directory=True)
-    controls._validate_path_facts(tmp_path / "authority", read_only,
-                                  runner, directory=True)
-    state = replace(read_only, effective_rights=0x3)
-    controls._validate_path_facts(tmp_path / "state", state, runner,
-                                  directory=True, writable_state=True)
-    with pytest.raises(DiagnosticDenied, match="can alter"):
-        controls._validate_path_facts(tmp_path / "state",
-                                      replace(state, effective_rights=0x43), runner,
-                                      directory=True, writable_state=True)
+def test_local_state_journal_permissions(tmp_path):
+    runner="S-1-5-21-100"
+    base=WindowsPathFacts(runner, ((runner,0x1F01FF,3),), (1,2), True, False, 0x1F01FF)
+    controls._validate_journal_acl(base,runner)
+    with pytest.raises(DiagnosticDenied,match="journal permissions"):
+        controls._validate_journal_acl(replace(base,allowed_aces=((runner,0x1F01FF,0),)),runner)
+    with pytest.raises(DiagnosticDenied,match="unauthorized principal"):
+        controls._validate_journal_acl(replace(base,allowed_aces=base.allowed_aces+(("S-1-1-0",2,9),)),runner)
 
 
 def test_actual_windows_thread_impersonation_is_denied():

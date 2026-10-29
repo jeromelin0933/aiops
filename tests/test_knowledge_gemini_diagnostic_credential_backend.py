@@ -537,7 +537,8 @@ def _native_preflight_facts(scope, operation):
     formal = controls._programdata_known_folder() / "AIOps" / "Diagnostic"
     if (not root.is_absolute() or root == Path(root.anchor) or str(root).startswith("\\\\")
             or root != root.resolve(strict=True) or not root.is_dir()
-            or root == repo or repo in root.parents or root == formal or formal in root.parents):
+            or root == repo or repo in root.parents or root == formal or formal in root.parents
+            or root == controls.fixed_host_paths().root or controls.fixed_host_paths().root in root.parents):
         raise _NativeDenied("native fixture root unavailable")
     if operation in ("protect", "unprotect", "bind") and scope.role == "unauthorized":
         raise _NativeDenied("native operation not permitted for actor")
@@ -815,7 +816,7 @@ def test_bv01_guard_mock_context_mismatch_cannot_reach_dpapi(bv01_isolation, mon
     def token():
         token_entries.append(True)
         yield 0, controls.WindowsTokenFacts("S-1-5-21-999" if mismatch == "actor" else scope.actor_sid,
-            (("S-1-5-32-545", 7),), (), ("SeChangeNotifyPrivilege",), False)
+            (("S-1-5-32-545", 7),), (), (("SeChangeNotifyPrivilege", 2),), False)
     monkeypatch.setattr(controls, "_effective_token", token)
     monkeypatch.setattr(controls, "_programdata_known_folder", lambda: Path("C:/BV01-MOCK-PROGRAMDATA"))
     with pytest.raises(_NativeDenied):
