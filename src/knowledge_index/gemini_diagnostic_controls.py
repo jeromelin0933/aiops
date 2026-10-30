@@ -66,6 +66,19 @@ COUNTING_INPUT = "1f7c73a6895e0c0b9b089e6ab97bbf720cb3b8151615764d9eb96a63f93a2f
 COUNTING_CORPUS = "a104796f2e0982e0b591bfe0255a0338cd8468cc0f3d1a0e52b2045026dd7840"
 COUNTING_BODY = "e8b294325b71c9b6732ecd16a05b6e89d8631be2159dcfac5c6963bae4a701cc"
 COUNTING_URL = "https://generativelanguage.googleapis.com/v1/models/gemini-embedding-2:countTokens"
+SINGLE_PROBE_BASIS = "SINGLE_DOCUMENT_PROBE_V1"
+SINGLE_PROBE_PM_DECISION = "APPROVE WITH MODIFICATION — Direct Embedding Single-Input Probe"
+SINGLE_PROBE_RISK_CAP = 8192
+SINGLE_PROBE_PAYLOAD = "b80a0c066b0bae79a77d5b9bcc6277ee47e0d196f6d3b8cbefe7017cd7f1c6ba"
+
+
+def is_single_document_probe(record) -> bool:
+    # Selection is NOT authority: the protected record, safety artifact, fixed
+    # input and E4 must independently match before reservation/credential use.
+    return (record.purpose == "CONTROLLED_PROVIDER_DIAGNOSTIC"
+            and record.bounds_basis == SINGLE_PROBE_BASIS)
+
+
 _COUNTING_OUTCOMES = frozenset(("COUNTING_RESULT_OBTAINED", "CREDENTIAL_UNAVAILABLE",
     "CREDENTIAL_INVALID", "CREDENTIAL_PROFILE_MISMATCH", "AUTHORIZATION_DENIED", "SOURCE_MISMATCH",
     "INPUT_MISMATCH", "PAYLOAD_MISMATCH", "RUNNER_CONFLICT", "INVALID_PROVIDER_RESPONSE",
@@ -831,7 +844,17 @@ class DiagnosticAuthorizationRecord:
                 if type(value) is not str or not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", value):
                     raise DiagnosticDenied("counting project or profile revision is invalid", code="CREDENTIAL_PROFILE_MISMATCH")
         else:
-            if self.project_identity is not None or self.credential_profile_revision is not None:
+            if is_single_document_probe(self):
+                if (self.input_kind != "document" or self.input_commitment != COUNTING_INPUT
+                        or self.maximum_invocations != 1 or self.maximum_items != 1
+                        or self.maximum_item_bytes != 528 or self.maximum_usage_units != SINGLE_PROBE_RISK_CAP
+                        or self.maximum_item_tokens != SINGLE_PROBE_RISK_CAP
+                        or self.maximum_aggregate_tokens != SINGLE_PROBE_RISK_CAP):
+                    raise DiagnosticDenied("single document probe scope mismatch", code="INPUT_MISMATCH")
+                for value in (self.project_identity, self.credential_profile_revision):
+                    if type(value) is not str or not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", value):
+                        raise DiagnosticDenied("probe project or profile revision is invalid", code="CREDENTIAL_PROFILE_MISMATCH")
+            elif self.project_identity is not None or self.credential_profile_revision is not None:
                 raise DiagnosticDenied("counting-only authorization fields are not embedding authority")
             _positive(self.maximum_item_tokens, "maximum_item_tokens")
             _positive(self.maximum_aggregate_tokens, "maximum_aggregate_tokens")
@@ -1048,6 +1071,11 @@ _FREE_TIER_SCHEMA = dict(
                             source=_SAFETY_SOURCE),
 )
 
+# Only the fully validated single-probe metadata uses this operation-specific
+# union. UNKNOWN is preserved, never coerced to zero/unlimited or verified quota.
+_PROBE_FREE_SCHEMA = dict(_FREE_TIER_SCHEMA,
+    quota_evidence=dict(rpm="PROBE_QUOTA", tpm="PROBE_QUOTA", rpd="PROBE_QUOTA", source=_SAFETY_SOURCE))
+
 # Operation-specific appendix in the existing protected safety artifact. Unknown
 # system limits are explicit metadata, not invented numerical counting quotas.
 _COUNTING_SAFETY_SCHEMA = {key: value for key, value in _SAFETY_SCHEMA.items()
@@ -1061,6 +1089,22 @@ _COUNTING_SAFETY_SCHEMA["binding"] = dict(_SAFETY_SCHEMA["binding"], request_url
 _COUNTING_FREE_SCHEMA = dict(_FREE_TIER_SCHEMA,
     quota_evidence=dict(rpm=("UNKNOWN",), tpm=("UNKNOWN",), rpd=("UNKNOWN",), source=_SAFETY_SOURCE))
 _COUNTING_SAFETY_SCHEMA["free_tier_evidence"] = _COUNTING_FREE_SCHEMA
+
+# Same host-published safety artifact; UNKNOWN limits are not provider numbers.
+_PROBE_SAFETY_SCHEMA = {k: v for k, v in _SAFETY_SCHEMA.items() if k != "token_evidence"}
+_PROBE_SAFETY_SCHEMA["provider_limits"] = dict(
+    item_limit=("UNKNOWN",), per_item_token_limit=("UNKNOWN",),
+    aggregate_token_limit=("UNKNOWN",), payload_byte_limit=("UNKNOWN",), source=_SAFETY_SOURCE)
+_PROBE_SAFETY_SCHEMA["single_probe"] = dict(
+    schema_version=(1,), pm_decision=(SINGLE_PROBE_PM_DECISION,),
+    model_input_limit=(8192,), exact_input_tokens=("NOT VERIFIED",),
+    admission_basis=("PM_ACCEPTED_MODEL_LIMIT_RISK_CAP",),
+    outbound_eligibility=("APPROVED_SYNTHETIC_NON_SECRET",),
+    project_identity="ID128", corpus_commitment=(COUNTING_CORPUS,),
+    chunk_identity=(COUNTING_CHUNK,), global_ordinal=(52,),
+    input_commitment=(COUNTING_INPUT,), envelope_bytes=(528,),
+    payload_bytes=(671,), payload_sha256=(SINGLE_PROBE_PAYLOAD,),
+    truncation=("TRUNCATION VERIFICATION LIMITATION",), source=_SAFETY_SOURCE)
 
 # No live batch size/default is supplied by code. This plan lives in the SAME
 # protected safety file; its digest is the PM record's existing bounds_basis.
@@ -1150,6 +1194,11 @@ def _validate_safety_wire(value: Any, rule: Any = _SAFETY_SCHEMA) -> None:
     if rule == "I64+":
         _positive(value, "safety integer")
         return
+    if rule == "PROBE_QUOTA":
+        if type(value) is str and value == "UNKNOWN":
+            return
+        _positive(value, "single probe quota")
+        return
     if rule == "I64_NONNEGATIVE":
         if type(value) is not int or not 0 <= value <= 2**63 - 1:
             raise DiagnosticDenied("safety nonnegative integer is invalid")
@@ -1197,6 +1246,7 @@ class DiagnosticSafetyArtifact:
             value = json.loads(data.decode("utf-8"), object_pairs_hook=_safety_unique,
                                parse_constant=constant)
             counting = type(value) is dict and value.get("operation") == COUNTING_OPERATION
+            probe = type(value) is dict and "single_probe" in value
             if counting:
                 _validate_safety_wire(value, _COUNTING_SAFETY_SCHEMA)
             # Optional exact-input bound table. Old metadata remains readable,
@@ -1206,7 +1256,10 @@ class DiagnosticSafetyArtifact:
             plan = value.pop("sequential_batch_plan", None) if type(value) is dict else None
             batch_e4 = value.pop("batch_sdk_evidence", None) if type(value) is dict else None
             _validate_safety_wire(value, {k: v for k, v in _COUNTING_SAFETY_SCHEMA.items()
-                                         if k != "free_tier_evidence"} if counting else _SAFETY_SCHEMA)
+                                         if k != "free_tier_evidence"} if counting else
+                                 _PROBE_SAFETY_SCHEMA if probe else _SAFETY_SCHEMA)
+            if probe and (counting or bounds is not None or plan is not None or batch_e4 is not None):
+                raise DiagnosticDenied("single probe cannot inherit counting, token proof or batch authority")
             if plan is not None or batch_e4 is not None:
                 parsed_plan = DiagnosticBatchPlan.from_mapping(plan)
                 if type(batch_e4) is not list or len(batch_e4) != len(parsed_plan.ranges):
@@ -1216,7 +1269,8 @@ class DiagnosticSafetyArtifact:
                 value["sequential_batch_plan"], value["batch_sdk_evidence"] = plan, batch_e4
             pricing = value["pricing_evidence"]
             if pricing["price_tier"] == "FREE_TIER_TEXT_V1":
-                _validate_safety_wire(free, _COUNTING_FREE_SCHEMA if counting else _FREE_TIER_SCHEMA)
+                _validate_safety_wire(free, _COUNTING_FREE_SCHEMA if counting else
+                                      _PROBE_FREE_SCHEMA if probe else _FREE_TIER_SCHEMA)
                 context = free["account_context"]
                 credential = value["credential_binding"]
                 if (pricing["rate_micro_units_per_million_tokens"] != 0
@@ -1229,6 +1283,8 @@ class DiagnosticSafetyArtifact:
                 raise DiagnosticDenied("Paid Tier requires positive pricing and no Free Tier evidence")
             if counting and pricing["price_tier"] != "FREE_TIER_TEXT_V1":
                 raise DiagnosticDenied("counting requires the approved Free Tier pricing context")
+            if probe and pricing["price_tier"] != "FREE_TIER_TEXT_V1":
+                raise DiagnosticDenied("single probe requires the approved Free Tier context")
             if bounds is not None:
                 if type(bounds) is not dict or not 1 <= len(bounds) <= 128:
                     raise DiagnosticDenied("accepted token bounds are invalid")
@@ -1248,7 +1304,8 @@ class DiagnosticSafetyArtifact:
                     or _safety_time(value["publication"]["published_at"]) > start
                     or value["lifecycle_state"] != "ACTIVE"):
                 raise DiagnosticDenied("safety publication, validity or revocation is invalid")
-            for key in (("provider_limits", "pricing_evidence") if counting
+            for key in (("provider_limits", "pricing_evidence", "single_probe") if probe else
+                        ("provider_limits", "pricing_evidence") if counting
                         else ("token_evidence", "provider_limits", "pricing_evidence")):
                 source = value[key]["source"]
                 if not _safety_time(source["effective_from"]) <= start < end <= _safety_time(source["expires_at"]):
@@ -1318,6 +1375,11 @@ class DiagnosticSafetyArtifact:
                 raise DiagnosticDenied("counting safety identity mismatch", code="INPUT_MISMATCH")
             self.require_free_tier_permission(record)
             return
+        if is_single_document_probe(record):
+            self.require_single_probe(record, approved, e4)
+            return
+        if "single_probe" in value:
+            raise DiagnosticDenied("probe evidence is not full embedding authority")
         if value.get("operation") == COUNTING_OPERATION:
             raise DiagnosticDenied("counting evidence cannot authorize embedding", code="OPERATION_MISMATCH")
         count = len(approved.identities)
@@ -1400,6 +1462,28 @@ class DiagnosticSafetyArtifact:
                     dict(bounds), sort_keys=True, separators=(",", ":")).encode()).hexdigest()):
             raise DiagnosticDenied("accepted safety evidence and trusted credential metadata are not provisioned")
         return bounds
+
+    def require_single_probe(self, record, approved=None, e4=None):
+        record.__post_init__()
+        value = self._validated_fields()
+        probe = value.get("single_probe")
+        if (not is_single_document_probe(record) or probe is None
+                or value["binding"]["authorization_record_sha256"] != authorization_record_digest(record)
+                or value["binding"]["bounds_basis"] != SINGLE_PROBE_BASIS
+                or value["binding"]["input_commitment"] != COUNTING_INPUT
+                or probe["project_identity"] != record.project_identity
+                or value["credential_binding"]["secret_revision"] != record.credential_profile_revision
+                or probe["payload_sha256"] != value["e4_reference"]["sdk_body_sha256"]
+                or probe["payload_bytes"] != value["e4_reference"]["sdk_body_bytes"]):
+            raise DiagnosticDenied("single probe authority or payload binding mismatch")
+        if approved is not None and (approved.kind != "document"
+                or approved.identities != (COUNTING_CHUNK,) or approved.commitment != COUNTING_INPUT):
+            raise DiagnosticDenied("single probe input mismatch")
+        if e4 is not None and (e4.sdk_body_sha256 != probe["payload_sha256"]
+                or e4.sdk_body_bytes != probe["payload_bytes"] or e4.output_dimensionality != 768):
+            raise DiagnosticDenied("single probe SDK binding mismatch")
+        self.require_free_tier_permission(record)
+        return probe
 
     def require_free_tier_permission(self, record: DiagnosticAuthorizationRecord) -> str | None:
         """Bind protected data-use approval to the actual PM campaign authority.

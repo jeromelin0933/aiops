@@ -28,8 +28,16 @@
 | Prototype Local Host Amendment | v1.4-based Approved — Prototype Local Host Simplification Narrow Amendment；Approval Date：2026-10-29；baseline version及既有Approved Amendments不變。 |
 | Prototype Local Host Approval Record | Approval Authority：SPEC Lead；Decision：APPROVE — SPEC-014 Prototype Local Host Simplification Narrow Amendment；正式採納Independent Document Audit：PASS — SPEC-014 PROTOTYPE LOCAL HOST SIMPLIFICATION INDEPENDENT DOCUMENT AUDIT；Findings：NONE。PM Authority：APPROVE — Prototype Local Host Simplification。核准原49行新增範圍，Normative Contract不變；文件批准不等於Implementation Acceptance、Host初始化或Live授權。 |
 | Prototype Local Host Authority／Scope | PM：APPROVE — Prototype Local Host Simplification；取代先前Option A中要求完整保留Windows Host Validator的部分。正式核准§24.2適用性、§24.6／§24.6.1 Host／SQLite部署及AC-014-AD直接相關補充；起草時僅授權文件的歷史紀錄保留。後續工程依SPEC Lead獨立Implementation Authorization執行，不由文件批准取得Implementation Acceptance、Host初始化或Live授權；不虛構PM Decision ID。 |
+| Single Direct Document Embedding Probe Amendment | v1.4-based APPROVED — SPEC-014 Single Direct Embedding Probe Narrow Amendment；Approval Authority：SPEC Lead；Approval Date：2026-10-30；Implementation ACCEPTED；B-01 Independent Narrow Re-Audit PASS／Findings NONE；baseline version不變。 |
+| Single Probe PM Authority | APPROVE WITH MODIFICATION — Direct Embedding Single-Input Probe；授權本機隔離Candidate的最小契約／離線工程，不構成Google Live Campaign Authorization。 |
 
 ### Change History
+
+**Single Probe Formal Approval — 2026-10-30。** Approval Authority：AIOps SPEC Lead；PM Authority：APPROVE WITH MODIFICATION — Direct Embedding Single-Input Probe；Decision：APPROVE — SPEC-014 Single Direct Embedding Probe Narrow Amendment；ACCEPT — Single Direct Embedding Probe Implementation；CLOSE — B-01 Independent Narrow Re-Audit PASS／Findings NONE。本次正式採納既有獨立審查，未重新執行或虛構Audit；僅更新Approval Metadata／History／Status Labels，已審查技術契約不變。Git Checkpoint待Human執行；Google Live NOT AUTHORIZED。
+
+**Historical Single Probe draft record（以下原文保留，不代表目前仍Pending）：**
+
+**Single Direct Document Embedding Probe — Competition P0（2026-10-30）：DRAFT — SPEC Lead Approval／Affected-scope Independent Contract and Implementation Audit Pending。** PM Authority：APPROVE WITH MODIFICATION — Direct Embedding Single-Input Probe；SPEC Lead授權隔離Candidate中的最小文件／Source／Tests修訂，不構成正式Amendment Approval或Live Authorization。原Approved Baseline、Controlled Batching／Counting／Host Approval及歷史紀錄保留；F1 Document Audit BLOCK、Option B Scope Reduction、Integrated Audit X1 BLOCK與最新Option B／Counting／X1 Development STOP決策均保留為歷史，不帶入停止中的Cross-operation自動豁免，不新增PM Decision ID。
 
 | Version | Date | Status | Change |
 |---|---|---|---|
@@ -1059,6 +1067,8 @@ Candidate C只接受approved shared non-secret Profile／capability reference；
 
 ## AC-014-AD — Provider Invocation Safety
 
+**Single Direct Document Embedding Probe — Approved acceptance。** 依§24.2及§24.6.1的受控Probe Binding：P1從正式Approved Corpus重建Ordinal 52完整Envelope；P2使用Pinned SDK實際Embedding Route／768設定／Payload Bytes及SHA-256；P3一筆Input以獨立Input與Payload Commitment綁定；P4有效PM Campaign／Bounds／Budget下允許Exactly 1 Document且不因Exact Token Count未知而拒絕；P5 Mock Response驗證1→1、768、Finite／Nonzero及事前Tolerance的Normalization／Mapping；P6保留8192 Admission Risk Cap預占、1 micro-USD Hold與原始Usage／Outcome。負向：未授權Scope、Wrong Source／Chunk／Payload／Model／SDK／Project／Profile、缺失授權或超出一筆／一次、無效Cost／Usage Budget均BLOCK；Duplicate／UNKNOWN／TIMEOUT／IN_FLIGHT與真正Embedding UNKNOWN Usage維持Fence。Reservation Persistence Failure在Credential／Transport前拒絕（Calls=0）；Transport後的Persistence Failure如實保存呼叫可能性並停止，不退款／重送。未核准Caller缺少原Token／Payload Evidence仍Fail Closed；Probe不自動觸發54→54或任何第二Request，不構成Full Compatibility／Knowledge／G8／Formal PASS。所有驗證使用隔離Store及Synthetic Credential／Mock Transport，正式Store不讀寫。
+
 Embedding／provider contract tests驗證timeout、request／batch bound、rate／quota及cost／resource protection與typed exhaustion facts。SDK hidden retry停用或可證明計入唯一Runtime-authorized budget；Candidate C沒有durable retry scheduler、clock或第二budget。
 
 **Controlled Batching amendment — Approved：** 新模型依§24.2驗證固定Sequential Synchronous Batching、每request最多一次physical attempt／30秒、campaign累積限額及全域54→54完整mapping／order；partial result、未授權split或UNKNOWN／TIMEOUT後自動繼續均不得通過。既有domain／retry authority不變。
@@ -1203,6 +1213,16 @@ Decision ID：`PM-RAG-EMBEDDING-MIGRATION-20261022`；Approval Date：`2026-10-2
 
 ## 24.2 Request Contract與Compatibility Evidence
 
+**Single Direct Document Embedding Probe — Competition P0（Approved exception）。** Independent Counting不是前置條件。既有`CONTROLLED_PROVIDER_DIAGNOSTIC`可在完整Compatibility之前，另行取得PM Live授權後執行固定單筆Document Probe；正式Document Diagnostic及固定Batch Plan仍須Six Approved Sources、完整54 Unique Ordered Inputs、逐筆及全域Mapping／Order、768、Finite／Nonzero／Normalization與完整Provenance／Campaign Bounds。單筆例外不是把54→54改成1→1，也不提供Knowledge Build／Activation Authority。
+
+Probe固定Google Gemini Developer API、`gemini-embedding-2`、Stable `v1`、`google-genai==2.25.0`、Output Dimension 768；同步`POST /v1/models/gemini-embedding-2:batchEmbedContents`內恰有一個獨立`types.Content`。Input固定Approved Corpus的Global Ordinal 52、Source `ops.shared-database-network-dependency-interruption`、Version `1.0`、Chunk `kchk_5efd99ff50a380e0f983cc4193bd115f0b19072b7c03054af0165c561db4eb89`；由Manifest／Source重新推導`title: {approved document_id} | text: {chunk_content}`及完整Corpus Commitment `a104796f2e0982e0b591bfe0255a0338cd8468cc0f3d1a0e52b2045026dd7840`。Exact Envelope 528 UTF-8 bytes、Single-input Commitment `1f7c73a6895e0c0b9b089e6ab97bbf720cb3b8151615764d9eb96a63f93a2f12`須重驗。Pinned SDK實際Embedding Body為671 bytes、SHA-256 `b80a0c066b0bae79a77d5b9bcc6277ee47e0d196f6d3b8cbefe7017cd7f1c6ba`，亦須在受控E4及Final Guard重驗；Input Commitment不等於SDK Payload Commitment，不沿用Counting的591-byte Body或Hash。SDK／Content／Route／Bytes／Hash不符即停止，不偷偷更新Golden Evidence。
+
+**PM接受的單筆有限資源風險例外。** 本固定Probe不要求事前Exact Token Count或證明所有未公開Provider System Quota。官方模型Input Limit 8192（https://ai.google.dev/gemini-api/docs/models/gemini-embedding-2）僅作PM接受的`PM_ACCEPTED_MODEL_LIMIT_RISK_CAP`，不是本Input已驗證Token Count、Aggregate Provider Guarantee或實際Usage。Exact Input Token Count=`NOT VERIFIED`；Provider Usage待可信Response；未驗證Item／Aggregate／Payload System Limits明記`UNKNOWN`，不得捏造數字。未知Exact Count或未公開System Limits不單獨否決具完整受控Probe Binding的本例外；完整54→54及其他Embedding仍適用原Token／Provider Bounds規則，不採Bytes→Tokens、Approximate Tokenizer、Multiplier、隱藏Counting或全面關閉Validator。
+
+沿用既有Budget欄位：僅本Probe的`maximum_item_tokens`、`maximum_aggregate_tokens`、`maximum_usage_units`固定8192，單位語意是Admission Risk Cap；SQLite `usage_reserved=8192`，不是Observed Tokens。`usage_observed`僅由既有可信Provider Usage Receipt填入，缺失保持UNKNOWN；不得把Risk Cap填為已觀測Usage。最大Invocation／Item均1，`maximum_item_bytes=528`；PM Record另須指定有限正值Payload Bound（涵蓋實際SDK與既有保守Serialization檢查，且不超過現有本地1,000,000-byte cap），並由E4精確綁定671-byte Body。此本地上限不是Google Provider Limit。Free Tier `FREE_TIER_TEXT_V1`的Unit Price=0，既有每Attempt 1 micro-USD Internal Hold及有限正值Campaign Cost Limit均保留；Hold不是Google Billing或已證明的最壞成本。缺失／不一致的授權、Payload、有限預算、Source／Profile或Reservation仍Fail Closed。
+
+**TRUNCATION VERIFICATION LIMITATION。** Pinned Developer API Converter不支援`auto_truncate`參數；保持原Envelope／Config，不傳送不存在的No-truncation控制，不改模型或Endpoint。實際Request必須是完整核准Content；可確認本機未截短，不能據此保證Provider未截斷。保存可取得的非敏感Response／Usage Provenance與限制標示，不保存Raw Response Body；結果僅`PROBE OBSERVATION ONLY`，不宣稱Full Input／54→54 Compatibility PASS。Provider拒絕、超限、429、不支援、Timeout、Response或Persistence異常即STOP／Typed Finding／No Retry／No Fallback，不縮短輸入、不換Project、不追加Request。
+
 **Controlled Batching amendment — Approved。** 本節下列request/cardinality／bounds／verification修訂僅採本次PM核准方向，不宣告Google已保證任何batch size，也不構成Live Authorization。
 
 **Operation applicability（COUNTING_OBSERVATION approved amendment）：** 本節既有document／query、54→54、vector／768／normalization、batch與Embedding token admission條款維持適用於Embedding Diagnostic及Knowledge相關流程。獨立`COUNTING_OBSERVATION`僅適用本節末段及§24.6.1明列的Counting scope／minimum admission，不以單筆Counting取代上述契約；Counting不是隱藏附加API呼叫，也不因本amendment而取得Live授權。
@@ -1273,6 +1293,8 @@ Calibration freeze之後，Candidate C在新授權scope內建立新的immutable 
 
 ## 24.6 Gate Sequence與Slice 0 Boundary
 
+**Competition P0 Single Probe — Approved。** §24.2單筆Probe是完整Provider Compatibility前的限定Observation，不依賴Independent Counting；不取代完整54→54、Knowledge或Formal Acceptance。準備及離線Implementation授權不等於Google Live Authorization，Default Live DENIED。本例外完成後停止，不自動啟動Batch Campaign／Build／Calibration／Activation。
+
 **Prototype Host preparation — Draft：** 在另行取得本次Amendment正式Approval及實作／操作授權後，Host準備採§24.6.1末段五步驟，可由符合條件的Non-Elevated本機Runner完成Fresh初始化，不預設Administrator Bootstrap。此為既有Host readiness工作的精簡，不新增G／S／E Gate；Source checkpoint、首次PM Live Campaign Authorization及後續Provider Acceptance的獨立邊界不變。本輪僅文件草案，不能依本段執行初始化或Provider Call。
 
 **Scope Reset amendment — Approved 2026-10-28：** 下列原順序的安全／資料依賴保留，但Milestone A不要求每個微步驟各自audit或checkpoint。同一整合風險可合併affected regression與一次independent audit；不強制在已涵蓋相同風險的audit外再做獨立Cumulative Audit。Human Git Checkpoint依實際source/config revision及完整change set決定，可覆蓋多項相關修改。首次Live仍須鎖定exact clean committed execution revision；後續policy/config若變更，須記錄實際新revision並重評受影響evidence，不能rebind舊checkpoint或沿用stale證據。
@@ -1298,6 +1320,12 @@ Checkpoint A/B由Human建立；source/config不變可指同一commit，policy/co
 Slice 0只授權四份PRD／SPEC文件修改與documentation semantic verification；不執行source/config變更、provider diagnostic、calibration、AC-014-X、Docker／Chroma／Candidate-C/F mutation、activation或Formal Evaluation。Git mutations由Human執行。新migration implementation及全部execution evidence均未由本amendment完成；Formal Evaluation為NOT EXECUTED，Slots Consumed = 0。Independent Slice 0 audit尚待執行。
 
 ### 24.6.1 Controlled Provider Diagnostic — Minimum Necessary Controls（Additive）
+
+**Single Direct Document Embedding Probe — Approved minimum admission。** 僅受控PM Campaign Record的`purpose=CONTROLLED_PROVIDER_DIAGNOSTIC`與`bounds_basis=SINGLE_DOCUMENT_PROBE_V1`、固定Approved Input及同一Safety／E4 Binding共同決定Probe適用性；名稱／Marker／Caller Flag本身不是授權。沿用同一固定Host Authority、Credential Resolver、SQLite及Final Guard，不新增Runner／Store／Framework。Safety Artifact的版本化`single_probe`區段須明列PM「APPROVE WITH MODIFICATION — Direct Embedding Single-Input Probe」、8192 Model Limit與Risk Basis、Exact Tokens NOT VERIFIED、固定Source／Corpus／Chunk／Input／Envelope／SDK Payload Bytes與Hash、Project及Truncation Limitation，並與同一Authorization Digest／Profile Revision一致。不得挾帶Counting、Batch Plan或偽造的Exact-input Token Evidence取得本例外。
+
+PM Live Approval Reference、Campaign ID／有效時窗、Exact Clean Committed Source、Host／Runner、Google Project、非敏感Credential Profile Identity／Revision、Free Tier／Pricing與Synthetic Non-secret Outbound Evidence、Model／API／SDK、Input／Payload Commitment、最多一次Invocation／一筆Input、8192 Admission Risk Cap、有限正值Payload／Cost Bounds及Explicit Human Live Opt-in均必須有效。Project／Profile資料缺失不能以PM技術方向取代；本稿不產生有效Campaign Record或Final Cost Limit。Project／Revision使用既有Authorization欄位，僅限本Probe適用，其他Embedding既有規則不變。
+
+先Atomic Eligibility／Durable Reservation，再Credential Resolution，再Final Guard及一次同步Transport；Single Runner、30秒、Duplicate Prevention、全域UNKNOWN／TIMEOUT／IN_FLIGHT與Budget Fence不變，不採停止中的Option B Exemption。完成後只驗證並記錄單筆768維、Finite、Nonzero Norm、事前Tolerance內的Provider Normalization與Positional Mapping Observation；不以Response Count單獨證明內容Identity。缺失Usage保持UNKNOWN，會依既有Fence阻擋後續受保護操作；Counting結果或本Probe成功不自動清Fence、Adjudicate、Refund、Reset、Retry或Resume。Formal SQLite已初始化，Source更新不授權重建／Migration／平行Store；後續須Human Checkpoint及獨立Live授權。本Amendment已於2026-10-30由SPEC Lead正式核准、Implementation ACCEPTED，並採納既有Independent Audit及B-01 Narrow Re-Audit PASS／Findings NONE；Human Git Checkpoint待建立，Google Live NOT AUTHORIZED。
 
 **COUNTING_OBSERVATION applicability — Approved：** 下列原Controlled Provider Diagnostic purpose、完整54筆document scope、batch-plan、Embedding token／usage及vector驗收要求不改寫；只有本節末段明列的獨立Counting Operation適用差異，依Counting專用binding及minimum admission判讀。共用PM受控授權來源、exact clean source、host／runner、profile／account、atomic eligibility／reservation、secret safety及既有attempt authority不變；不得將Counting目的偽裝為`CONTROLLED_PROVIDER_DIAGNOSTIC`以繞過檢查。
 
