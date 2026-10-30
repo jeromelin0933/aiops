@@ -770,6 +770,75 @@ class ApprovedDiagnosticInput:
             raise DiagnosticDenied("approved diagnostic input does not match campaign")
 
 
+_P0_UNBLOCK_AUTHORITY = "PM-AIOPS-COMP-P0-UNBLOCK-20261030-01"
+_P0_SCOPE_AUTHORITY = "PM-AIOPS-COMPETITION-SINGLE-DEMO-20261030"
+_P0_HUMAN_REVIEW_REFERENCE = "SPECLEAD-SPEC014-D1-UNKNOWN-REVIEW-20261030-01"
+# One verified historical case, NOT a ledger, grant or generic adjudication registry.
+# Source/input association was explicitly confirmed by SPEC Lead; the old row
+# does not itself contain those bindings. Never infer them from a hash alone.
+_P0_HISTORY_ROW = MappingProxyType(dict(
+    campaign_id="spec014-direct-embed52-20261030-01",
+    request_id="cf02cd6e4ee94bd68f02dfbf99a75151", outcome="UNKNOWN", items=1,
+    usage_reserved=8192, cost_reserved=1, usage_observed="UNKNOWN", observation_json=None))
+
+
+def _p0_commitment(value) -> str:
+    return hashlib.sha256(json.dumps(dict(value), sort_keys=True, ensure_ascii=True,
+                                    separators=(",", ":")).encode()).hexdigest()
+
+
+_P0_HISTORY_ROW_SHA256 = _p0_commitment(_P0_HISTORY_ROW)
+_P0_HISTORY_EVIDENCE_SHA256 = _p0_commitment(dict(
+    row_sha256=_P0_HISTORY_ROW_SHA256,
+    source_revision="30b9e9e58edcf5f11722b25d4d160d26bb780320",
+    input_commitment=COUNTING_INPUT, body_sha256=SINGLE_PROBE_PAYLOAD,
+    authorization_sha256="eba336ba4c9345835b8a7b1358b48d60a8091b0eee9b7b01ef9fe98b87ff8edb",
+    observation_sha256="3bb6fc823cb4336867589a66495c4b342eda7dd1c9654557fb3e1d47f021a49e"))
+
+
+@dataclass(frozen=True, slots=True)
+class P0UnknownAttemptReview:
+    """Optional metadata in the SAME human-published campaign authorization.
+
+    No approval boolean or caller-selected history. Default absent means deny;
+    publication still requires actual Human Review and a separate PM live grant.
+    """
+    authority_reference: str
+    review_reference: str
+    reviewer_identity: str
+    recorded_at: str
+    historical_campaign_id: str
+    historical_request_id: str
+    historical_row_sha256: str
+    historical_evidence_sha256: str
+    target_campaign_id: str
+    target_pm_approval_reference: str
+
+    def matches_record(self, record) -> None:
+        for name in self.__dataclass_fields__:
+            value = getattr(self, name)
+            if type(value) is not str or not 1 <= len(value) <= 256 or value != value.strip():
+                raise DiagnosticDenied("P0 review metadata is invalid", code="HISTORICAL_REVIEW_MISMATCH")
+        if (self.authority_reference != _P0_UNBLOCK_AUTHORITY
+                or self.review_reference != _P0_HUMAN_REVIEW_REFERENCE
+                or self.historical_campaign_id != _P0_HISTORY_ROW["campaign_id"]
+                or self.historical_request_id != _P0_HISTORY_ROW["request_id"]
+                or self.historical_row_sha256 != _P0_HISTORY_ROW_SHA256
+                or self.historical_evidence_sha256 != _P0_HISTORY_EVIDENCE_SHA256
+                or self.target_campaign_id != record.campaign_id
+                or self.target_campaign_id == self.historical_campaign_id
+                or self.target_pm_approval_reference != record.pm_approval_reference
+                or self.target_pm_approval_reference in (
+                    _P0_UNBLOCK_AUTHORITY, _P0_SCOPE_AUTHORITY, "PM-SPEC014-DIRECT-EMBED-LIVE-20261030-01")
+                or self.reviewer_identity != record.spec_lead_identity
+                or record.purpose != "CONTROLLED_PROVIDER_DIAGNOSTIC"
+                or _timestamp(self.recorded_at) < _timestamp("2026-10-30T00:00:00+08:00")
+                or _timestamp(self.recorded_at) > datetime.now(timezone.utc)
+                or _timestamp(self.recorded_at) >= _timestamp(record.expires_at)):
+            raise DiagnosticDenied("P0 review is not bound to this independent live campaign",
+                                   code="HISTORICAL_REVIEW_MISMATCH")
+
+
 @dataclass(frozen=True, slots=True)
 class DiagnosticAuthorizationRecord:
     campaign_id: str
@@ -806,6 +875,7 @@ class DiagnosticAuthorizationRecord:
     normalization_tolerance: float | None
     project_identity: str | None = None
     credential_profile_revision: str | None = None
+    p0_unknown_review: P0UnknownAttemptReview | None = None
 
     def __post_init__(self) -> None:
         for field in (
@@ -820,6 +890,8 @@ class DiagnosticAuthorizationRecord:
                 raise DiagnosticDenied(f"{field} is invalid")
         if self.pm_approval_reference == "PM-RAG-EMBEDDING-MIGRATION-20261022":
             raise DiagnosticDenied("migration approval is not live campaign approval")
+        if self.pm_approval_reference in (_P0_UNBLOCK_AUTHORITY, _P0_SCOPE_AUTHORITY):
+            raise DiagnosticDenied("P0 preparation/unblocking authority is not live campaign approval")
         if any(word in self.credential_profile_identity.lower() for word in (
             "api_key", "secret", "bearer", "token", "authorization", ":", "=",
         )):
@@ -872,15 +944,24 @@ class DiagnosticAuthorizationRecord:
             raise DiagnosticDenied("normalization tolerance is invalid")
         if _timestamp(self.valid_from) >= _timestamp(self.expires_at):
             raise DiagnosticDenied("authorization validity interval is invalid")
+        if self.p0_unknown_review is not None:
+            if type(self.p0_unknown_review) is not P0UnknownAttemptReview:
+                raise DiagnosticDenied("P0 review must use the exact versioned authorization fields")
+            self.p0_unknown_review.matches_record(self)
 
     @classmethod
     def from_json(cls, data: bytes) -> "DiagnosticAuthorizationRecord":
         try:
             value = _unique_json(data)
-            optional = {"project_identity", "credential_profile_revision"}
+            optional = {"project_identity", "credential_profile_revision", "p0_unknown_review"}
             if (type(value) is not dict or not set(cls.__dataclass_fields__) - optional <= set(value)
                     or not set(value) <= set(cls.__dataclass_fields__)):
                 raise DiagnosticDenied("authorization record fields are incomplete or extra")
+            review = value.get("p0_unknown_review")
+            if review is not None:
+                if type(review) is not dict or set(review) != set(P0UnknownAttemptReview.__dataclass_fields__):
+                    raise DiagnosticDenied("P0 review fields are incomplete or extra")
+                value["p0_unknown_review"] = P0UnknownAttemptReview(**review)
             return cls(**value)
         except (UnicodeError, TypeError, ValueError) as exc:
             if isinstance(exc, DiagnosticDenied):
@@ -894,7 +975,7 @@ def authorization_record_digest(record: DiagnosticAuthorizationRecord) -> str:
         raise DiagnosticDenied("authorization record is invalid")
     fields = asdict(record)
     # Historical embedding grants retain their exact pre-extension digest.
-    for name in ("project_identity", "credential_profile_revision"):
+    for name in ("project_identity", "credential_profile_revision", "p0_unknown_review"):
         if fields[name] is None:
             fields.pop(name)
     canonical = json.dumps(fields, sort_keys=True, ensure_ascii=True,
@@ -1994,11 +2075,52 @@ def initialize_local_counting_store(*, runner_sid: str, source_revision: str) ->
                                         fresh=True)
 
 
+_FENCE_PREDICATE = ("outcome IN ('IN_FLIGHT','UNKNOWN','TIMEOUT') OR usage_observed='UNKNOWN' "
+                    "OR (usage_observed!='UNKNOWN' AND CAST(usage_observed AS INTEGER)>usage_reserved)")
+
+
+def _blocking_fence_count(db: sqlite3.Connection, record=None) -> int:
+    """Read-only classification shared by preflight and atomic reservation.
+
+    Raw historical fences remain visible. Only one exact, unchanged reviewed
+    row may stop blocking ONE separately authorized target campaign.
+    """
+    count = db.execute("SELECT COUNT(*) FROM attempts WHERE " + _FENCE_PREDICATE).fetchone()[0]
+    if record is None or record.p0_unknown_review is None:
+        return count
+    record.__post_init__()
+    review = record.p0_unknown_review
+    try:
+        row = db.execute("SELECT campaign_id,request_id,outcome,items,usage_reserved,cost_reserved,"
+                         "usage_observed,observation_json FROM attempts WHERE campaign_id=? AND request_id=?",
+                         (review.historical_campaign_id, review.historical_request_id)).fetchone()
+    except sqlite3.Error as exc:
+        raise DiagnosticDenied("reviewed historical schema or evidence is unavailable",
+                               code="HISTORICAL_REVIEW_MISMATCH") from exc
+    if (row is None or count < 1
+            or _p0_commitment(dict(zip(_P0_HISTORY_ROW, row))) != review.historical_row_sha256):
+        raise DiagnosticDenied("reviewed historical row changed or is missing",
+                               code="HISTORICAL_REVIEW_MISMATCH")
+    return count - 1
+
+
 def inspect_local_counting_store(*, runner_sid: str, source_revision: str,
-                                 fresh: bool = False) -> dict:
+                                  fresh: bool = False, for_authorized_campaign: bool = False) -> dict:
     """Combined read-only bootstrap preflight; not PM Live admission."""
     paths = _bootstrap_identity(runner_sid, source_revision)
     observed = validate_host_paths(paths, runner_sid, _store_only=True)
+    if type(for_authorized_campaign) is not bool:
+        raise DiagnosticDenied("preflight campaign mode is invalid")
+    record = None
+    if for_authorized_campaign:
+        # No caller record/flag can grant an exception. Read the fixed authority
+        # and transitive Safety/E4 binding; this is NOT a reservation or opt-in.
+        binding = load_live_binding()
+        artifact = load_live_safety_artifact()
+        record = binding.record
+        artifact.matches_record_input(record, binding.approved_input, binding.sdk_byte_evidence, source_revision)
+        if binding.runner_sid != runner_sid or binding.paths != paths:
+            raise DiagnosticDenied("preflight campaign host binding mismatch")
     identity = observed[paths.attempts].identity
     with _guard_db_path(paths.attempts, identity):
         before = hashlib.sha256(paths.attempts.read_bytes()).hexdigest()
@@ -2010,18 +2132,22 @@ def inspect_local_counting_store(*, runner_sid: str, source_revision: str,
                 raise DiagnosticDenied("Counting schema is incompatible; no repair")
             count, usage, cost = db.execute("SELECT COUNT(*),COALESCE(SUM(usage_reserved),0),"
                                            "COALESCE(SUM(cost_reserved),0) FROM attempts").fetchone()
-            fences = db.execute("SELECT COUNT(*) FROM attempts WHERE outcome IN "
-                "('IN_FLIGHT','UNKNOWN','TIMEOUT') OR usage_observed='UNKNOWN'").fetchone()[0]
+            fences = _blocking_fence_count(db)
+            blocking = _blocking_fence_count(db, record) if record is not None else fences
             if fresh and (count, usage, cost) != (0, 0, 0):
                 raise DiagnosticDenied("not a fresh Store; preserve existing state")
         if hashlib.sha256(paths.attempts.read_bytes()).hexdigest() != before:
             raise DiagnosticDenied("Store changed during read-only preflight")
-    return {"host": socket.gethostname(), "runner_sid": runner_sid,
+    result = {"host": socket.gethostname(), "runner_sid": runner_sid,
             "source_revision": source_revision, "store": str(paths.attempts),
             "file_identity": identity, "attempts": count, "reserved_usage": usage,
             "reserved_cost": cost, "fences": fences, "schema_integrity": "PASS",
             "fresh_check": fresh, "live": "NOT AUTHORIZED",
             "live_authority": "NOT VERIFIED BY BOOTSTRAP"}
+    if for_authorized_campaign:
+        result.update(campaign_id=record.campaign_id, blocking_fences=blocking,
+                      reviewed_historical_fences=fences-blocking)
+    return result
 
 
 class TemporaryDiagnosticUsage:
@@ -2074,12 +2200,7 @@ class TemporaryDiagnosticUsage:
                     if db.execute("SELECT 1 FROM attempts WHERE campaign_id=? AND request_id=?",
                                   (record.campaign_id, request_id)).fetchone():
                         raise DiagnosticDenied("counting attempt is already consumed", code="DUPLICATE_ATTEMPT")
-                if db.execute(
-                    "SELECT 1 FROM attempts WHERE outcome IN ('IN_FLIGHT','UNKNOWN','TIMEOUT') "
-                    "OR usage_observed = 'UNKNOWN' "
-                    "OR (usage_observed != 'UNKNOWN' AND "
-                    "CAST(usage_observed AS INTEGER) > usage_reserved) LIMIT 1"
-                ).fetchone():
+                if _blocking_fence_count(db, record):
                     raise DiagnosticDenied("active or unknown diagnostic attempt requires human review", code="RUNNER_CONFLICT")
                 totals = db.execute(
                     "SELECT COUNT(*), COALESCE(SUM(items),0), COALESCE(SUM(usage_reserved),0), "

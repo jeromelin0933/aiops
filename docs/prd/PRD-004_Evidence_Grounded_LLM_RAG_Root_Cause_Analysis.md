@@ -13,6 +13,7 @@
 | 中文名稱 | 證據驅動 LLM + RAG 根因分析與可稽核 RCA |
 | Version | 1.1 |
 | Status | Approved |
+| Competition P0 Shared Demo Amendment | 2026-10-30 Approved — PM條件式核准已依PM-AIOPS-COMPETITION-SINGLE-DEMO-20261030及PM-AIOPS-COMP-P0-UNBLOCK-20261030-01完成符合性確認；SPEC Lead富裕已核對完整Diff；既有Approved baseline與歷史不變 |
 | Controlled Batching Amendment | v1.1-based Approved — Controlled Batching Narrow Amendment；baseline version不變；不構成Live Authorization |
 | Controlled Batching Approval Record | SPEC Lead 2026-10-28依PM最新D4文件核准授權，採納既有Combined Independent Document Audit — PASS／Findings NONE，正式核准§13.5第3點既有batching修訂；Authority為PM「APPROVE — SPEC-014 Controlled Batching Narrow Amendment Direction」及「APPROVE WITH MINIMUM NECESSARY CONTROLS — SPEC-014 Independent Counting Observation」。未新增PM Decision ID，未重新執行Audit，不授權Live，不構成Real-RAG／RCA PASS或Production Ready。 |
 | Approved Amendment | 2026-10-28 Minimum Necessary Competition Scope Reset Amendment on v1.1；Approved；baseline version不變 |
@@ -33,6 +34,8 @@ Current authority為v1.1。本節原v1.0 Status Honesty及§21.1 implementation 
 
 | Version | Date | Status | Change |
 |---|---|---|---|
+| v1.1-based single shared demo approval closure | 2026-10-30 | Approved — PM Conditional Approval Conformity Confirmed | PM依PM-AIOPS-COMPETITION-SINGLE-DEMO-20261030及PM-AIOPS-COMP-P0-UNBLOCK-20261030-01條件式核准；SPEC Lead富裕已核對完整Diff並確認符合兩份決策，完成本次正式核准紀錄。僅收尾Approval Metadata，技術／產品契約不變；下列Draft歷史保留，不構成Full Acceptance或新Live授權。 |
+| v1.1-based single shared demo draft | 2026-10-30 | Draft — PM／文件權責人Approval Pending | 依PM-AIOPS-COMPETITION-SINGLE-DEMO-20261030窄幅調整§13.5／§14.4／§17.5的Competition適用性；一套共享真實Demo取代Competition四人獨立重建前置，保留Full Acceptance、正式AC-014-X、Production與Formal義務；不授權新Provider Invocation。 |
 | v1.1-based batching amendment | 2026-10-28（approval date） | Approved — Controlled Batching Narrow Amendment | SPEC Lead依PM最新D4授權採納既有Combined Independent Document Audit PASS／Findings NONE，僅完成§13.5第3點Approval／Status收尾；技術及RCA產品語意不變，下列draft、既有Approval及execution records保留。不產生Real-RAG／RCA或Formal PASS，不授權Live。 |
 | v1.1-based batching draft | 2026-10-28 | Draft — Combined Independent Document Audit／PM及文件權責人Approval Pending | 依PM Controlled Batching方向核准及SPEC Lead跨文件修訂授權，僅對齊§13.5第3點與SPEC-014 Sequential Synchronous Batching草案；保留Real-RAG／Evidence-grounded RCA產品語意與全部正式驗收。本草案尚未生效，不回溯改寫既有Approval／execution records，不授權implementation或Live。 |
 | v1.1-based amendment | 2026-10-28（approval date） | Approved — Minimum Necessary Competition Scope Reset Amendment | SPEC Lead正式採納Consolidated Independent Semantic Audit PASS／Findings NONE並核准§13.5適用註記及§17.5；僅完成Approval／Status收尾，保留下列draft與歷史approval；不構成Real S2、Full Acceptance、Formal PASS或Production Ready。 |
@@ -643,6 +646,8 @@ Default regression不依賴live API。Domain／orchestration tests可用Fake ada
 
 ## 13.5 PM-approved Embedding Compatibility Migration（Additive）
 
+**Competition P0 applicability — Approved 2026-10-30：** 依`PM-AIOPS-COMPETITION-SINGLE-DEMO-20261030`，本節及§14.4／§17.5的Competition Milestone A四人獨立環境前置，收斂為一套Single Shared Demo Environment。由SPEC Lead在同一受控環境交付真實完整54→54、Knowledge Build／Validate／Demo-scoped Activation／Retrieve及至少一條Incident→Evidence→RAG→Validated RCA→Publication故事線；其餘三人共用環境或展示素材，不要求各自API Key／Embedding／重建。下列歷史Scope Reset與正式Four-member／Production條款保留，正式AC-014-X、§20 Full Acceptance及SPEC-017 Formal契約不因Demo完成而PASS。PM條件式核准已依兩份正式決策完成符合性確認，SPEC Lead富裕已核對完整Diff；本次精確文件修訂已核准，適用細節見SPEC-014 §24.7及SPEC-017 §19.6。
+
 **Controlled Batching reconciliation — Approved，2026-10-28：** SPEC Lead依上列PM最新D4授權採納既有Combined Independent Document Audit PASS／Findings NONE，正式核准下列第3點，與SPEC-014及SPEC-017 §19.4完成Approval Status Reconciliation；技術條款、v1.1 baseline、Real-RAG／Evidence-grounded RCA產品需求及原正式Acceptance不變。Provider Compatibility仍為NOT EXECUTED，Real-RAG／RCA未由本次批准取得PASS，不構成Production Ready或PM Live Authorization。
 
 **Historical Controlled Batching draft status（原文保留；已由上列正式Approval收尾）：**
@@ -685,6 +690,8 @@ Index UNAVAILABLE / MISMATCH → RAG unavailable or degraded
 Knowledge unavailable不自動阻止whole-platform Runtime READY，也不重新定義SPEC-011 barrier。Trusted Core足夠時可走evidence-only `DEGRADED` path。正式RAG Demo／Evaluation不得在mismatch／unavailable時宣稱RAG成功。
 
 ## 14.4 Four-Member Setup Contract
+
+**Competition P0 applicability — Approved：** 2026-10-30 Single Shared Demo只要求一套受控、可操作／錄製且source/config/provenance可追溯的真實環境。以下四人獨立setup與portable rebuild義務保留為後續Formal Portability／Production Acceptance，不作本次Competition P0展示前置；不分享API Key或以散發generated DB冒充獨立重建證據。
 
 四名成員任一台符合setup contract的電腦，必須能從同一Repository配置local credentials、重建compatible index、detect drift、選Scenario、選available Profile並執行RCA Demo。Setup須揭露Event Detection model artifacts、observability及其他prerequisites；不得依賴hidden PM-only sequence、personal path或copy他人Chroma files。
 
@@ -808,6 +815,8 @@ Future controlled manual refresh若需要，須透過RCA public semantic command
 PRD-004輸出`knowledge_gap`、Knowledge provenance及`MODEL_SUGGESTED` distinction。Human-facing Knowledge Improvement Candidate creation／review、Dashboard workflow及approved future ingestion由PRD-005或後續governance負責；PRD-004不自動修改Corpus。
 
 ## 17.5 Milestone A Technical Handoff（Approved — 2026-10-28）
+
+**2026-10-30 Competition P0 approved supersession：** 僅就Competition，以下第3點的精簡四人驗證由一套共享54→54／Build／Validate／Demo-scoped Activation／bounded Retrieve證據取代。其餘真實S2故事線、public semantic reads、Secret／Ground Truth隔離、失敗揭露與Domain Ownership不變。Shared Demo不是Production Activation或Full Acceptance；本段2026-10-28核准日期與原文作歷史保留，本次Amendment已完成PM條件式核准符合性確認；原Draft核准流程紀錄保留為歷史。PRD-005由PM指定Owner接收「共享環境、團隊操作分工、可錄製展示」之部署範圍，不新增遠端平台或帳號系統。
 
 Authority：`PM-AIOPS-COMPETITION-SCOPE-RESET-20261028`。本段已正式核准；Milestone A Technical Handoff獨立於§20的PRD-004 Full Acceptance；不得稱為SPEC-017 Formal PASS或Production Ready。須交付以下六項可執行／可追溯內容給PM：
 

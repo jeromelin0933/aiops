@@ -44,7 +44,7 @@ def wire_e4(evidence):
 
 @pytest.fixture
 def batched(tmp_path, monkeypatch):
-    def make(*, known_usage=True, paid=False, batch_size=9, changes=None):
+    def make(*, known_usage=True, paid=False, batch_size=9, changes=None, request_override=None):
         # Six SYNTHETIC documents. Real corpus/manifest/build are never mutated.
         request, record, _, _ = request_and_record(tmp_path, count=54)
         chunks, documents = [], []
@@ -60,21 +60,29 @@ def batched(tmp_path, monkeypatch):
                 documents.append((doc, name))
         documents.sort()
         request = replace(request, chunks=tuple(chunks), approved_document_ids=tuple(documents))
+        if request_override is not None:
+            request = request_override
+            documents = list(request.approved_document_ids)
+            record = replace(record, credential_profile_identity=request.capability.profile_reference.value,
+                             input_scope_identity=request.approved_corpus_id)
         _, ids, texts = diagnostic._envelopes(request)
+        aggregate_bound = 100000 if request_override is not None else 30000
+        batch_bound = 20000 if request_override is not None else 10000
         record = replace(record, input_commitment=controls.input_commitment('document', ids, texts),
             maximum_items=54, maximum_invocations=54, maximum_item_tokens=4096,
-            maximum_aggregate_tokens=30000, maximum_usage_units=30000, maximum_payload_bytes=1000000,
+            maximum_aggregate_tokens=aggregate_bound, maximum_usage_units=aggregate_bound, maximum_payload_bytes=1000000,
             bounds_basis='fixture-bounds', cost_basis='fixture-price',
             valid_from='2000-01-01T00:00:00+00:00', expires_at='2099-01-01T00:00:00+00:00')
         ranges = [dict(ordinal=n, start=start, end=min(start+batch_size, 54),
             input_commitment=controls.input_commitment('document', ids[start:start+batch_size], texts[start:start+batch_size]))
             for n, start in enumerate(range(0, 54, batch_size))]
+        request = replace(request, limits=replace(request.limits, maximum_invocations=len(ranges)))
         plan = dict(schema_version=1, total_inputs=54, input_commitment=record.input_commitment,
             chunk_metadata_commitment=diagnostic._chunk_metadata_commitment(request), build_identity=request.build_identity,
             model='gemini-embedding-2', api='v1', embedding_profile_identity=request.capability.embedding_profile_identity,
-            maximum_batches=len(ranges), maximum_batch_items=batch_size, maximum_batch_tokens=10000,
+            maximum_batches=len(ranges), maximum_batch_items=batch_size, maximum_batch_tokens=batch_bound,
             maximum_batch_payload_bytes=100000,
-            quota=dict(rpm=100, tpm=30000, rpd=1000, request_units_per_invocation=batch_size,
+            quota=dict(rpm=100, tpm=aggregate_bound, rpd=1000, request_units_per_invocation=batch_size,
                        source=dict(safety_case()[3]['pricing_evidence']['source'])), batches=ranges)
         record = replace(record, bounds_basis='SEQUENTIAL_BATCH_PLAN_V1:'+controls.DiagnosticBatchPlan.from_mapping(plan).commitment)
         if changes:
@@ -86,7 +94,10 @@ def batched(tmp_path, monkeypatch):
                 resolve_facts=lambda *_: facts(credential_profile_identity=grant.credential_profile_identity),
                 safety=lambda r, ts: (diagnostic._offline_proof(r), diagnostic._offline_safety_basis(r, ts),
                                       sum(len(t.encode()) for t in ts), 100),
-                request=actual, live_opt_in=True, offline_harness=True)
+                # E4 observes one serialized request; campaign invocation
+                # counts remain truthful in the logical request/result.
+                request=replace(actual, limits=replace(actual.limits, maximum_invocations=1)),
+                live_opt_in=True, offline_harness=True)
             return _host_e4_observation(prepared, approved_input(actual, grant))[0]
         full_e4 = e4(request, record)
         children = []
@@ -111,9 +122,12 @@ def batched(tmp_path, monkeypatch):
             implementation_sha256=sha256(Path(controls.__file__).read_bytes()).hexdigest(),
             data_sha256=sha256(json.dumps(bounds, sort_keys=True, separators=(',', ':')).encode()).hexdigest())
         value['sequential_batch_plan'], value['batch_sdk_evidence'] = plan, children
-        value['provider_limits'].update(item_limit=batch_size, aggregate_token_limit=10000, payload_byte_limit=100000)
+        value['provider_limits'].update(item_limit=batch_size, aggregate_token_limit=batch_bound, payload_byte_limit=100000)
+        if request_override is not None:
+            value['provider_limits']['per_item_token_limit'] = 4096
         if not paid:
             free_evidence(value, record)
+            value['free_tier_evidence']['quota_evidence']['tpm'] = aggregate_bound
         # Never return caller evidence through run_live; replace fixed host I/O
         # seams with isolated synthetic fixtures, as existing dispatch tests do.
         binding = controls.LiveHostBinding(record, approved, None, record.runner_identity, full_e4)

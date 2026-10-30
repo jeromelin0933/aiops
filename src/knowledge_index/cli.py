@@ -68,6 +68,10 @@ def _store(config: KnowledgeIndexConfig) -> SqliteKnowledgeStore:
 
 
 def _provider(config: KnowledgeIndexConfig, *, live: bool) -> GoogleEmbeddingAdapter:
+    if config.capability.model == "gemini-embedding-2":
+        # Exact host records/plan/reservation are still enforced inside the
+        # existing diagnostic core. Never construct the historical SDK client.
+        return GoogleEmbeddingAdapter(None, config.capability, controlled_live_opt_in=live)
     client = create_google_client(timeout_seconds=config.limits.timeout_seconds) if live else None
     return GoogleEmbeddingAdapter(client, config.capability)
 
@@ -106,6 +110,8 @@ def _run(args: argparse.Namespace, config: KnowledgeIndexConfig) -> object:
     if args.command == "admit":
         return _admission(config)
     if args.command == "rebuild":
+        if config.capability.model == "gemini-embedding-2" and not args.live_opt_in:
+            raise ValueError("Gemini2 rebuild requires explicit --live-opt-in and controlled campaign authority")
         admission = _admission(config)
         source_root = ROOT / admission.manifest.governed_source_root  # type: ignore[union-attr]
         chunks = plan_chunks(admission, source_root=source_root, profile=config.chunking)
@@ -118,6 +124,8 @@ def _run(args: argparse.Namespace, config: KnowledgeIndexConfig) -> object:
                 identity_input=identity_input, limits=config.limits,
                 required_capability_identity=config.capability.capability_identity,
             )
+    if args.command == "retrieve" and config.capability.model == "gemini-embedding-2":
+        raise ValueError("Gemini2 live query needs separately authorized query integration; document build is not query authority")
     with _store(config) as store:
         index = _index(config)
         build = KnowledgeBuildService(store, _provider(config, live=False), index)
@@ -158,7 +166,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", default="configs/knowledge_index.yaml")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("admit")
-    commands.add_parser("rebuild")
+    rebuild = commands.add_parser("rebuild")
+    rebuild.add_argument("--live-opt-in", action="store_true")
     for name in ("validate", "inspect"):
         command = commands.add_parser(name)
         command.add_argument("--build-id", required=True)

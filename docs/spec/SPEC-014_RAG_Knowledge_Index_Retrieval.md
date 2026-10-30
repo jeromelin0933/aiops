@@ -9,6 +9,8 @@
 | 欄位 | 內容 |
 |---|---|
 | Document ID | SPEC-014 |
+| D-1 P0 UNKNOWN Exception Amendment | 2026-10-30 Approved — SPEC Lead富裕正式核准；Authority：PM-AIOPS-COMP-P0-UNBLOCK-20261030-01；D-1 Audit Finding CLOSED；正式例外未啟用，D-2 Live未授權 |
+| Competition P0 Shared Demo Amendment | 2026-10-30 Approved — SPEC Lead富裕正式核准；Authority：PM-AIOPS-COMPETITION-SINGLE-DEMO-20261030；不取代既有Approved baseline或構成Demo／Formal PASS |
 | Document Name | RAG Knowledge Index & Retrieval |
 | Version | 1.4（Phase A Minimum Controls narrow-scope amendment） |
 | Status | Approved — Minimum Controls Amendment；Slice 4 Phase B implementation pending；v1.3 Approved migration scope與historical v1.2 Implemented scope保留 |
@@ -41,6 +43,9 @@
 
 | Version | Date | Status | Change |
 |---|---|---|---|
+| v1.4-based P0 approval closure | 2026-10-30 | Approved — SPEC Lead | SPEC Lead富裕正式核准D-1與Single Shared Demo Narrow Amendments；依PM-AIOPS-COMP-P0-UNBLOCK-20261030-01及PM-AIOPS-COMPETITION-SINGLE-DEMO-20261030，Provider→Build Integrated Audit PASS，D-1 Audit Finding CLOSED。僅Approval／Status收尾，技術條款與下列Draft及UNKNOWN／NOT EXECUTED歷史保留；正式例外未啟用，新Live未授權，Human Git Checkpoint待執行。 |
+| v1.4-based P0 D-1 draft | 2026-10-30 | Draft — SPEC Lead Formal Approval Pending | 依PM-AIOPS-COMP-P0-UNBLOCK-20261030-01及本次Human Review確認，僅新增精確歷史UNKNOWN對指定新授權Campaign的條件式Admission分類；舊Row／Hold／Raw Fence不改，Default Denied、獨立Live grant、Atomic Reservation及其他Fence保留，不建立新Store或啟用正式例外。 |
+| v1.4-based single shared demo draft | 2026-10-30 | Draft — SPEC Lead Approval Pending | 依PM-AIOPS-COMPETITION-SINGLE-DEMO-20261030增補AC-014-X、§24.5～24.7的Competition適用性；保留正式Four-member／Production、Batching、UNKNOWN Fence與歷史結果；新增最小共享Demo Evidence Contract，不授權新Live或Fence解除。 |
 | v1.4-based prototype local host amendment | 2026-10-29（approval date） | Approved — Prototype Local Host Simplification Narrow Amendment | SPEC Lead採納Independent Document Audit PASS／Findings NONE並依PM Authority正式核准原49行新增契約；僅完成Approval Metadata／Status收尾，不改Normative Contract。以下歷史Draft／PENDING／BLOCK及既有Approval保留，不宣稱Host Implementation PASS、SQLite已初始化或PM Live Authorization。 |
 | v1.4-based prototype local host draft | 2026-10-29（draft date；非approval date） | Draft — Independent Narrow Document Audit／SPEC Lead Amendment Approval Pending | 依PM「APPROVE — Prototype Local Host Simplification」提出Non-Elevated vincent Runner、依Token屬性與實際能力拒絕、LocalApplicationData Known Folder單一SQLite authority及Fresh-only簡化初始化；明列PM接受的同帳號竄改風險與最小驗收。僅調整Host／Identity threat model，既有Counting／Batching／Provider／Formal契約及歷史紀錄保留；未授權程式修訂或Live。 |
 | v1.4-based counting observation amendment | 2026-10-28（approval date） | Approved — COUNTING_OBSERVATION Minimum Narrow Amendment | SPEC Lead正式採納Independent Document Audit PASS／Findings NONE並依上列PM Authority核准§24.2／§24.6.1新增Counting契約；本輪僅作Approval Status Reconciliation，已審查技術正文不變，下列draft、Controlled Batching／Scope Reset／v1.4及歷史Approval／Audit／BLOCK／Remediation紀錄保留。Counting Runner未實作，Live仍NOT AUTHORIZED／NOT EXECUTED，不產生Provider、G8、Knowledge或Formal PASS。 |
@@ -1030,6 +1035,8 @@ Candidate C能區分READY、NOT_INITIALIZED、UNAVAILABLE、MISMATCH及REPAIR_RE
 
 ## AC-014-X — Team Rebuild
 
+**Competition P0 applicability — Approved（2026-10-30）：** 僅Competition Milestone A依§24.7採一套共享Demo，不以前述四人獨立重建為展示前置。以下完整AC、Formal Portability／Production Acceptance與歷史NOT EXECUTED不變，不將單人Demo記作AC-014-X PASS。
+
 **Scope Reset amendment — Approved 2026-10-28：** Milestone A仍必須完成§24.5所列四人獨立Build→Validate→Activate→Retrieve證據，不得以歷史skip或單人結果替代。A portability evidence不自動構成下列完整Formal AC或Production Acceptance PASS；原AC與historical closure disposition保留。
 
 全部四名team members在符合approved setup／config contract的各自環境中，皆可由同一repository authority所含的approved source revisions、approved governed manifest、required non-secret semantic configuration及rebuild tooling，重建compatible Knowledge index、detect drift／mismatch、validate staged build並執行explicit governed activation path，不複製任何成員的generated Chroma DB。此AC只驗證Candidate C Knowledge capability reproducibility；完整real-provider／real-RAG RCA E2E由Candidate F／final integration驗證，不降低本four-member rebuild gate。
@@ -1066,6 +1073,8 @@ New manifest、build activation、document retirement或policy change不改變�
 Candidate C只接受approved shared non-secret Profile／capability reference；capability不足時typed fail，不建立credential registry、不解析或保存secret、不自行選key。Same logical build／retrieval及其retry／recovery維持selected Profile continuity，silent switching被拒絕。
 
 ## AC-014-AD — Provider Invocation Safety
+
+**D-1 P0 narrow acceptance — SPEC Lead Approved。** 指定歷史UNKNOWN經Human確認、精確Row／Evidence Commitment未變，且新獨立Competition Campaign有完整PM Live grant／Review Binding時，僅該舊列可不作目標Campaign的Blocking Fence；Raw Fence及原Usage／Cost Hold仍保留。其他UNKNOWN／TIMEOUT／IN_FLIGHT、錯誤歷史／目標Identity、錯誤Review／Live PM Reference、變更Row／Hold、Source／Credential／Budget不符均BLOCK。新Campaign再度不確定時不得沿用例外。Preflight Raw／Blocking Fence與Atomic reserve語意一致；無Review時舊Authorization Digest及原行為不變。缺可信Provider Usage仍停止完整Campaign，不建立STAGED Index。全部驗證使用隔離SQLite／Synthetic Credential／Mock Transport；不修改正式Row／Authority。
 
 **Single Direct Document Embedding Probe — Approved acceptance。** 依§24.2及§24.6.1的受控Probe Binding：P1從正式Approved Corpus重建Ordinal 52完整Envelope；P2使用Pinned SDK實際Embedding Route／768設定／Payload Bytes及SHA-256；P3一筆Input以獨立Input與Payload Commitment綁定；P4有效PM Campaign／Bounds／Budget下允許Exactly 1 Document且不因Exact Token Count未知而拒絕；P5 Mock Response驗證1→1、768、Finite／Nonzero及事前Tolerance的Normalization／Mapping；P6保留8192 Admission Risk Cap預占、1 micro-USD Hold與原始Usage／Outcome。負向：未授權Scope、Wrong Source／Chunk／Payload／Model／SDK／Project／Profile、缺失授權或超出一筆／一次、無效Cost／Usage Budget均BLOCK；Duplicate／UNKNOWN／TIMEOUT／IN_FLIGHT與真正Embedding UNKNOWN Usage維持Fence。Reservation Persistence Failure在Credential／Transport前拒絕（Calls=0）；Transport後的Persistence Failure如實保存呼叫可能性並停止，不退款／重送。未核准Caller缺少原Token／Payload Evidence仍Fail Closed；Probe不自動觸發54→54或任何第二Request，不構成Full Compatibility／Knowledge／G8／Formal PASS。所有驗證使用隔離Store及Synthetic Credential／Mock Transport，正式Store不讀寫。
 
@@ -1277,6 +1286,8 @@ Calibration protocol於結果判讀／政策選擇前固定development／held-ou
 
 ## 24.5 Build、Four-member Gate與Activation
 
+**2026-10-30 Competition P0 applicability — Approved：** §24.7限定一套共享Demo的Build／Validate／Demo-scoped Activation／Retrieve交付；下列四人獨立重建對本Competition展示不再是前置，但仍約束Formal Portability／Production Acceptance。既有compatibility、隔離calibration／policy freeze、STAGED→VALIDATED→Explicit Activation、Provenance與LKG要求不豁免。Demo activation不得寫入或冒充Production／Formal activation。
+
 **Controlled Batching approved amendment：** 下列新build／validation與四人獨立rebuild須使用§24.2完整54→54及固定batch-plan-bound evidence。每人仍獨立完成全部54 embeddings，不複製他人generated DB；成功個別batch不是完整Build Validation或AC-014-X PASS。STAGED→VALIDATED→explicit activation、new collection isolation、provenance、LKG及A/B驗收邊界均不變，不新增resume或四人逐batch人工簽核要求。
 
 **Scope Reset amendment — Approved 2026-10-28；Authority：PM-AIOPS-COMPETITION-SCOPE-RESET-20261028。** 本段限定下列原條款中Milestone A Competition readiness的證據範圍；完整Formal／Production Acceptance義務不取消。
@@ -1292,6 +1303,8 @@ Calibration freeze之後，Candidate C在新授權scope內建立新的immutable 
 新AC-014-X為Migration Production Activation及正式Competition Readiness必要Gate。§19原AC-014-X與Current Closure Disposition逐字保留；historical `NOT EXECUTED — PM-DIRECTED SKIP FOR CURRENT CLOSURE`不是新模型例外。新的PASS必須是新的source/profile-bound四人evidence，不能改寫歷史。無法滿足時BLOCK並聯絡PM。
 
 ## 24.6 Gate Sequence與Slice 0 Boundary
+
+**Competition P0 applicability — Approved：** 本節歷史Gate圖中的AC-014-X four-member verification對2026/11/07 Competition A依§24.7取代為單一共享環境證據；Formal／Production分支及其全部Gate維持。此Scope Reset不授權新的Google Invocation或解除既有UNKNOWN Fence。
 
 **Competition P0 Single Probe — Approved。** §24.2單筆Probe是完整Provider Compatibility前的限定Observation，不依賴Independent Counting；不取代完整54→54、Knowledge或Formal Acceptance。準備及離線Implementation授權不等於Google Live Authorization，Default Live DENIED。本例外完成後停止，不自動啟動Batch Campaign／Build／Calibration／Activation。
 
@@ -1320,6 +1333,20 @@ Checkpoint A/B由Human建立；source/config不變可指同一commit，policy/co
 Slice 0只授權四份PRD／SPEC文件修改與documentation semantic verification；不執行source/config變更、provider diagnostic、calibration、AC-014-X、Docker／Chroma／Candidate-C/F mutation、activation或Formal Evaluation。Git mutations由Human執行。新migration implementation及全部execution evidence均未由本amendment完成；Formal Evaluation為NOT EXECUTED，Slots Consumed = 0。Independent Slice 0 audit尚待執行。
 
 ### 24.6.1 Controlled Provider Diagnostic — Minimum Necessary Controls（Additive）
+
+**D-1 minimum historical UNKNOWN exception — 2026-10-30 SPEC Lead Approved。** Authority：`PM-AIOPS-COMP-P0-UNBLOCK-20261030-01`，Parent：`PM-AIOPS-COMPETITION-SINGLE-DEMO-20261030`。PM已核准有限額外實體呼叫風險方向，不構成D-2新Live授權。SPEC Lead已明確確認原Attempt／Request關聯並授權離線實作，但不啟用正式例外；後續另獲PM Live Authorization的獨立Competition P0 Campaign，才可在同一既有Authorization／Safety／SQLite Admission中綁定此精確歷史個案；不能由Caller Flag啟用，不能改舊Authority或舊Row。
+
+本次唯讀核對對象：Campaign `spec014-direct-embed52-20261030-01`、Attempt `cf02cd6e4ee94bd68f02dfbf99a75151`、Source `30b9e9e58edcf5f11722b25d4d160d26bb780320`、Outcome／Usage UNKNOWN、Items=1、Usage Hold=8192、Cost Hold=1 micro-USD；舊Input／SDK Body Commitment及Observation與既有Authority一致。Observation沒有Attempt ID且該Row的observation_json為NULL；SPEC Lead本次已確認是同一呼叫，但不宣稱舊資料本身已有直接Request級持久化證明。本段是新建Review摘要，原Row／Observation／建立時間及Hash不得補寫或回溯修改。
+
+條件式例外只能改變這筆精確且未變更歷史Row對指定新Campaign的Blocking判斷；須綁定Human Review Reference／Reviewer、精確歷史Identity／原始Row占用與Evidence Commitment、新Campaign／新Live PM Reference及其Source／有效期。舊UNKNOWN／Raw Fence／8192 Usage Hold／1 micro-USD Hold完整保留並揭露，不退款、不轉移、不視為零；其他UNKNOWN、TIMEOUT、IN_FLIGHT、超額／不可靠Accounting、錯誤Identity／PM Reference、Duplicate、Persistence Ambiguity仍Fail Closed。新Campaign再度UNKNOWN／TIMEOUT不得沿用此例外。Preflight須區分原始Fence與指定新Campaign的實際Blocking判斷，並與Atomic reserve一致；Preflight不是Reservation或Live授權。不新增通用Adjudication Framework、Ledger或Schema Migration。
+
+**最小Wire Binding（同一Authorization Record）。** 僅新獨立Live grant可選擇附加`p0_unknown_review`，精確欄位為`authority_reference`、`review_reference`、`reviewer_identity`、`recorded_at`、`historical_campaign_id`、`historical_request_id`、`historical_row_sha256`、`historical_evidence_sha256`、`target_campaign_id`、`target_pm_approval_reference`。Authority須為本D-1 PM reference，Reviewer與grant的SPEC Lead一致，記錄時間真實且不早於本決策日期、不在未來；Target與新grant一致且不得是舊Campaign／舊Live reference或Preparation Authority。Row Hash由精確八個既有欄位（含NULL observation_json）canonical JSON計算，Evidence Hash綁本次已核對的歷史Source／Input／Body／Authorization／Observation commitments；它們是Human Review範圍，不是重新證明歷史授權或建立Archive／Resolver。此欄位受既有Authorization Digest及E4／Safety共同綁定；缺省為None並從canonical digest省略，歷史Digest保持原值。不存在approved=true捷徑，不向舊Authority補欄位。 Runtime Atomic Admission MUST revalidate `review_reference` as exactly `SPECLEAD-SPEC014-D1-UNKNOWN-REVIEW-20261030-01`; empty or unrelated nonempty references and mismatched historical Attempt bindings MUST be rejected. Construction-only validation or caller-selected review identity is insufficient.
+
+**Preflight／Reservation。** `inspect_local_counting_store(..., fresh=False, for_authorized_campaign=True)`只讀固定受控grant及其Safety／E4，附加`blocking_fences`／`reviewed_historical_fences`及目標Campaign；原`fences`始終是Raw Fence數，不改為零。Default inspection維持原樣。實際reserve在原BEGIN IMMEDIATE內使用同一分類，僅扣除符合精確快照的該一列Blocking效果；原Row／Hold沒有任何UPDATE。Preflight PASS不取代最終Atomic Eligibility，亦不預占Attempt或讀Credential。
+
+**本次交付狀態：** Human Review已完成；SPEC Lead富裕已正式核准本Amendment，D-1 Audit Finding已CLOSED；離線實作已完成，正式例外未啟用，Human Git Checkpoint待執行；文件核准不構成新Live授權。D-2候選Campaign／PM Reference僅供Preparation，新Source、Live有效期、獨立有限正值Cost Limit及最終PM Live Authorization不得由本Authority代填。
+
+**Competition P0 execution boundary — 2026-10-30 draft：** `PM-AIOPS-COMPETITION-SINGLE-DEMO-20261030`不是Live Campaign grant。歷史`spec014-direct-embed52-20261030-01`於source `30b9e9e58edcf5f11722b25d4d160d26bb780320`的Human execution為UNKNOWN／transport、一次本機Transport委派、零有效vector、usage UNKNOWN；Human Post報告attempts=1、fences=1、reserved_usage=8192、reserved_cost=1。這不證明Google收到或未收到；保留原Attempt、Hold、Authority與Fence，不Reset／Refund／覆寫。下一次須另有新Campaign授權及合法Eligibility；目前reserve()的Store-wide UNKNOWN Fence不可由換Campaign／Credential／Model／Host或新Store繞過。若無既有可用Adjudication API，先回報BLOCKED及精確PM決策需求，不自行造數據或建立Recovery Framework。新增非敏感Exception Type／Cause Type／實際HTTP Status／Failure Kind只改善下次可觀察性，不改Outcome、Budget或Retry權限。
 
 **Single Direct Document Embedding Probe — Approved minimum admission。** 僅受控PM Campaign Record的`purpose=CONTROLLED_PROVIDER_DIAGNOSTIC`與`bounds_basis=SINGLE_DOCUMENT_PROBE_V1`、固定Approved Input及同一Safety／E4 Binding共同決定Probe適用性；名稱／Marker／Caller Flag本身不是授權。沿用同一固定Host Authority、Credential Resolver、SQLite及Final Guard，不新增Runner／Store／Framework。Safety Artifact的版本化`single_probe`區段須明列PM「APPROVE WITH MODIFICATION — Direct Embedding Single-Input Probe」、8192 Model Limit與Risk Basis、Exact Tokens NOT VERIFIED、固定Source／Corpus／Chunk／Input／Envelope／SDK Payload Bytes與Hash、Project及Truncation Limitation，並與同一Authorization Digest／Profile Revision一致。不得挾帶Counting、Batch Plan或偽造的Exact-input Token Evidence取得本例外。
 
@@ -1431,3 +1458,25 @@ Combined preflight一次核對Source／script、Host／SID／真實Token、必�
 | Authorization／Provider boundary | Source／Input／Operation／Model／Profile／Host／SID／有效期／PM Authority及Final Guard維持；未有PM explicit Live Authorization或opt-in時Provider Calls = 0；不接受caller self-approval。保持reservation-before-credential、一次attempt、30秒、no retry／fallback、internal hold及Secret Safety；Counting Result不記作Embedding Usage／54→54 PASS。 |
 
 **本草案交付狀態。** PM方向已核准；Independent Narrow Document Audit PENDING、SPEC Lead Amendment Approval PENDING、Implementation NOT AUTHORIZED／NOT EXECUTED、Host Initialization NOT EXECUTED、PM Live Authorization NOT AUTHORIZED。本段不回溯變更既有Counting／Batching Approval與Offline Implementation Acceptance，不改PRD-004產品語意、AC-014-X／Knowledge Governance、SPEC-011 Runtime或SPEC-017 Oracle／N／reviewer／denominator／Formal Acceptance；後者仍須依真實證據完成。
+
+## 24.7 Competition P0 — Single Shared Demo Environment（SPEC Lead Approved）
+
+Authority：`PM-AIOPS-COMPETITION-SINGLE-DEMO-20261030`，2026-10-30，APPROVE — Competition P0 Single Shared Demo Environment；SPEC Lead富裕，目標2026/11/07決賽。PM已核准方向與本次必要離線修訂；SPEC Lead富裕已正式核准本Amendment，Provider→Build Integrated Audit PASS；不宣稱Real Provider或Demo PASS。本新增段只取代Competition Milestone A的四人獨立環境前置；§24.5／§24.6及AC-014-X的Formal Portability／Production義務和全部歷史Approval／BLOCK／NOT EXECUTED保留。
+
+**Demo交付與Ownership。** 在一套受控共享Host，由SPEC Lead完成六份 Approved SOP／RUNBOOK 文件→54 unique ordered chunks→54筆真實768D向量→immutable Knowledge Build→Validate→explicit Demo-scoped Activation→bounded Retrieval→既有SPEC-013／015／016與SPEC-011 singular Runtime的Evidence-grounded RCA／Publication故事線。其餘三人共用操作環境或錄製素材；不要求各自API Key／Embedding／重建，不分享Key或將generated DB推入Git。Diagnostic attempts.sqlite只是Attempt／Usage／Budget權威，不是Knowledge index或供其他Host重新取得Eligibility的來源。
+
+**最小Demo Evidence Contract（缺一不得記DEMO READY）。**
+
+| Evidence | 必要內容 |
+|---|---|
+| Source／Provider scope | Exact clean committed revision、PM授權scope、Host／Runner、非敏感Project／Profile／Revision、Model／SDK／API、Manifest／Source／Version、Input／Payload及固定Batch Plan commitments；不保存Secret |
+| 完整Embedding | 全54 unique chunk identity，無重複／遺漏／改序，一對一768D finite／nonzero vector，事前固定Normalization Tolerance，逐batch及全域mapping／order、真實Provider Observation與可信Usage或如實UNKNOWN；Partial／HTTP success／單筆Probe不能冒充完整PASS |
+| Build／Activation | Model／Profile／Build identity、immutable staged artifact、validation result、explicit Demo authority／operation key／activation generation、獨立Demo namespace與stores；保留LKG、historical references及錯誤時不更動既有有效build |
+| Retrieval／RCA | 至少一組Approved SOP MATCH及一組NO_MATCH或Knowledge Gap，實際Query embedding或核准且可驗證的固定Query流程，Snapshot／Source／Version／Chunk provenance；至少一條Incident→Evidence Snapshot→Knowledge Snapshot→Validated RCA→durable publication→public read故事線 |
+| Limitations／Team handoff | 實際執行時間、結果／typed failure、未完成工作、必要failure／restart checks、操作與錄製分工；DEMO READY / BLOCKED與FORMAL PASS / PENDING分開，不填虛構統計或修改Formal denominator |
+
+**不變的必要前提。** 保留§24.2完整Compatibility、§24.4隔離calibration／policy freeze、Known Folder／File Identity／Legacy Fence、Exact SQLite DDL、Atomic Reservation-before-Credential、有限Invocation／Usage／Cost、每request 30秒／一次physical attempt／無hidden retry或fallback、真正UNKNOWN／TIMEOUT／IN_FLIGHT Fence。未知Provider Limits不得虛構；Probe的8192風險例外不自動適用全54或Query。Demo activation不等於Production Activation或SPEC-017 Formal preparation；不用Oracle／Ground Truth調整Demo query或污染production RAG／prompt。
+
+**離線接線狀態與下一步限制。** Controlled Batching已於2026-10-28正式核准，其Historical Draft原文不是當前Pending。依本次PM授權完成同一Diagnostic core→GoogleEmbeddingAdapter→Provider Result→Build／Validation接線；只有完整固定Plan、逐批持久化可信Usage與54→54／768／finite／nonzero／0.01 norm驗證成功才交付向量。Gemini2完整六Source／54個Chunk的Build允許受既有Plan及limits約束的多次physical invocation，回報真實count；舊模型仍限一次。明確Gemini2 config／CLI選擇不改historical tracked model，不構成PM Live grant，也沒有第二次Embedding、vector import、第二套Store或自動Activation。Mock Provider接真實Chroma／Build Validation及隔離Snapshot介面驗證不構成Real Embedding／Knowledge／RAG PASS；本Amendment已由SPEC Lead富裕正式核准，Provider→Build Integrated Audit PASS；Human Git Checkpoint尚待執行。Query仍須獨立授權與接線，不因Document完成就宣稱可作任意Live或離線查詢。
+
+**目前狀態。** 已有Single Probe UNKNOWN及未解除的Store-wide Fence；第一筆有效768D、完整54→54、Demo新build／activation／retrieval／RCA故事線均未取得成功證據。Competition A = BLOCKED；Formal B = PENDING；AC-014-X歷史NOT EXECUTED不變。換Host不豁免舊Attempt／Budget／UNKNOWN事實；若需更換Host先由PM決定合法連續性，不建立空白Store繞過Fence。

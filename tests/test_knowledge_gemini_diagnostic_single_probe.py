@@ -1,10 +1,12 @@
 """Fixed P0 probe: sealed SDK, synthetic authority/key, isolated formal-schema SQLite."""
 from contextlib import closing
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
 import sqlite3
+import socket
+import ssl
 
 import httpx
 import pytest
@@ -114,6 +116,11 @@ def probe(tmp_path, monkeypatch, offline_sdk):
             assert r.content==body and str(r.url)==str(actual.url)
             assert r.extensions['timeout']==dict(connect=30.,read=30.,write=30.,pool=30.)
             calls.append(True)
+            if mode in ('dns', 'tls'):
+                cause = (socket.gaierror(-1, 'synthetic-secret-cause') if mode == 'dns' else
+                         ssl.SSLCertVerificationError(1, 'synthetic-secret-cause'))
+                raise httpx.ConnectError('synthetic-secret-message') from cause
+            if mode == 'read':raise httpx.ReadError('synthetic-secret-message')
             if mode=='timeout':raise httpx.ReadTimeout('synthetic')
             if mode=='unknown':raise httpx.ConnectError('synthetic')
             if mode=='429':return httpx.Response(429,json={'error':{'code':429,'status':'RESOURCE_EXHAUSTED'}})
@@ -148,6 +155,52 @@ def test_exact_probe_sdk_payload_and_risk_reservation(probe):
     assert 'autoTruncate' not in p['body'].decode() and 'taskType' not in p['body'].decode()
     with pytest.raises(c.DiagnosticDenied):d.run_live(p['request'],live_opt_in=True)
     assert len(p['calls'])==1
+
+
+@pytest.mark.parametrize('mode,kind,outcome,cause', [
+    ('dns', 'DNS', 'UNKNOWN', 'socket.gaierror'),
+    ('tls', 'TLS_CERTIFICATE', 'UNKNOWN', 'ssl.SSLCertVerificationError'),
+    ('read', 'READ', 'UNKNOWN', None),
+    ('timeout', 'TIMEOUT', 'TIMEOUT', None),
+    ('429', 'HTTP_STATUS', 'FAILED', None),
+])
+def test_transport_evidence_is_non_secret_and_does_not_release_fence(
+        probe, monkeypatch, mode, kind, outcome, cause):
+    def forbidden_resolver():
+        raise AssertionError('real Host store resolver must not run')
+    monkeypatch.setattr(c, '_programdata_known_folder', forbidden_resolver)
+    monkeypatch.setattr(c, '_localappdata_known_folder', forbidden_resolver)
+    p = probe
+    p['provider'](mode=mode)
+    result = d.run_live(p['request'], live_opt_in=True)
+    assert result.outcome == outcome
+    assert result.transport_failure_kind == kind
+    assert result.transport_cause_type == cause
+    assert result.transport_exception_type
+    assert result.transport_http_status == (429 if mode == '429' else None)
+    assert 'synthetic-secret' not in json.dumps(asdict(result))
+    assert result.provider_attempts == 1 and result.vector_count == 0
+    assert p['rows']() == [(outcome, 1, 8192, 1, 'UNKNOWN')]
+    # Same operation and an independently named campaign remain fenced globally.
+    with pytest.raises(c.DiagnosticDenied):
+        d.run_live(p['request'], live_opt_in=True)
+    new_grant = replace(p['grant'], campaign_id='synthetic-independent-next-campaign')
+    with pytest.raises(c.DiagnosticDenied) as denied:
+        p['usage'].reserve(new_grant, 'new-attempt', items=1, usage_units=8192, cost_micro_units=1)
+    assert denied.value.code == 'RUNNER_CONFLICT'
+    assert p['rows']() == [(outcome, 1, 8192, 1, 'UNKNOWN')]
+    assert len(p['calls']) == len(p['credentials']) == 1
+
+
+@pytest.mark.parametrize('code', ['synthetic-secret-status', 503, True])
+def test_transport_evidence_bounds_cyclic_causes_and_untrusted_status(code):
+    error = RuntimeError('synthetic-secret-message')
+    error.__cause__ = error
+    error.__context__ = socket.gaierror(-1, 'unrelated-secret-context')
+    error.code = code
+    evidence = d._transport_exception_evidence(error)
+    assert evidence == dict(transport_exception_type='builtins.RuntimeError',
+        transport_cause_type=None, transport_http_status=None, transport_failure_kind='OTHER')
 
 
 @pytest.mark.parametrize('mode',['scope','chunk','payload','project','revision','model','sdk','source','dirty',

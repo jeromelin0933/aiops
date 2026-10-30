@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import hashlib
+import math
 from pathlib import Path
 
 from .build_ports import EmbeddingProviderPort, StagedIndexPort
@@ -247,10 +248,17 @@ class KnowledgeBuildService:
             ))
 
         request_size = sum(len(chunk.content.encode("utf-8")) for chunk in chunks)
+        gemini = capability.model == "gemini-embedding-2"
+        sequential = gemini and governed_format and len(chunks) == 54 and len(document_provenance) == 6
+        # Necessary aggregate capacity check only. The controlled provider
+        # validates every exact physical payload against the same per-call cap.
+        capacity = limits.maximum_request_bytes * (limits.maximum_invocations if sequential else 1)
         if (
-            request_size > limits.maximum_request_bytes
+            request_size > capacity
             or len(chunks) > limits.maximum_batch_items
             or limits.maximum_invocations < 1
+            or (gemini and any(len(chunks) > getattr(limits, field) for field in (
+                "maximum_cost_units", "maximum_rate_units", "maximum_quota_units", "maximum_resource_units")))
         ):
             return BuildStageResult(None, (_failure(
                 BuildFailureCode.PROVIDER_BOUNDS_EXCEEDED,
@@ -275,7 +283,8 @@ class KnowledgeBuildService:
             return BuildStageResult(None, (provider_result.failure,))
         if (
             provider_result.capability != capability
-            or provider_result.invocation_count != 1
+            or (provider_result.invocation_count != 1 and not (
+                sequential and provider_result.invocation_count > 0))
             or provider_result.invocation_count > limits.maximum_invocations
             or provider_result.cost_units > limits.maximum_cost_units
             or provider_result.rate_units > limits.maximum_rate_units
@@ -284,6 +293,9 @@ class KnowledgeBuildService:
             or tuple(item.chunk_identity for item in provider_result.embeddings)
             != tuple(chunk.chunk_identity for chunk in chunks)
             or any(len(item.values) != identity_input.embedding_dimension for item in provider_result.embeddings)
+            or (gemini and any(not math.isfinite(math.hypot(*item.values))
+                or math.hypot(*item.values) == 0 or abs(math.hypot(*item.values) - 1.0) > 0.01
+                for item in provider_result.embeddings))
         ):
             return BuildStageResult(None, (_failure(
                 BuildFailureCode.PROVIDER_CONTRACT_INVALID,

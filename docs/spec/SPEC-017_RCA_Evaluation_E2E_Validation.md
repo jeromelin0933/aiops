@@ -9,6 +9,7 @@
 | 欄位 | 內容 |
 |---|---|
 | Document ID | SPEC-017 |
+| Competition P0 Shared Demo Amendment | 2026-10-30 Approved — SPEC Lead富裕正式核准Competition／Formal Scope Amendment；Authority：PM-AIOPS-COMPETITION-SINGLE-DEMO-20261030及PM-AIOPS-COMP-P0-UNBLOCK-20261030-01；Formal baseline不變 |
 | Document Name | RCA Evaluation & E2E Validation |
 | Version | 1.1 |
 | Status | Approved — Migration Readiness Reconciliation Pending |
@@ -29,6 +30,8 @@
 
 | Version | Date | Status | Change |
 |---|---|---|---|
+| v1.1-based single shared demo approval closure | 2026-10-30 | Approved — SPEC Lead | SPEC Lead富裕正式核准Competition／Formal Scope Amendment；依PM-AIOPS-COMPETITION-SINGLE-DEMO-20261030及PM-AIOPS-COMP-P0-UNBLOCK-20261030-01完成文件核准收尾。技術條款、Formal Protocol與下列Draft／Approval／NOT EXECUTED歷史保留；不構成Formal Evaluation或Production PASS。 |
+| v1.1-based single shared demo draft | 2026-10-30 | Draft — SPEC Lead Approval Pending | 依PM-AIOPS-COMPETITION-SINGLE-DEMO-20261030補充§19.4／§19.6 Competition A採共享環境；不改Formal Protocol、Oracle／Ground Truth隔離、N／denominator／namespace／slots或歷史結果，不構成Formal／Production PASS。 |
 | v1.1-based batching amendment | 2026-10-28（approval date） | Approved — Controlled Batching Narrow Amendment | SPEC Lead依PM授權採納既有Combined Independent Document Audit PASS／Findings NONE，僅完成§19.4 Approval／Status收尾；已審查技術條款、F1～F8、S1～S6 O1～O10、N=5及reviewers／Oracle／denominator／Admission不變。下列draft及既有Approval／BLOCK紀錄保留，Formal Evaluation仍為NOT EXECUTED，不授權Live／Formal execution。 |
 | v1.1-based batching draft | 2026-10-28 | Draft — Combined Independent Document Audit／SPEC Lead Approval Pending | 依PM Controlled Batching方向核准及SPEC Lead跨文件修訂授權，僅對齊§19.4 Real-RAG readiness的request contract與SPEC-014 batching draft／PRD-004 §13.5第3點draft；保留Formal S1～S6、N=5、F1～F8、O1～O10、reviewers／Oracle／denominator／Admission。既有Approval／BLOCK／NOT EXECUTED紀錄不變，不形成readiness或Formal PASS，不授權execution。 |
 | v1.1-based amendment | 2026-10-28（approval date） | Approved — Minimum Necessary Competition Scope Reset Amendment | SPEC Lead正式採納Consolidated Independent Semantic Audit PASS／Findings NONE並核准§19.6；僅完成Approval／Status收尾，保留下列draft與歷史approval；不構成Implementation、real gate或Formal PASS，不授權Live／Formal execution。 |
@@ -898,6 +901,8 @@ Source/config/profile改變必須重評evidence freshness並建立適當新linea
 
 ## 19.4 Readiness Gates與Activation Branches
 
+**2026-10-30 Competition P0 applicability — Approved：** 下列共同流程／four-member readiness在Competition A的適用方式，依§19.6新增Single Shared Demo範圍及SPEC-014 §24.7判讀；Formal B與Production requirements不變。Controlled Batching仍依既有已核准條款，不因本Amendment豁免真正Token／Payload／Budget／Usage UNKNOWN安全界線。
+
 共同前置流程依SPEC-014 §24.6：PM Approval → Approved Contract → Offline Implementation／Regression／Independent Audit／Human Checkpoint A → Controlled Provider Diagnostic → Isolated Calibration → Policy Freeze／Regression／Audit／Human Checkpoint B → New Build／Validate／AC-014-X → required regression／audit／remediation。
 
 之後分為不同authority的流程：
@@ -920,6 +925,10 @@ Formal Admission前的preparation-only resources依§8.5建立，不形成Formal
 一般工程選擇與authorized remediation由SPEC Lead處理；若需更改production domain／ownership／security、Oracle或Formal acceptance、降低隔離／Knowledge Governance／測試要求，或無法滿足AC-014-X，依PM escalation boundary BLOCK並聯絡PM，不以文件closure取代所缺evidence。
 
 ## 19.6 Milestone A Demo／Milestone B Formal Scope Reset（Approved — 2026-10-28）
+
+**Single Shared Demo narrow amendment — SPEC Lead Approved 2026-10-30。** 新PM Authority：`PM-AIOPS-COMPETITION-SINGLE-DEMO-20261030`，Direction APPROVED；SPEC Lead富裕已正式核准Competition／Formal Scope精確修訂，不回寫本節2026-10-28核准日期。僅Competition A以一套共享真實環境取代以下四人獨立setup／rebuild前置；由富裕完成54→54／Build／Validate／Demo-scoped Activation／MATCH及NO_MATCH或Knowledge Gap／SOP Provenance與真實Evidence-grounded RCA故事線，其餘成員共用或錄製素材。正式AC-014-X移至後續Formal Portability／Production Acceptance，不刪除、不虛構PASS。A仍維持真實Provider／Retrieval／RCA、隔離calibration／policy freeze、必要失敗／restart驗證、Ground Truth與Secret隔離及既有Domain Ownership。
+
+**狀態與證據邊界。** Competition A只可記`DEMO READY / BLOCKED`；Formal B另記`FORMAL PASS / PENDING`。目前Single Probe UNKNOWN、完整54→54／新build／共享Demo E2E未取得成功證據，Competition A為BLOCKED；Formal B為PENDING。共享Demo不是Formal Admission／Execution、Production Ready或AC-017 Acceptance PASS；不動Formal namespace、Oracle、Ground Truth、denominator、slots、歷史結果或§2～§18 Protocol，不將Demo素材納入Formal統計。此PM scope authority不代替任何新Provider Campaign授權。
 
 Authority：`PM-AIOPS-COMPETITION-SCOPE-RESET-20261028`。本段已正式核准，限定§19.1～§19.5在A／B的適用範圍；不改寫§2.3、§8.5、§11或AC-017-A～T的Formal semantics。本次僅完成文件核准狀態收尾，不構成Implementation Authorization、Live Provider Authorization或Formal Execution Authorization。
 

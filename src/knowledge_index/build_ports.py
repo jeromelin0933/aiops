@@ -15,7 +15,9 @@ from .contracts import (
 
 @runtime_checkable
 class EmbeddingProviderPort(Protocol):
-    """One bounded invocation; implementations must not choose credentials or retry."""
+    """One logical request; only an approved Gemini plan may use bounded sequential
+    physical invocations. Implementations must not choose credentials or retry.
+    """
 
     def capability(self) -> ProviderCapability: ...
 

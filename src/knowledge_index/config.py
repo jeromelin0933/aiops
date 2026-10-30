@@ -123,8 +123,13 @@ def load_knowledge_config(path: str | Path) -> KnowledgeIndexConfig:
         "embedding_profile_identity", "dimension", "normalization_semantics",
         "hidden_retries_disabled", "limits",
     }, "embedding")
-    if embedding["provider"] != "google" or embedding["model"] != "text-embedding-004" or embedding["dimension"] != 768 or embedding["hidden_retries_disabled"] is not True:
-        raise KnowledgeConfigError("embedding baseline must be Google text-embedding-004, dimension 768, without hidden retry")
+    gemini = embedding["model"] == GEMINI_EMBEDDING2_PROFILE.model
+    if embedding["provider"] != "google" or embedding["model"] not in ("text-embedding-004", GEMINI_EMBEDDING2_PROFILE.model) or embedding["dimension"] != 768 or embedding["hidden_retries_disabled"] is not True:
+        raise KnowledgeConfigError("embedding must select an approved Google model, dimension 768, without hidden retry")
+    if gemini and (embedding["capability_identity"] != GEMINI_EMBEDDING2_PROFILE.capability_identity
+                  or embedding["embedding_profile_identity"] != GEMINI_EMBEDDING2_PROFILE.embedding_profile_identity
+                  or embedding["normalization_semantics"] != GEMINI_EMBEDDING2_PROFILE.normalization):
+        raise KnowledgeConfigError("Gemini2 capability/profile/normalization selection must be exact")
     limits = _mapping(embedding["limits"], "embedding.limits")
     _keys(limits, {
         "timeout_seconds", "maximum_request_bytes", "maximum_batch_items",
@@ -132,12 +137,14 @@ def load_knowledge_config(path: str | Path) -> KnowledgeIndexConfig:
         "maximum_quota_units", "maximum_resource_units",
     }, "embedding.limits")
     invocation_limits = ProviderInvocationLimits(**limits)
-    if invocation_limits.maximum_invocations != 1:
-        raise KnowledgeConfigError("provider invocation count must be exactly one")
+    if ((not gemini and invocation_limits.maximum_invocations != 1)
+            or (gemini and (invocation_limits.maximum_invocations > 54
+                            or invocation_limits.timeout_seconds != 30))):
+        raise KnowledgeConfigError("historical invocation count is one; Gemini2 requires bounded <=54 invocations and 30 seconds")
     profile_reference = OpaqueExternalReference(OpaqueReferenceType.CREDENTIAL_PROFILE, _text(embedding["profile_reference"], "profile_reference"))
     capability = ProviderCapability(
         profile_reference, _text(embedding["capability_identity"], "capability_identity"),
-        "google", "text-embedding-004", _text(embedding["embedding_profile_identity"], "embedding_profile_identity"),
+        "google", embedding["model"], _text(embedding["embedding_profile_identity"], "embedding_profile_identity"),
         768, True,
     )
 

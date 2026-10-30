@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import math
 import socket
+import ssl
 from threading import Lock
 from uuid import uuid4
 from hashlib import sha256
@@ -22,7 +23,8 @@ from typing import Any, Callable
 import httpx
 
 from .contracts import (
-    BuildFailureCode, ProviderEmbeddingRequest, QueryEmbeddingRequest,
+    BuildFailureCode, BuildFailureFact, EmbeddingVector, ProviderEmbeddingRequest,
+    ProviderEmbeddingResult, QueryEmbeddingRequest,
     RetrySafetyDisposition,
 )
 from .gemini_diagnostic_controls import (
@@ -72,6 +74,10 @@ class DiagnosticObservation:
     admission_usage_basis: str | None = None
     exact_input_token_count: str = "NOT VERIFIED"
     truncation_status: str = "NOT VERIFIED"
+    transport_exception_type: str | None = None
+    transport_cause_type: str | None = None
+    transport_http_status: int | None = None
+    transport_failure_kind: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -972,6 +978,67 @@ class _DiagnosticLiveTransport(httpx.BaseTransport):
             self._delegate.close()
 
 
+def _transport_exception_evidence(exc: Exception) -> dict:
+    """Bounded type/scalar evidence only; never exception text, headers or URLs.
+
+    This does not change outcome classification, reservation or retry authority.
+    Nested causes can distinguish DNS/TLS from an outer generic ConnectError.
+    """
+    chain = []
+    current = exc
+    while isinstance(current, BaseException) and len(chain) < 8:
+        if any(current is previous for previous in chain):
+            break
+        chain.append(current)
+        # An implicit exception context is not proof of a causal relationship.
+        current = BaseException.__cause__.__get__(current)
+
+    def type_name(error):
+        name = type(error).__module__ + "." + type(error).__name__
+        return name if (len(name) <= 128 and name.isascii()
+                        and name.replace(".", "").replace("_", "").isalnum()) else "OTHER_EXCEPTION"
+
+    status = None
+    from google.genai.errors import APIError
+    for error in chain:
+        # Only an SDK HTTP error or a real HTTPX response supplies HTTP status;
+        # a generic local exception's numeric `code` is not HTTP evidence.
+        if isinstance(error, httpx.HTTPStatusError):
+            value = error.response.status_code
+            if type(value) is int and 100 <= value <= 599:
+                status = value
+                break
+        if not isinstance(error, APIError):
+            continue
+        for attribute in ("code", "status_code"):
+            try:
+                value = getattr(error, attribute, None)
+            except Exception:
+                continue
+            if type(value) is int and 100 <= value <= 599:
+                status = value
+                break
+        if status is not None:
+            break
+    categories = (
+        ("DNS", (socket.gaierror,)),
+        ("TLS_CERTIFICATE", (ssl.SSLCertVerificationError,)),
+        ("TLS", (ssl.SSLError,)),
+        ("PROXY", (httpx.ProxyError,)),
+        ("TIMEOUT", (httpx.TimeoutException, TimeoutError)),
+        ("READ", (httpx.ReadError,)),
+        ("WRITE", (httpx.WriteError,)),
+        ("PROTOCOL", (httpx.ProtocolError, httpx.UnsupportedProtocol)),
+        ("CONNECT", (httpx.ConnectError, ConnectionError)),
+    )
+    kind = next((name for name, types in categories
+                 if any(isinstance(error, types) for error in chain)),
+                "HTTP_STATUS" if status is not None else "OTHER")
+    return dict(transport_exception_type=type_name(exc),
+                transport_cause_type=type_name(chain[-1]) if len(chain) > 1 else None,
+                transport_http_status=status, transport_failure_kind=kind)
+
+
 def _dispatch_live(prepared, approved, evidence, credential, revalidate, *,
                    _vectors=None, _attempt_id=None, _usage_sink=None) -> DiagnosticObservation:
     guard = _DiagnosticLiveTransport(prepared, approved, evidence, credential, revalidate, attempt_id=_attempt_id)
@@ -1017,7 +1084,8 @@ def _dispatch_live(prepared, approved, evidence, credential, revalidate, *,
         outcome = "TIMEOUT" if "timeout" in field.lower() else "UNKNOWN" if field == "transport" else "FAILED"
         return DiagnosticObservation(outcome, field, code, field, detail, retry,
             guard.delegations, prepared.identities, 0, "UNKNOWN", prepared.cost_micro_units,
-            prepared.record.campaign_id, prepared.record.source_revision, prepared.record.input_commitment)
+            prepared.record.campaign_id, prepared.record.source_revision, prepared.record.input_commitment,
+            **_transport_exception_evidence(exc))
     finally:
         if _close_offline_resources(sdk, sync, async_client):
             raise DiagnosticDenied("diagnostic cleanup failed; attempt retained for human review") from None
@@ -1083,7 +1151,8 @@ def _prepare_sequential_batches(request, binding, artifact, resolve_facts):
         chunks = request.chunks[start:end]
         documents = {c.document_identity for c in chunks}
         child_request = replace(request, chunks=chunks,
-            approved_document_ids=tuple(pair for pair in request.approved_document_ids if pair[0] in documents))
+            approved_document_ids=tuple(pair for pair in request.approved_document_ids if pair[0] in documents),
+            limits=replace(request.limits, maximum_invocations=1))
         child_e4 = evidence[ordinal]
         child_e4.matches_record_input(child_record, child_input)
         child_proof = proof
@@ -1107,7 +1176,7 @@ def _prepare_sequential_batches(request, binding, artifact, resolve_facts):
     # Conservative admission: ALL planned requests fit one declared quota
     # window. Accounting units require reviewed source evidence; never infer
     # that one HTTP send consumes one RPM. No clock/scheduler/quota domain.
-    if (len(prepared) > record.maximum_invocations
+    if (len(prepared) > min(record.maximum_invocations, request.limits.maximum_invocations)
             or sum(len(item.texts) for item, _, _ in prepared) > record.maximum_items
             or total_tokens > record.maximum_usage_units or total_tokens > quota["tpm"]
             or len(prepared) * quota["request_units_per_invocation"] > min(quota["rpm"], quota["rpd"])
@@ -1126,7 +1195,7 @@ def _validate_global_batch_vectors(request, collected, tolerance):
         raise DiagnosticDenied("global 54-to-54 diagnostic validation failed", code="INVALID_PROVIDER_RESPONSE")
 
 
-def _run_sequential_campaign(request, binding, artifact, resolve_facts):
+def _run_sequential_campaign(request, binding, artifact, resolve_facts, *, _build_vectors=None):
     if not _SEQUENTIAL_RUNNER_LOCK.acquire(blocking=False):
         raise DiagnosticDenied("sequential diagnostic runner conflict", code="RUNNER_CONFLICT")
     try:
@@ -1188,6 +1257,10 @@ def _run_sequential_campaign(request, binding, artifact, resolve_facts):
                     cost_estimate_micro_units=sum(o.cost_estimate_micro_units for o in observations),
                     input_commitment=binding.record.input_commitment)
         _validate_global_batch_vectors(request, collected, binding.record.normalization_tolerance)
+        # Release nothing to Build until ALL batches, durable usage and global
+        # validation succeed. No cross-run cache/import or second provider call.
+        if _build_vectors is not None:
+            _build_vectors.extend(collected)
         return replace(observations[-1], category="BATCHED_OBSERVATION_MAPPING_REVIEW_REQUIRED",
             ordered_identities=tuple(identity for identity, _ in collected), vector_count=54,
             provider_attempts=sum(o.provider_attempts for o in observations),
@@ -1205,6 +1278,45 @@ def _run_sequential_campaign(request, binding, artifact, resolve_facts):
 def run_live(
     request: ProviderEmbeddingRequest | QueryEmbeddingRequest | None = None,
     *, live_opt_in: bool = False, operation: str = "CONTROLLED_PROVIDER_DIAGNOSTIC",
+) -> DiagnosticObservation:
+    """Existing guarded diagnostic observation entry; live is denied by default."""
+    return _run_live(request, live_opt_in=live_opt_in, operation=operation)
+
+
+def embed_documents_for_build(
+    request: ProviderEmbeddingRequest, *, live_opt_in: bool = False,
+) -> ProviderEmbeddingResult:
+    """Existing provider-port projection of the SAME guarded campaign execution.
+
+    No injected client, evidence, ledger, credentials or vector import. This
+    entry never activates a build and accepts no single-probe result.
+    """
+    vectors = []
+    observation = _run_live(request, live_opt_in=live_opt_in, _build_vectors=vectors)
+    if observation.outcome != "SUCCESS" or observation.usage == "UNKNOWN":
+        failure = BuildFailureFact(
+            observation.failure_code or BuildFailureCode.PROVIDER_UNAVAILABLE,
+            observation.failure_field or "UNKNOWN_USAGE",
+            observation.failure_detail or "controlled document campaign did not complete",
+            RetrySafetyDisposition.DO_NOT_RETRY,
+        )
+        # Zero delivered-item units are NOT a refund or a billing assertion;
+        # every real attempt/reservation remains in the existing SQLite ledger.
+        return ProviderEmbeddingResult(request.capability, (), observation.provider_attempts,
+                                       0, 0, 0, 0, failure)
+    _validate_global_batch_vectors(request, vectors, 0.01)
+    # Preserve existing Gemini port accounting: delivered-item resource units,
+    # NOT observed tokens, micro-USD, quota RPM or actual Google billing.
+    units = len(vectors)
+    return ProviderEmbeddingResult(request.capability,
+        tuple(EmbeddingVector(identity, values) for identity, values in vectors),
+        observation.provider_attempts, units, units, units, units)
+
+
+def _run_live(
+    request: ProviderEmbeddingRequest | QueryEmbeddingRequest | None = None,
+    *, live_opt_in: bool = False, operation: str = "CONTROLLED_PROVIDER_DIAGNOSTIC",
+    _build_vectors=None,
 ) -> DiagnosticObservation:
     """Load protected campaign facts; reserve once before controlled dispatch.
 
@@ -1225,6 +1337,16 @@ def run_live(
         raise DiagnosticDenied("counting cannot dispatch embedding", code="OPERATION_MISMATCH")
     if not isinstance(request, (ProviderEmbeddingRequest, QueryEmbeddingRequest)):
         raise DiagnosticDenied("authorized diagnostic input is not available")
+    if _build_vectors is not None and (
+        not isinstance(request, ProviderEmbeddingRequest) or len(request.chunks) != 54
+        or not record.bounds_basis.startswith("SEQUENTIAL_BATCH_PLAN_V1:")
+        or record.normalization_tolerance != 0.01
+        or any(getattr(request.limits, name) < 54 for name in (
+            "maximum_batch_items", "maximum_cost_units", "maximum_rate_units",
+            "maximum_quota_units", "maximum_resource_units"))
+    ):
+        raise DiagnosticDenied("build requires full controlled 54-input plan and norm tolerance 0.01",
+                               code="INPUT_BOUNDS_EXCEEDED")
     kind, identities, envelopes = _envelopes(request)
     scope = (request.approved_corpus_id if kind == "document"
              else "build:" + request.frozen_build_identity)
@@ -1252,7 +1374,8 @@ def run_live(
 
     if record.bounds_basis.startswith("SEQUENTIAL_BATCH_PLAN_V1:"):
         artifact = load_live_safety_artifact()
-        return _run_sequential_campaign(request, binding, artifact, live_facts)
+        return _run_sequential_campaign(request, binding, artifact, live_facts,
+                                        _build_vectors=_build_vectors)
 
     def prepare():
         return _preflight(

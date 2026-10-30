@@ -2,6 +2,14 @@
 
 Last reviewed against current governance baseline: 2026-10-02
 
+## Competition P0 — Single Shared Demo（2026-10-30）
+
+PM Authority：`PM-AIOPS-COMPETITION-SINGLE-DEMO-20261030`。Competition方向已核准；PRD-004／SPEC-014／SPEC-017新增精確條文為待Human／文件權責人核准的Narrow Amendment Draft，原Approved baseline及歷史結果不變。
+
+11/07展示改由富裕在一套受控環境交付真實54→54 Knowledge Build／Validate／Demo-scoped Activation／Retrieve及Incident→Evidence→RAG→Validated RCA→Publication；其他三人共用環境／展示素材，不需各自Key或重跑Embedding。正式AC-014-X四人重建、Production及Formal Evaluation仍保留，Demo不構成其PASS。API Key不分享；Chroma與Knowledge SQLite不推Git；Diagnostic attempts.sqlite不是Knowledge Index。
+
+目前首筆Single Probe（source `30b9e9e58edcf5f11722b25d4d160d26bb780320`）為UNKNOWN／transport，provider_attempts=1、vector_count=0；Human Post報告attempts=1／fences=1、reserved_usage=8192／reserved_cost=1。原Attempt／Authority／Hold保留；此PM決策不授權重試、新Google Invocation或Fence解除。完整54→54／新模型Knowledge／Real-RAG Demo仍BLOCKED，不能將以下historical implemented／NOT EXECUTED紀錄當成目前Live PASS。最短操作路徑、接線缺口與安全邊界見[Knowledge Setup](docs/knowledge_index.md#competition-p0-shared-demo--2026-10-30)。
+
 本repository目前已實作Mock Data generation、Observability foundation、Event Detection、Event Detection Runner、Scenario runtime／validation、SPEC-006～011核准範圍，以及PRD-004 Candidate A～E：RCA persistence／publication、Incident Evidence Snapshot／Materiality、Knowledge Corpus／Index／Retrieval／Snapshot、LLM Generation／Validation與RCA Orchestration／Publication／Recovery。PRD-001 v3.5仍為overall platform authority，PRD-003 v1.1是Alert Correlation／Incident Management authority，PRD-004 v1.0維持`Approved`產品需求權威。
 
 ## Current implementation

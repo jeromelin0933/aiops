@@ -740,6 +740,7 @@ class GoogleEmbeddingAdapter:
     def __init__(
         self, client: Any, capability: ProviderCapability, *,
         gemini_verification: GeminiEmbedding2Verification | None = None,
+        controlled_live_opt_in: bool = False,
     ) -> None:
         gemini = capability.model == GEMINI_MODEL
         if (
@@ -755,9 +756,13 @@ class GoogleEmbeddingAdapter:
             raise ValueError("Google embedding capability is not the approved fixed baseline")
         if gemini:
             _require_pinned_gemini_sdk()
+        if type(controlled_live_opt_in) is not bool or (controlled_live_opt_in and (
+                not gemini or client is not None or gemini_verification is not None)):
+            raise ValueError("controlled build accepts no caller client or verification override")
         self._client = client
         self._capability = capability
         self._gemini_verification = gemini_verification
+        self._controlled_live_opt_in = controlled_live_opt_in
 
     def capability(self) -> ProviderCapability:
         return self._capability
@@ -843,6 +848,9 @@ class GoogleEmbeddingAdapter:
 
         if request.capability != self._capability:
             return failed(BuildFailureCode.PROFILE_MISMATCH, "capability", "provider capability continuity failed")
+        if self._controlled_live_opt_in:
+            from .gemini_diagnostic import embed_documents_for_build
+            return embed_documents_for_build(request, live_opt_in=True)
         if type(self._client) is not _GeminiEmbedding2OfflineClient:
             return failed(
                 BuildFailureCode.PROVIDER_UNAVAILABLE, "provider_authorization",
