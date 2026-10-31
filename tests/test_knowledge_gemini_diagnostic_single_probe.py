@@ -9,6 +9,8 @@ import socket
 import ssl
 
 import httpx
+import gzip
+import zlib
 import pytest
 
 from knowledge_index import gemini_diagnostic as d
@@ -155,6 +157,67 @@ def test_exact_probe_sdk_payload_and_risk_reservation(probe):
     assert 'autoTruncate' not in p['body'].decode() and 'taskType' not in p['body'].decode()
     with pytest.raises(c.DiagnosticDenied):d.run_live(p['request'],live_opt_in=True)
     assert len(p['calls'])==1
+
+
+@pytest.mark.parametrize('encoding', ['identity', 'gzip', 'deflate'])
+@pytest.mark.parametrize('damage', ['none', 'corrupt', 'truncated', 'oversize'])
+def test_guarded_response_content_decoding(probe, monkeypatch, encoding, damage):
+    """Real run_live/guard/SDK; only the physical delegate is synthetic.
+
+    Stream raw wire bytes: Response(content=...) would decode at fixture
+    construction, hiding the production streaming decoder boundary.
+    """
+    p = probe
+    body = json.dumps({'embeddings': [{'values': [1.] + [0.] * 767}],
+                       'usageMetadata': {'promptTokenCount': 42}}).encode()
+    if damage == 'oversize':
+        body = b' ' * 1_000_001 + body
+    wire = (gzip.compress(body) if encoding == 'gzip' else
+            zlib.compress(body) if encoding == 'deflate' else body)
+    if damage == 'corrupt':
+        wire = b'not-valid-compression-or-json'
+    elif damage == 'truncated':
+        # Remove only the compression trailer: decoded JSON can be complete.
+        wire = wire[:-8] if encoding == 'gzip' else wire[:-4] if encoding == 'deflate' else wire[:len(wire)//2]
+    responses = []
+
+    def send(request):
+        p['calls'].append(True)
+        assert request.content == p['body']
+        headers = {'content-type': 'application/json', 'content-length': str(len(wire))}
+        if encoding != 'identity':
+            headers['content-encoding'] = encoding
+        response = httpx.Response(200, headers=headers, stream=httpx.ByteStream(wire))
+        responses.append(response)
+        return response
+
+    monkeypatch.setattr(d, '_create_live_transport', lambda: httpx.MockTransport(send))
+    result = d.run_live(p['request'], live_opt_in=True)
+    assert len(p['calls']) == len(p['credentials']) == 1
+    assert responses[0].is_closed
+    if damage == 'none':
+        assert (result.outcome, result.transport_exception_type, result.transport_cause_type) == ('SUCCESS', None, None)
+        assert result.vector_count == 1 and result.usage == '42'
+    else:
+        assert result.outcome != 'SUCCESS' and result.vector_count == 0
+        assert result.usage == 'UNKNOWN'
+        if encoding != 'identity' and damage in ('corrupt', 'truncated'):
+            assert result.transport_exception_type == 'httpx.DecodingError'
+            if damage == 'corrupt':
+                assert result.transport_cause_type == 'zlib.error'
+    with pytest.raises(c.DiagnosticDenied):
+        d.run_live(p['request'], live_opt_in=True)
+    assert len(p['calls']) == len(p['credentials']) == 1
+
+
+@pytest.mark.parametrize('encoding', ['gzip', 'deflate'])
+def test_decoded_body_with_original_encoding_reproduces_live_exception(encoding):
+    # Exact pre-fix reconstruction step: HTTPX interprets content bytes using
+    # retained compression headers, although the guard already decoded them.
+    decoded = json.dumps({'embeddings': [{'values': [1.] + [0.] * 767}]}).encode()
+    with pytest.raises(httpx.DecodingError) as error:
+        httpx.Response(200, headers={'content-encoding': encoding}, content=decoded)
+    assert isinstance(error.value.__cause__, zlib.error)
 
 
 @pytest.mark.parametrize('mode,kind,outcome,cause', [

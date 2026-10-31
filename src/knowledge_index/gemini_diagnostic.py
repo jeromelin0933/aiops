@@ -949,13 +949,19 @@ class _DiagnosticLiveTransport(httpx.BaseTransport):
             self.delegations += 1
             response = self._delegate.handle_request(request)
             try:
-                # Bound the provider body before the SDK decodes it. Never log
+                # iter_bytes() content-decodes; bound that body before SDK JSON parsing. Never log
                 # headers, provider messages, request objects or raw responses.
                 body = bytearray()
                 for chunk in response.iter_bytes():
-                    body.extend(chunk)
-                    if len(body) > 1_000_000:
+                    if len(body) + len(chunk) > 1_000_000:
                         raise DiagnosticDenied("diagnostic provider response exceeds bound", code="INVALID_PROVIDER_RESPONSE")
+                    body.extend(chunk)
+                if response.headers.get("content-encoding", "").strip().lower() in ("gzip", "deflate"):
+                    # Pinned HTTPX 0.28.1 flush() does not reject a missing
+                    # compression trailer. Inspect its SAME decoder, not a
+                    # second decompression pass, before accepting complete JSON.
+                    if not response._get_content_decoder().decompressor.eof:
+                        raise httpx.DecodingError("incomplete compressed diagnostic response")
                 # Observe only the already guarded physical response. The
                 # pinned SDK drops this field; no SDK patch/raw-body storage.
                 if 200 <= response.status_code < 300:
@@ -966,7 +972,11 @@ class _DiagnosticLiveTransport(httpx.BaseTransport):
                         self._prompt_tokens = _embedding_prompt_tokens(bytes(body))
                         if self._prompt_tokens is not None:
                             self._usage_response_sha256 = sha256(body).hexdigest()
-                return httpx.Response(response.status_code, headers=response.headers,
+                # The body is decoded: do not advertise compression or retain
+                # wire framing/length. HTTPX computes the new Content-Length.
+                headers = [(k, v) for k, v in response.headers.multi_items()
+                           if k.lower() not in ("content-encoding", "content-length", "transfer-encoding")]
+                return httpx.Response(response.status_code, headers=headers,
                                       content=bytes(body), request=request)
             finally:
                 response.close()
