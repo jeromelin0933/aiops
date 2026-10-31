@@ -795,6 +795,23 @@ _P0_HISTORY_EVIDENCE_SHA256 = _p0_commitment(dict(
     authorization_sha256="eba336ba4c9345835b8a7b1358b48d60a8091b0eee9b7b01ef9fe98b87ff8edb",
     observation_sha256="3bb6fc823cb4336867589a66495c4b342eda7dd1c9654557fb3e1d47f021a49e"))
 
+# Exact second Human Acceptance, with the explicitly accepted linkage limitation.
+# These are source anchors, never caller-selected approval metadata.
+_P0_SECOND_HUMAN_REVIEW_REFERENCE = "SPECLEAD-SPEC014-D2-UNKNOWN-REVIEW-20261031-01"
+_P0_SECOND_REVIEWER = "SPEC Lead"
+_P0_SECOND_RECORDED_AT = "2026-10-31T12:58:56+08:00"
+_P0_SECOND_HISTORY_ROW = MappingProxyType(dict(
+    campaign_id="spec014-direct-embed52-followup-20261031-01",
+    request_id="ad7716655be04e919daf4db6b79a1ec7", outcome="UNKNOWN", items=1,
+    usage_reserved=8192, cost_reserved=1, usage_observed="UNKNOWN", observation_json=None))
+_P0_SECOND_HISTORY_ROW_SHA256 = _p0_commitment(_P0_SECOND_HISTORY_ROW)
+_P0_SECOND_HISTORY_EVIDENCE_SHA256 = _p0_commitment(dict(
+    row_sha256=_P0_SECOND_HISTORY_ROW_SHA256,
+    source_revision="b147c7107e7f2135240896898549cd4fadff0a60",
+    input_commitment=COUNTING_INPUT, body_sha256=SINGLE_PROBE_PAYLOAD,
+    authorization_sha256="8a941ca0a0323151469e2152a26d677b95e3479d828cbd5d1ee2463f3983d125",
+    observation_sha256="3c8ee7cab4904993a3bc444e48c969771b7de688500afd5891caff7ab838b405"))
+
 
 @dataclass(frozen=True, slots=True)
 class P0UnknownAttemptReview:
@@ -815,27 +832,48 @@ class P0UnknownAttemptReview:
     target_pm_approval_reference: str
 
     def matches_record(self, record) -> None:
+        self._matches_history(record, _P0_HISTORY_ROW, _P0_HISTORY_ROW_SHA256,
+                              _P0_HISTORY_EVIDENCE_SHA256, _P0_HUMAN_REVIEW_REFERENCE)
+
+    def _matches_history(self, record, row, row_sha256, evidence_sha256, review_reference,
+                         *, reviewer_identity=None) -> None:
+        if not review_reference:
+            raise DiagnosticDenied("historical Human Review acceptance is pending",
+                                   code="HISTORICAL_REVIEW_MISMATCH")
         for name in self.__dataclass_fields__:
             value = getattr(self, name)
             if type(value) is not str or not 1 <= len(value) <= 256 or value != value.strip():
                 raise DiagnosticDenied("P0 review metadata is invalid", code="HISTORICAL_REVIEW_MISMATCH")
         if (self.authority_reference != _P0_UNBLOCK_AUTHORITY
-                or self.review_reference != _P0_HUMAN_REVIEW_REFERENCE
-                or self.historical_campaign_id != _P0_HISTORY_ROW["campaign_id"]
-                or self.historical_request_id != _P0_HISTORY_ROW["request_id"]
-                or self.historical_row_sha256 != _P0_HISTORY_ROW_SHA256
-                or self.historical_evidence_sha256 != _P0_HISTORY_EVIDENCE_SHA256
+                or self.review_reference != review_reference
+                or self.historical_campaign_id != row["campaign_id"]
+                or self.historical_request_id != row["request_id"]
+                or self.historical_row_sha256 != row_sha256
+                or self.historical_evidence_sha256 != evidence_sha256
                 or self.target_campaign_id != record.campaign_id
                 or self.target_campaign_id == self.historical_campaign_id
                 or self.target_pm_approval_reference != record.pm_approval_reference
                 or self.target_pm_approval_reference in (
                     _P0_UNBLOCK_AUTHORITY, _P0_SCOPE_AUTHORITY, "PM-SPEC014-DIRECT-EMBED-LIVE-20261030-01")
-                or self.reviewer_identity != record.spec_lead_identity
+                or self.reviewer_identity != (record.spec_lead_identity if reviewer_identity is None else reviewer_identity)
                 or record.purpose != "CONTROLLED_PROVIDER_DIAGNOSTIC"
                 or _timestamp(self.recorded_at) < _timestamp("2026-10-30T00:00:00+08:00")
                 or _timestamp(self.recorded_at) > datetime.now(timezone.utc)
                 or _timestamp(self.recorded_at) >= _timestamp(record.expires_at)):
             raise DiagnosticDenied("P0 review is not bound to this independent live campaign",
+                                   code="HISTORICAL_REVIEW_MISMATCH")
+
+
+@dataclass(frozen=True, slots=True)
+class P0SecondUnknownAttemptReview(P0UnknownAttemptReview):
+    """Same wire facts, separately anchored second case; no generic registry."""
+
+    def matches_record(self, record) -> None:
+        self._matches_history(record, _P0_SECOND_HISTORY_ROW, _P0_SECOND_HISTORY_ROW_SHA256,
+                              _P0_SECOND_HISTORY_EVIDENCE_SHA256, _P0_SECOND_HUMAN_REVIEW_REFERENCE,
+                              reviewer_identity=_P0_SECOND_REVIEWER)
+        if self.recorded_at != _P0_SECOND_RECORDED_AT:
+            raise DiagnosticDenied("second review recorded time does not match Human Acceptance",
                                    code="HISTORICAL_REVIEW_MISMATCH")
 
 
@@ -876,6 +914,7 @@ class DiagnosticAuthorizationRecord:
     project_identity: str | None = None
     credential_profile_revision: str | None = None
     p0_unknown_review: P0UnknownAttemptReview | None = None
+    p0_two_unknown_reviews: tuple[P0UnknownAttemptReview, P0SecondUnknownAttemptReview] | None = None
 
     def __post_init__(self) -> None:
         for field in (
@@ -948,12 +987,24 @@ class DiagnosticAuthorizationRecord:
             if type(self.p0_unknown_review) is not P0UnknownAttemptReview:
                 raise DiagnosticDenied("P0 review must use the exact versioned authorization fields")
             self.p0_unknown_review.matches_record(self)
+        if self.p0_two_unknown_reviews is not None:
+            reviews = self.p0_two_unknown_reviews
+            if (self.p0_unknown_review is not None or type(reviews) is not tuple or len(reviews) != 2
+                    or type(reviews[0]) is not P0UnknownAttemptReview
+                    or type(reviews[1]) is not P0SecondUnknownAttemptReview
+                    or not is_single_document_probe(self)
+                    or self.campaign_id in (_P0_HISTORY_ROW["campaign_id"], _P0_SECOND_HISTORY_ROW["campaign_id"])
+                    or self.pm_approval_reference == "PM-SPEC014-DIRECT-EMBED-FOLLOWUP-20261030-01"):
+                raise DiagnosticDenied("two-case review requires a distinct single-probe live grant",
+                                       code="HISTORICAL_REVIEW_MISMATCH")
+            for review in reviews:
+                review.matches_record(self)
 
     @classmethod
     def from_json(cls, data: bytes) -> "DiagnosticAuthorizationRecord":
         try:
             value = _unique_json(data)
-            optional = {"project_identity", "credential_profile_revision", "p0_unknown_review"}
+            optional = {"project_identity", "credential_profile_revision", "p0_unknown_review", "p0_two_unknown_reviews"}
             if (type(value) is not dict or not set(cls.__dataclass_fields__) - optional <= set(value)
                     or not set(value) <= set(cls.__dataclass_fields__)):
                 raise DiagnosticDenied("authorization record fields are incomplete or extra")
@@ -962,6 +1013,14 @@ class DiagnosticAuthorizationRecord:
                 if type(review) is not dict or set(review) != set(P0UnknownAttemptReview.__dataclass_fields__):
                     raise DiagnosticDenied("P0 review fields are incomplete or extra")
                 value["p0_unknown_review"] = P0UnknownAttemptReview(**review)
+            reviews = value.get("p0_two_unknown_reviews")
+            if reviews is not None:
+                if (type(reviews) is not list or len(reviews) != 2
+                        or any(type(r) is not dict or set(r) != set(P0UnknownAttemptReview.__dataclass_fields__)
+                               for r in reviews)):
+                    raise DiagnosticDenied("two-case review fields are incomplete or extra")
+                value["p0_two_unknown_reviews"] = (P0UnknownAttemptReview(**reviews[0]),
+                                                   P0SecondUnknownAttemptReview(**reviews[1]))
             return cls(**value)
         except (UnicodeError, TypeError, ValueError) as exc:
             if isinstance(exc, DiagnosticDenied):
@@ -975,7 +1034,7 @@ def authorization_record_digest(record: DiagnosticAuthorizationRecord) -> str:
         raise DiagnosticDenied("authorization record is invalid")
     fields = asdict(record)
     # Historical embedding grants retain their exact pre-extension digest.
-    for name in ("project_identity", "credential_profile_revision", "p0_unknown_review"):
+    for name in ("project_identity", "credential_profile_revision", "p0_unknown_review", "p0_two_unknown_reviews"):
         if fields[name] is None:
             fields.pop(name)
     canonical = json.dumps(fields, sort_keys=True, ensure_ascii=True,
@@ -2082,26 +2141,27 @@ _FENCE_PREDICATE = ("outcome IN ('IN_FLIGHT','UNKNOWN','TIMEOUT') OR usage_obser
 def _blocking_fence_count(db: sqlite3.Connection, record=None) -> int:
     """Read-only classification shared by preflight and atomic reservation.
 
-    Raw historical fences remain visible. Only one exact, unchanged reviewed
-    row may stop blocking ONE separately authorized target campaign.
+    Raw historical fences remain visible. Only the exact one/two reviewed
+    rows may stop blocking ONE separately authorized target campaign.
     """
     count = db.execute("SELECT COUNT(*) FROM attempts WHERE " + _FENCE_PREDICATE).fetchone()[0]
-    if record is None or record.p0_unknown_review is None:
+    if record is None or (record.p0_unknown_review is None and record.p0_two_unknown_reviews is None):
         return count
     record.__post_init__()
-    review = record.p0_unknown_review
-    try:
-        row = db.execute("SELECT campaign_id,request_id,outcome,items,usage_reserved,cost_reserved,"
-                         "usage_observed,observation_json FROM attempts WHERE campaign_id=? AND request_id=?",
-                         (review.historical_campaign_id, review.historical_request_id)).fetchone()
-    except sqlite3.Error as exc:
-        raise DiagnosticDenied("reviewed historical schema or evidence is unavailable",
-                               code="HISTORICAL_REVIEW_MISMATCH") from exc
-    if (row is None or count < 1
-            or _p0_commitment(dict(zip(_P0_HISTORY_ROW, row))) != review.historical_row_sha256):
-        raise DiagnosticDenied("reviewed historical row changed or is missing",
-                               code="HISTORICAL_REVIEW_MISMATCH")
-    return count - 1
+    reviews = record.p0_two_unknown_reviews or (record.p0_unknown_review,)
+    for review in reviews:
+        try:
+            row = db.execute("SELECT campaign_id,request_id,outcome,items,usage_reserved,cost_reserved,"
+                             "usage_observed,observation_json FROM attempts WHERE campaign_id=? AND request_id=?",
+                             (review.historical_campaign_id, review.historical_request_id)).fetchone()
+        except sqlite3.Error as exc:
+            raise DiagnosticDenied("reviewed historical schema or evidence is unavailable",
+                                   code="HISTORICAL_REVIEW_MISMATCH") from exc
+        if (row is None or count < len(reviews)
+                or _p0_commitment(dict(zip(_P0_HISTORY_ROW, row))) != review.historical_row_sha256):
+            raise DiagnosticDenied("reviewed historical row changed or is missing",
+                                   code="HISTORICAL_REVIEW_MISMATCH")
+    return count - len(reviews)
 
 
 def inspect_local_counting_store(*, runner_sid: str, source_revision: str,

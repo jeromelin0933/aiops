@@ -670,7 +670,7 @@ def validate(item, actual=None, **changes):
 
 
 @pytest.mark.parametrize("field", tuple(name for name in DiagnosticAuthorizationRecord.__dataclass_fields__
-                                      if name not in ("project_identity", "credential_profile_revision", "p0_unknown_review")))
+                                      if name not in ("project_identity", "credential_profile_revision", "p0_unknown_review", "p0_two_unknown_reviews")))
 def test_every_mandatory_record_field_is_required(field):
     values = asdict(record())
     del values[field]
