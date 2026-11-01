@@ -2,6 +2,12 @@
 
 Last reviewed against current governance baseline: 2026-10-02
 
+## Competition P0 — Demo Gate Reset Candidate（2026-11-01）
+
+最新 Authority：`PM-AIOPS-COMP-P0-DEMO-GATE-RESET-20261101`；Parent：`PM-AIOPS-COMP-P0-KNOWLEDGE-DELIVERY-20261101`。SPEC Lead於2026-11-01正式核准SPEC-014 §24.9.1～§24.9.5精確Competition Demo-only Narrow Amendment。一套共享Demo可依已核准契約使用同一次完整真實54→54→既有Demo Build／Validate→Human Explicit Demo Activation→Real Retrieval／RCA；Formal／Production仍保留獨立Calibration、Policy Freeze、Separate Build、AC-014-X及SPEC-017。沒有重新向量化、Import或Rename捷徑；契約批准不等於Live、Activation、Profile／Scope或Risk Exception授權。
+
+本輪Full54歷史Scope Candidate只接受原兩筆精確Human Review、固定Plan與新的獨立Live Grant；原Raw UNKNOWN／Hold不動，Query不適用。Token／Quota仍須原正式證據；Bounded-risk僅Proposal。S5／S2只是候選，四Scope規則未批准，Runtime繼續保守省略Filters。Default沒有Live／Demo Activation；正式Profile與Threshold亦未批准。以下Current Knowledge Delivery文字為本次Gate Reset前的狀態快照；完整操作邊界見[Knowledge Setup](docs/knowledge_index.md#demo-gate-reset-candidate--2026-11-01)。
+
 ## Competition P0 — Current Knowledge Delivery（2026-11-01）
 
 Authority：`PM-AIOPS-COMP-P0-KNOWLEDGE-DELIVERY-20261101`，本輪僅授權離線整合。Human 已接受第三次 Single Probe SUCCESS：campaign `spec014-direct-embed52-third-20261031-01`、attempt `48e21df9ea19485aa0e0746781be9f6c`，一次 physical attempt／一筆 768D vector／observed usage 100，僅為 PROBE_OBSERVATION_ONLY。Human Post：attempts=3、historical UNKNOWN raw fences=2、reserved usage=24576／cost=3；歷史列未變。此為 Human Evidence，不是本輪重新查驗正式 Store，也不是完整 54→54 PASS。

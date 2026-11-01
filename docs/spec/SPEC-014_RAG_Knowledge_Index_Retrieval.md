@@ -9,6 +9,7 @@
 | 欄位 | 內容 |
 |---|---|
 | Document ID | SPEC-014 |
+| §24.9 Competition Demo-only Narrow Amendment | 2026-11-01 APPROVED — SPEC Lead正式接受§24.9.1～§24.9.5精確條款；Authority：PM-AIOPS-COMP-P0-DEMO-GATE-RESET-20261101；Parent：PM-AIOPS-COMP-P0-KNOWLEDGE-DELIVERY-20261101。僅核准Demo-only Calibration Deferral及Full54 Historical Scope契約；不核准Scope候選值、Profile／Threshold、Risk Exception、Live或Activation，不改§24.8 Draft與Formal／Production義務 |
 | Two-UNKNOWN Narrow Amendment | 2026-10-31 APPROVED — SPEC Lead正式核准；PM Conditional Continue Gemini／Final Stop-Loss Boundary授權本次有限離線修訂；第二筆Human Review ACCEPTED WITH EVIDENCE LIMITATION（2026-10-31T12:58:56+08:00），第三次Live NOT AUTHORIZED，正式例外未啟用；既有D-1與Shared Demo核准不變 |
 | D-1 P0 UNKNOWN Exception Amendment | 2026-10-30 Approved — SPEC Lead富裕正式核准；Authority：PM-AIOPS-COMP-P0-UNBLOCK-20261030-01；D-1 Audit Finding CLOSED；正式例外未啟用，D-2 Live未授權 |
 | Competition P0 Shared Demo Amendment | 2026-10-30 Approved — SPEC Lead富裕正式核准；Authority：PM-AIOPS-COMPETITION-SINGLE-DEMO-20261030；不取代既有Approved baseline或構成Demo／Formal PASS |
@@ -44,6 +45,7 @@
 
 | Version | Date | Status | Change |
 |---|---|---|---|
+| v1.4-based §24.9 approval closure | 2026-11-01 | Approved — SPEC Lead | SPEC Lead依PM-AIOPS-COMP-P0-DEMO-GATE-RESET-20261101及Parent PM-AIOPS-COMP-P0-KNOWLEDGE-DELIVERY-20261101正式接受§24.9.1～§24.9.5精確Competition Demo-only Narrow Amendment。僅收尾Approval Metadata／直接引用狀態，不修改已審技術條款；保留原DRAFT、§24.8 Draft、歷史UNKNOWN／Hold及既有Approval。Scope候選值、Profile／Threshold、Bounded-risk、Full54／Query／LLM Live、Activation與Formal Completion未獲本決定核准。 |
 | v1.4-based two-UNKNOWN approval closure | 2026-10-31 | Approved — SPEC Lead | SPEC Lead已完成Two-UNKNOWN Source Patch、Offline Verification Evidence與Human Review Summary審閱，依PM Conditional Continue Gemini／Final Stop-Loss Boundary（2026-10-31）正式核准本次限定Source／SPEC契約修訂。僅完成Approval／Status Closure；保留原DRAFT歷史、既有D-1 Approval及第二筆Evidence Limitation，技術邏輯與Shared Demo／Formal契約不變。第三次Google Live NOT AUTHORIZED；正式雙UNKNOWN Admission Exception NOT ACTIVATED；Human Git Checkpoint待執行。 |
 | v1.4-based two-UNKNOWN draft | 2026-10-31 | Draft — SPEC Lead Approval Pending | PM Conditional Continue Gemini／Final Stop-Loss Boundary（2026-10-31）授權有限離線個案修訂，保留Parent PM-AIOPS-COMP-P0-UNBLOCK-20261030-01。新增互斥、精確兩筆Review Binding及既有Atomic Fence分類；第二筆Human Acceptance已取得；僅新Grant及全部Binding有效時可適用，不擴張原D-1、不修改正式Store／Authority、不授權第三次Live。Single Shared Demo及Formal／Production契約不變。 |
 | v1.4-based P0 approval closure | 2026-10-30 | Approved — SPEC Lead | SPEC Lead富裕正式核准D-1與Single Shared Demo Narrow Amendments；依PM-AIOPS-COMP-P0-UNBLOCK-20261030-01及PM-AIOPS-COMPETITION-SINGLE-DEMO-20261030，Provider→Build Integrated Audit PASS，D-1 Audit Finding CLOSED。僅Approval／Status收尾，技術條款與下列Draft及UNKNOWN／NOT EXECUTED歷史保留；正式例外未啟用，新Live未授權，Human Git Checkpoint待執行。 |
@@ -1281,6 +1283,8 @@ Chroma L2 physical schema保持；新模型重新embedding並建立獨立collect
 
 ## 24.4 Calibration Artifact與Policy Freeze
 
+**Competition Demo applicability（2026-11-01 — SPEC Lead APPROVED）。** PM `PM-AIOPS-COMP-P0-DEMO-GATE-RESET-20261101` 已核准 Demo-only Calibration Deferral 方向及離線工程；§24.9.1～§24.9.5精確例外已由SPEC Lead正式核准，僅限Competition Demo。本節以下 Independent Calibration／Policy Freeze／Separate Formal Build 對 Formal／Production 完整保留；不得將 Demo 成果標為本節正式 Calibration 已完成。
+
 Calibration Artifact為獨立namespace的vectors／可查詢L2 index及結果commitments，不是Candidate-C STAGED／VALIDATED record，沒有Active／LKG權威，亦不是Candidate-F preparation或Formal evidence。Calibration harness不得呼叫既有Candidate-C durable claim workflow，不掛載既有Candidate-C／Candidate-F stores，不建立production activation pointer；現有stage()會建立claim，不能直接當作此harness。
 
 Artifact須記錄source revision、manifest、ordered chunk identities、embedding/profile/API/SDK、vector/index、dataset/protocol及結果commitments。先以此artifact完成calibration與policy freeze，再獨立建立authoritative Candidate-C build；不得將calibration collection改名、rebind或直接升格為正式build。本baseline不授權vector import捷徑。
@@ -1290,6 +1294,8 @@ Calibration protocol於結果判讀／政策選擇前固定development／held-ou
 舊`0.2 / 0.5 / 0.8`僅為historical policy，不自動繼承新模型驗證資格。新Retrieval／Applicability Policy須經calibration review後freeze並版本化；確認MATCH、NO_MATCH、SOP_BACKED與Knowledge Gap語意不退化。合法NO_MATCH不得為符合預期答案而改成MATCH；threshold calibration不取代Candidate-F Conclusion Calibration。
 
 ## 24.5 Build、Four-member Gate與Activation
+
+**Competition Demo Gate Reset（2026-11-01 — SPEC Lead APPROVED）。** §24.9.1～§24.9.5精確條款已由SPEC Lead核准；PM已同意一次完整真實54→54可支持Demo Build，不需先獨立Calibration再重做Document Embedding。以下Formal／Production的獨立Calibration／Policy Freeze／Separate Build及Four-member義務保留；本註記不授權任何Live或Activation。
 
 **2026-10-30 Competition P0 applicability — Approved：** §24.7限定一套共享Demo的Build／Validate／Demo-scoped Activation／Retrieve交付；下列四人獨立重建對本Competition展示不再是前置，但仍約束Formal Portability／Production Acceptance。既有compatibility、隔離calibration／policy freeze、STAGED→VALIDATED→Explicit Activation、Provenance與LKG要求不豁免。Demo activation不得寫入或冒充Production／Formal activation。
 
@@ -1474,6 +1480,8 @@ Combined preflight一次核對Source／script、Host／SID／真實Token、必�
 
 ## 24.7 Competition P0 — Single Shared Demo Environment（SPEC Lead Approved）
 
+**2026-11-01 Gate Reset applicability — SPEC Lead APPROVED。** 新 PM 決策與已核准精確條款見§24.9：Competition Demo允許一次完整真實54→54直接形成 Demo Build；以下原 Calibration 前置描述保留為歷史／Formal 要求。本次契約批准不等於Live／Activation授權或Calibration完成。共享Host、完整性、Provenance、LKG及Formal界線不變。
+
 Authority：`PM-AIOPS-COMPETITION-SINGLE-DEMO-20261030`，2026-10-30，APPROVE — Competition P0 Single Shared Demo Environment；SPEC Lead富裕，目標2026/11/07決賽。PM已核准方向與本次必要離線修訂；SPEC Lead富裕已正式核准本Amendment，Provider→Build Integrated Audit PASS；不宣稱Real Provider或Demo PASS。本新增段只取代Competition Milestone A的四人獨立環境前置；§24.5／§24.6及AC-014-X的Formal Portability／Production義務和全部歷史Approval／BLOCK／NOT EXECUTED保留。
 
 **Demo交付與Ownership。** 在一套受控共享Host，由SPEC Lead完成六份 Approved SOP／RUNBOOK 文件→54 unique ordered chunks→54筆真實768D向量→immutable Knowledge Build→Validate→explicit Demo-scoped Activation→bounded Retrieval→既有SPEC-013／015／016與SPEC-011 singular Runtime的Evidence-grounded RCA／Publication故事線。其餘三人共用操作環境或錄製素材；不要求各自API Key／Embedding／重建，不分享Key或將generated DB推入Git。Diagnostic attempts.sqlite只是Attempt／Usage／Budget權威，不是Knowledge index或供其他Host重新取得Eligibility的來源。
@@ -1507,3 +1515,47 @@ Authority：`PM-AIOPS-COMP-P0-KNOWLEDGE-DELIVERY-20261101`，APPROVE WITH CONDIT
 **Actual Blocker／Narrow Decision Proposal — DRAFT, SPEC Lead／PM Approval Pending。** 現行`DiagnosticAuthorizationRecord.__post_init__()`仍限定`p0_two_unknown_reviews`只適用Single Document Probe；原D-1及Two-UNKNOWN Approval不變，不能自動延伸Full／Query。若PM選擇繼續這兩種Operation，最小候選修訂是：僅對PM另行具名批准的Full54固定Plan Campaign及獨立Query Campaign，允許兩份原精確Historical Review連同新purpose／kind／scope／Source／Host／Profile／PM reference完整納入Authorization Digest／E4／Safety；各自重新Human Binding，不改Review Identity／Hash／原Evidence Limitation，不修改歷史Row／Raw Fence／Hold。所有其他UNKNOWN／TIMEOUT／IN_FLIGHT、future ambiguity、Duplicate／Budget／Persistence／No Retry仍Fail Closed。此為待核准文字，不是本輪Production例外、第三次Grant延伸或Live授權；本輪不修改該Validator或Global Fence SQL。
 
 **Current Acceptance Boundary。** Full Document Live NOT AUTHORIZED；Query Live NOT AUTHORIZED；Real 54→54／Knowledge Build／Demo Activation／Retrieval／RCA E2E NOT EXECUTED；Competition A BLOCKED／Formal B PENDING。隔離Build／Query／Snapshot／Evidence-grounded Generation／Validated RCA／Durable Publication／Public Read之Offline Integration不能宣稱Real-RAG、AC-014-X、G8或SPEC-017 Formal PASS。PRD-004產品語意及SPEC-017 Oracle／N／Denominator／歷史NOT EXECUTED均不變。
+
+## 24.9 Competition P0 Demo Gate Reset — Approved Narrow Amendment
+
+**Status：APPROVED — SPEC Lead Exact §24.9 Competition Demo-only Narrow Amendment；Approval Date：2026-11-01。** Authority：`PM-AIOPS-COMP-P0-DEMO-GATE-RESET-20261101`；Parent：`PM-AIOPS-COMP-P0-KNOWLEDGE-DELIVERY-20261101`。SPEC Lead已正式接受§24.9.1～§24.9.5精確條款，僅限Competition Demo-only。此核准不包含S5四Scope候選值、Demo Retrieval Profile／Threshold、Token／Quota Bounded-risk Exception、Full54／Query／LLM Live、Production Activation或Formal Calibration／Acceptance Completion。本輪沒有Authority Publication、Demo Activation或正式歷史例外啟用；§24.8 Draft與原Approved Baseline狀態不變。
+
+**Historical draft status（2026-11-01起草；原文保留，不代表目前仍Pending）。** Status：DRAFT — SPEC Lead Exact Amendment Approval Pending。Authority：`PM-AIOPS-COMP-P0-DEMO-GATE-RESET-20261101`；Parent：`PM-AIOPS-COMP-P0-KNOWLEDGE-DELIVERY-20261101`。PM D1～D7方向與最小離線工程已核准；本節精確條款尚待SPEC Lead正式核准。本輪沒有Full54／Query／LLM Live、Authority Publication、Demo Activation或正式歷史例外啟用。舊Approval、兩筆UNKNOWN、原Hold、第三次Probe SUCCESS／PROBE_OBSERVATION_ONLY及原Draft均保留，不倒寫歷史。
+
+### 24.9.1 Demo-only Calibration Deferral
+
+僅Competition Demo可在獨立有效PM Live Grant及原有安全證據齊備後，使用同一次完整真實54→54的Provider Result，經現有Provider→Candidate-C `stage()`→Validate→Explicit Demo-scoped Activation→Bounded Retrieval→Knowledge Snapshot→既有RCA。不得要求Demo預先建立獨立Calibration Artifact、完成Formal Policy Freeze後再做第二次Document Embedding。
+
+所有六份Approved SOP／RUNBOOK、54 unique ordered chunks、Input／Payload／Batch Plan／Source／Model／Profile Binding、完整逐批及global mapping、768D finite／nonzero／abs(L2_norm−1)≤0.01、可信Usage與持久化、不可變artifact、Validation、LKG／CAS、Explicit Activation及Knowledge Ownership仍適用。Partial Result、Mock Vector或HTTP success不構成完整Build／Demo PASS。不得Vector Import、Collection Rename或rebind Calibration Artifact冒充正式Build，不改Build Identity／Commitment算法。
+
+§24.4／§24.5原Independent Calibration→Policy Freeze／Regression→Separate Formal Build／Validation，以及Production Activation、AC-014-X、SPEC-017 Formal Evaluation／Acceptance完整保留。Demo Calibration為DEFERRED FOR COMPETITION DEMO ONLY，不記為COMPLETED。Demo Build／Activation／RCA不得標為Production／Formal Authority或Acceptance。
+
+**Existing authority applicability。** 使用同一既有Candidate-C Store、Build／Validation／Activation Authority及public interfaces；不新增第二套Store或Approval Framework。Demo scope須由受控Campaign的`delivery_scope=COMPETITION_DEMO_ONLY`、exact Build／Artifact Commitments、事前Profile批准證據及Human Explicit Activation Command共同可追溯；Operation Key命名只是標記，不是批准證明。正式操作前Human須核對既有Active／LKG與允許scope；若會覆寫不屬Demo的Formal／Production權威則STOP，不能換空Store或改LKG規避。缺少／不合法Demo批准不得套用Deferral；Stage／Validate不得自動Activate。
+
+現有`KnowledgeBuildService`沒有Calibration boolean admission；其`activate()`只執行既有Owner-command、immutable Validation／Artifact／CAS檢查，不替Human判定PM／SPEC Approval。本次不刪除不存在的Code Gate、不把Caller flag當批准，不新增通用Production Calibration Validator；Formal治理前置照舊。離線Candidate與Mock操作不等於正式Demo Authority。
+
+### 24.9.2 Pre-result Demo Retrieval Profile
+
+任何Demo Query Live／真實Ranking判讀前，必須由SPEC Lead接受並commit：Demo Retrieval／Applicability Profile Identity／Version、Gemini2 document/query compatibility identity、兩個Envelope及Canonicalization Version、Applicable Scope Rules／Approval／Commitment、L2 score direction及thresholds、top-k／candidate／payload bounds、MATCH／NO_MATCH／RETRIEVAL_UNAVAILABLE／INVALID／REPAIR_REQUIRED語意、Demo-only限制。Changing Profile或Scope須重新綁定受影響Query／Source／Safety，不得看到S5 Ranking後調參製造MATCH。
+
+候選`spec014-gemini2-demo-retrieval-v1`／`spec014-gemini2-demo-applicability-v1`，Version 1.0；embedding profile維持`spec014-gemini-embedding-2-embedding-v1`、768D、Document／Query Envelope及canonicalization v1.0、norm tolerance0.01。Threshold候選LOWER_IS_BETTER `0.2 / 0.5 / 0.8`僅源自historical L2 policy，**PROPOSED — NOT CALIBRATED／NOT APPROVED**；不得當成Gemini2品質證明。若SPEC Lead不接受此事前固定風險候選，另於任何結果前決定；未批准時不選用、不自動套入Runtime config。Profile commitment依既有canonical serialization對完整Profile／Policy／Scope decision內容產生，並綁批准reference與Source；不把Hash本身當批准。
+
+### 24.9.3 Full54-only Historical Two-UNKNOWN Scope
+
+只使用同一Authorization的可選`p0_full54_history_scope`，且同時具備原`p0_two_unknown_reviews`兩筆精確Review。不接受單筆Review、任意History清單、Query或未提供Scope的非Probe。原Probe例外與舊Digest語意維持；新欄位None時從Canonical Authorization Digest省略。
+
+Full Scope wire精確欄位：`authority_reference`固定本PM Gate Reset Authority；`delivery_scope`固定`COMPETITION_DEMO_ONLY`；`global_input_commitment`固定Approved完整Corpus Commitment；`batch_plan_commitment`為正式`DiagnosticBatchPlan.commitment`；`batch_input_commitments`為該Plan依序列出的全部1～54個唯一Batch Commitments。這不是現存Serialization Proposal Digest。限定document／CONTROLLED_PROVIDER_DIAGNOSTIC、Approved Corpus Scope、maximum_items=54、有限且≤54次Invocation、同一Plan／Source／Host／Profile／SDK／API。不得重用原三次Probe的Campaign或Live Reference；PM工程／方向決策ID不得冒充Final Live Approval。
+
+原兩份Review Reference、Reviewer／Recorded Time、Attempt／Campaign Identity、Row／Evidence Hash與Evidence Limitation不變。兩筆Row只在新具名Full54 PM Final Live Grant、Protected Loader／Authorization／Safety／E4全通過後，在原Atomic Reservation內排除其Blocking效果。新Scope與完整Review都進Canonical Authorization Digest；Root Input及每個既有child projection的E4／Safety亦須相符。Child commitment只能是此完整Plan已列出的值，不授權任意subset／重排／拆批；執行前仍驗證六Source／54 inputs、Plan coverage、Token／Payload／Quota／Budget。
+
+原兩筆UNKNOWN／Raw Fences／16384 Usage Hold／2 micro-USD Hold完整保留；第三次SUCCESS及其Hold亦不動。不修改Global Fence SQL、Schema、Store Identity或舊Authority。任何其他／新的UNKNOWN、TIMEOUT、IN_FLIGHT、Persistence Ambiguity、Duplicate、Identity Mismatch或超預算均Fail Closed，不Retry／Refund／Reset／Resume。共享分類供Preflight與BEGIN IMMEDIATE Reservation使用；Preflight不是Reservation／Final Guard。Query Campaign不得沿用此Full-only例外，另有契約與Live Grant需求。
+
+### 24.9.4 S5／S2及未核准風險規則
+
+S5 Shared Dependency與S2 Knowledge Gap只是PM優先候選，不預判MATCH／NO_MATCH。維持`incident-evidence-query-v1`的Public Snapshot Source、Initial／Follow-up共用、Frozen／Legacy Replay；目前無核准Scope crosswalk，四個Filters仍省略。Scope Proposal須逐欄有Public Fact／Domain Authority、必要Operational Context、精確條件、missing／ambiguous／conflicting行為、Version／Approval／Commitment與Frozen Binding。service_name不是Component Scope，Event Type不是已證實根因；不讀目標SOP Metadata來產生Production Filters，不使用Scenario ID／Oracle／Ground Truth。S2不得刪證據或把Provider／Authorization／Snapshot Failure稱為Knowledge Gap。
+
+原完整54 Safety／Token／Project RPM／TPM／RPD／計數語意／Usage／Cost requirements維持。PM D4只允許提出Bounded-risk Proposal，未批准其生效；不能因本節Demo Deferral或Historical Scope而套用Probe 8192例外、偽造Quota或解除Token Validator。若Proposal需要新的risk-basis／UNKNOWN schema／Quota applicability，須另得精確Contract Decision，不能只填JSON。Document／Query／LLM授權分開。
+
+### 24.9.5 Review／Stop-loss
+
+本節精確條文已由SPEC Lead正式核准；本輪Approval Status Closure仍交SPEC Lead最後整合審查後由Human Checkpoint，最終Live Grant／E4／Safety綁新Clean SHA。2026-11-03 12:00 UTC+08:00前仍無合法路徑時，交PM決定最小Stop-loss；不自動啟動BM25，不延展Live Grant、不加Probe。Competition A／Formal B與歷史NOT EXECUTED狀態保持誠實。

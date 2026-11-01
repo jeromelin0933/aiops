@@ -772,6 +772,8 @@ class ApprovedDiagnosticInput:
 
 _P0_UNBLOCK_AUTHORITY = "PM-AIOPS-COMP-P0-UNBLOCK-20261030-01"
 _P0_SCOPE_AUTHORITY = "PM-AIOPS-COMPETITION-SINGLE-DEMO-20261030"
+_P0_DEMO_GATE_AUTHORITY = "PM-AIOPS-COMP-P0-DEMO-GATE-RESET-20261101"
+_P0_KNOWLEDGE_AUTHORITY = "PM-AIOPS-COMP-P0-KNOWLEDGE-DELIVERY-20261101"
 _P0_HUMAN_REVIEW_REFERENCE = "SPECLEAD-SPEC014-D1-UNKNOWN-REVIEW-20261030-01"
 # One verified historical case, NOT a ledger, grant or generic adjudication registry.
 # Source/input association was explicitly confirmed by SPEC Lead; the old row
@@ -854,7 +856,8 @@ class P0UnknownAttemptReview:
                 or self.target_campaign_id == self.historical_campaign_id
                 or self.target_pm_approval_reference != record.pm_approval_reference
                 or self.target_pm_approval_reference in (
-                    _P0_UNBLOCK_AUTHORITY, _P0_SCOPE_AUTHORITY, "PM-SPEC014-DIRECT-EMBED-LIVE-20261030-01")
+                    _P0_UNBLOCK_AUTHORITY, _P0_SCOPE_AUTHORITY, _P0_DEMO_GATE_AUTHORITY,
+                    _P0_KNOWLEDGE_AUTHORITY, "PM-SPEC014-DIRECT-EMBED-LIVE-20261030-01")
                 or self.reviewer_identity != (record.spec_lead_identity if reviewer_identity is None else reviewer_identity)
                 or record.purpose != "CONTROLLED_PROVIDER_DIAGNOSTIC"
                 or _timestamp(self.recorded_at) < _timestamp("2026-10-30T00:00:00+08:00")
@@ -874,6 +877,46 @@ class P0SecondUnknownAttemptReview(P0UnknownAttemptReview):
                               reviewer_identity=_P0_SECOND_REVIEWER)
         if self.recorded_at != _P0_SECOND_RECORDED_AT:
             raise DiagnosticDenied("second review recorded time does not match Human Acceptance",
+                                   code="HISTORICAL_REVIEW_MISMATCH")
+
+
+@dataclass(frozen=True, slots=True)
+class P0Full54HistoryScope:
+    """One protected full-document grant, never a caller-selected fence bypass.
+
+    Original reviews remain unchanged. Child commitments are enumerated because
+    the existing sequential runner projects the same grant for each request.
+    The actual plan must independently match this complete commitment list.
+    """
+    authority_reference: str
+    delivery_scope: str
+    global_input_commitment: str
+    batch_plan_commitment: str
+    batch_input_commitments: tuple[str, ...]
+
+    def matches_record(self, record) -> None:
+        hashes = (self.global_input_commitment, self.batch_plan_commitment)
+        if (self.authority_reference != _P0_DEMO_GATE_AUTHORITY
+                or self.delivery_scope != "COMPETITION_DEMO_ONLY"
+                or any(type(v) is not str or not re.fullmatch(r"[0-9a-f]{64}", v) for v in hashes)
+                or type(self.batch_input_commitments) is not tuple
+                or not 1 <= len(self.batch_input_commitments) <= 54
+                or any(type(v) is not str or not re.fullmatch(r"[0-9a-f]{64}", v)
+                       for v in self.batch_input_commitments)
+                or len(set(self.batch_input_commitments)) != len(self.batch_input_commitments)
+                or self.global_input_commitment != COUNTING_CORPUS
+                or record.purpose != "CONTROLLED_PROVIDER_DIAGNOSTIC"
+                or record.input_kind != "document" or record.maximum_items != 54
+                or record.input_scope_identity != "spec014-production-knowledge"
+                or record.campaign_id in (_P0_HISTORY_ROW["campaign_id"],
+                    _P0_SECOND_HISTORY_ROW["campaign_id"], "spec014-direct-embed52-third-20261031-01")
+                or record.pm_approval_reference in ("PM-SPEC014-DIRECT-EMBED-LIVE-20261030-01",
+                    "PM-SPEC014-DIRECT-EMBED-FOLLOWUP-20261030-01",
+                    "PM-SPEC014-DIRECT-EMBED-THIRD-20261031-01")
+                or not len(self.batch_input_commitments) <= record.maximum_invocations <= 54
+                or record.bounds_basis != "SEQUENTIAL_BATCH_PLAN_V1:" + self.batch_plan_commitment
+                or record.input_commitment not in (self.global_input_commitment, *self.batch_input_commitments)):
+            raise DiagnosticDenied("Full54 historical scope does not match the fixed document grant",
                                    code="HISTORICAL_REVIEW_MISMATCH")
 
 
@@ -915,6 +958,7 @@ class DiagnosticAuthorizationRecord:
     credential_profile_revision: str | None = None
     p0_unknown_review: P0UnknownAttemptReview | None = None
     p0_two_unknown_reviews: tuple[P0UnknownAttemptReview, P0SecondUnknownAttemptReview] | None = None
+    p0_full54_history_scope: P0Full54HistoryScope | None = None
 
     def __post_init__(self) -> None:
         for field in (
@@ -929,7 +973,8 @@ class DiagnosticAuthorizationRecord:
                 raise DiagnosticDenied(f"{field} is invalid")
         if self.pm_approval_reference == "PM-RAG-EMBEDDING-MIGRATION-20261022":
             raise DiagnosticDenied("migration approval is not live campaign approval")
-        if self.pm_approval_reference in (_P0_UNBLOCK_AUTHORITY, _P0_SCOPE_AUTHORITY):
+        if self.pm_approval_reference in (_P0_UNBLOCK_AUTHORITY, _P0_SCOPE_AUTHORITY,
+                                         _P0_DEMO_GATE_AUTHORITY, _P0_KNOWLEDGE_AUTHORITY):
             raise DiagnosticDenied("P0 preparation/unblocking authority is not live campaign approval")
         if any(word in self.credential_profile_identity.lower() for word in (
             "api_key", "secret", "bearer", "token", "authorization", ":", "=",
@@ -987,15 +1032,21 @@ class DiagnosticAuthorizationRecord:
             if type(self.p0_unknown_review) is not P0UnknownAttemptReview:
                 raise DiagnosticDenied("P0 review must use the exact versioned authorization fields")
             self.p0_unknown_review.matches_record(self)
+        if self.p0_full54_history_scope is not None:
+            if (type(self.p0_full54_history_scope) is not P0Full54HistoryScope
+                    or self.p0_two_unknown_reviews is None or self.p0_unknown_review is not None):
+                raise DiagnosticDenied("Full54 scope requires both exact historical reviews",
+                                       code="HISTORICAL_REVIEW_MISMATCH")
+            self.p0_full54_history_scope.matches_record(self)
         if self.p0_two_unknown_reviews is not None:
             reviews = self.p0_two_unknown_reviews
             if (self.p0_unknown_review is not None or type(reviews) is not tuple or len(reviews) != 2
                     or type(reviews[0]) is not P0UnknownAttemptReview
                     or type(reviews[1]) is not P0SecondUnknownAttemptReview
-                    or not is_single_document_probe(self)
+                    or not (is_single_document_probe(self) or self.p0_full54_history_scope is not None)
                     or self.campaign_id in (_P0_HISTORY_ROW["campaign_id"], _P0_SECOND_HISTORY_ROW["campaign_id"])
                     or self.pm_approval_reference == "PM-SPEC014-DIRECT-EMBED-FOLLOWUP-20261030-01"):
-                raise DiagnosticDenied("two-case review requires a distinct single-probe live grant",
+                raise DiagnosticDenied("two-case review requires a distinct probe or scoped Full54 live grant",
                                        code="HISTORICAL_REVIEW_MISMATCH")
             for review in reviews:
                 review.matches_record(self)
@@ -1004,7 +1055,8 @@ class DiagnosticAuthorizationRecord:
     def from_json(cls, data: bytes) -> "DiagnosticAuthorizationRecord":
         try:
             value = _unique_json(data)
-            optional = {"project_identity", "credential_profile_revision", "p0_unknown_review", "p0_two_unknown_reviews"}
+            optional = {"project_identity", "credential_profile_revision", "p0_unknown_review",
+                        "p0_two_unknown_reviews", "p0_full54_history_scope"}
             if (type(value) is not dict or not set(cls.__dataclass_fields__) - optional <= set(value)
                     or not set(value) <= set(cls.__dataclass_fields__)):
                 raise DiagnosticDenied("authorization record fields are incomplete or extra")
@@ -1021,6 +1073,13 @@ class DiagnosticAuthorizationRecord:
                     raise DiagnosticDenied("two-case review fields are incomplete or extra")
                 value["p0_two_unknown_reviews"] = (P0UnknownAttemptReview(**reviews[0]),
                                                    P0SecondUnknownAttemptReview(**reviews[1]))
+            scope = value.get("p0_full54_history_scope")
+            if scope is not None:
+                if (type(scope) is not dict or set(scope) != set(P0Full54HistoryScope.__dataclass_fields__)
+                        or type(scope["batch_input_commitments"]) is not list):
+                    raise DiagnosticDenied("Full54 historical scope wire is invalid")
+                value["p0_full54_history_scope"] = P0Full54HistoryScope(**{
+                    **scope, "batch_input_commitments": tuple(scope["batch_input_commitments"])})
             return cls(**value)
         except (UnicodeError, TypeError, ValueError) as exc:
             if isinstance(exc, DiagnosticDenied):
@@ -1034,7 +1093,8 @@ def authorization_record_digest(record: DiagnosticAuthorizationRecord) -> str:
         raise DiagnosticDenied("authorization record is invalid")
     fields = asdict(record)
     # Historical embedding grants retain their exact pre-extension digest.
-    for name in ("project_identity", "credential_profile_revision", "p0_unknown_review", "p0_two_unknown_reviews"):
+    for name in ("project_identity", "credential_profile_revision", "p0_unknown_review",
+                 "p0_two_unknown_reviews", "p0_full54_history_scope"):
         if fields[name] is None:
             fields.pop(name)
     canonical = json.dumps(fields, sort_keys=True, ensure_ascii=True,
@@ -1303,6 +1363,14 @@ class DiagnosticBatchPlan:
                 or self.fields["model"] != record.model_identity or self.fields["api"] != record.api_version
                 or self.fields["maximum_batches"] > record.maximum_invocations):
             raise DiagnosticDenied("batch plan is not bound to approved campaign", code="INPUT_MISMATCH")
+        scope = record.p0_full54_history_scope
+        if scope is not None:
+            scope.matches_record(record)
+            if (record.input_commitment != scope.global_input_commitment
+                    or self.commitment != scope.batch_plan_commitment
+                    or tuple(commitment for _, _, commitment in self.ranges) != scope.batch_input_commitments):
+                raise DiagnosticDenied("Full54 reviewed grant and complete batch plan differ",
+                                       code="HISTORICAL_REVIEW_MISMATCH")
         for start, end, commitment in self.ranges:
             if input_commitment("document", approved.identities[start:end],
                                 approved.envelopes[start:end]) != commitment:

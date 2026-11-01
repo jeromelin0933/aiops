@@ -1,5 +1,35 @@
 # SPEC-014 Candidate-C Knowledge Index Setup
 
+## Demo Gate Reset Candidate — 2026-11-01
+
+Authority：`PM-AIOPS-COMP-P0-DEMO-GATE-RESET-20261101`；Parent：`PM-AIOPS-COMP-P0-KNOWLEDGE-DELIVERY-20261101`。SPEC Lead於2026-11-01正式核准SPEC-014 §24.9.1～§24.9.5精確Competition Demo-only Narrow Amendment。本節優先說明已核准契約及尚待正式Binding的離線實作；下方Current／2026-10-30原Calibration前置與Scope限制保留歷史。此批准不包含四Scope候選值、Demo Profile／Threshold、Risk Exception、Live或Activation；正式例外未啟用。
+
+### 一次真實54→54的Demo路徑
+
+正式Full54 Grant／Token／Provider／Quota／Budget／Source／E4／Safety通過後，同一次完整Provider Result經原`GoogleEmbeddingAdapter`→`embed_documents_for_build()`→`KnowledgeBuildService.stage()`→Validate。全部Mapping／Order／768D／finite／nonzero／norm0.01及逐批可信Usage持久化成功才有完整Build。沒有Calibration Vector Import、第二次Embedding、另一套Store或Activation Authority。Stage／Validate不Activate，Human仍需核對Demo範圍、Profile批准、immutable artifact、Validation與Generation/CAS後才可Explicit Activate；不得覆寫Formal／Production的Active／LKG權威。
+
+Source沒有Calibration boolean gate；原前置在治理與Profile批准。PM只對Demo延後該前置，不更改Build Identity算法或原Activation Safety。Formal／Production保持Independent Calibration→Policy Freeze／Regression→Separate Build→Formal Acceptance；Calibration尚未完成、AC-014-X NOT EXECUTED、SPEC-017 Formal NOT EXECUTED。Demo命名與Operation Key只作可追溯標記，不能作Caller自我批准。
+
+### Full54 Historical Scope Candidate
+
+未來受控`campaign.json`可同時提供原兩份`p0_two_unknown_reviews`與新`p0_full54_history_scope`。新Scope五欄：`authority_reference`（本PM Gate Reset）、`delivery_scope=COMPETITION_DEMO_ONLY`、`global_input_commitment`、正式`batch_plan_commitment`、全部有序`batch_input_commitments`。Root與每個Child Projection均受Canonical Authorization Digest／E4／Safety綁定；只有原兩列的Blocking效果可被排除，Raw Fence／Hold不變。不能拿Proposal SHA當Runtime Plan SHA，不能使用原三次Probe Grant或PM工程Authority作Final Live Grant。缺Scope／Reviews、新Query或其他Ambiguity皆拒絕。
+
+本輪沒有發布Authority或啟用正式例外。完成SPEC Lead Review／Human Git Checkpoint後，新Grant須綁新的Clean Source；不要用舊Third／Follow-up Handoff執行Full Campaign。最終唯讀`inspect_local_counting_store(..., fresh=False, for_authorized_campaign=True)`須等正式新Authority存在；它不能取代Typed Request Preflight、Atomic Reservation或Final Guard，也不執行fresh bootstrap。
+
+### Pre-result Demo Profile與Scope — PROPOSAL ONLY
+
+候選Demo Retrieval／Applicability Profile為`spec014-gemini2-demo-retrieval-v1`／`spec014-gemini2-demo-applicability-v1`，Version1.0；同一Gemini2 embedding profile、768D、v1 document/query envelopes，L2 LOWER_IS_BETTER。Threshold候選`0.2/0.5/0.8`只源自historical policy，NOT CALIBRATED／NOT APPROVED；保留現有top-k／candidate bounds作事前候選，不以S5結果調整。必須在任何真實Query／Ranking判讀前，由SPEC Lead正式接受完整Profile／Scope／threshold／typed-failure／Demo-boundary及canonical commitment；Tracked runtime config仍為historical model，不自動改用這份候選。
+
+S5 Shared Dependency正例僅在Public Snapshot及經批准的Operational Context支持四Scope時才可能MATCH。S2負例僅在真實Capture缺必要Scope時形成合法Knowledge Gap，不刪已取得證據、不把Provider／Authorization失敗當NO_MATCH。現有`incident-evidence-query-v1`不變，四Filters仍省略；Event名稱不是根因，service_name不是Component Scope，SOP Metadata／Scenario／Oracle不作Production Scope來源。Query Live及LLM Live均獨立授權；Full Document Grant不代替它們。
+
+### Full54 Admission仍有的實際缺口
+
+6×9只是既有Candidate；actual bodies=9407/8795/8437/8697/8597/8622 bytes，最大保守per-batch檢查值10279。Parent Authorization亦綁52485-byte全Corpus E4（不是實際批次呼叫）；最大item envelope1302。新PM limits至少須涵蓋這些本地證據，但它們不是Google Token／Payload Limits。模型8192、Probe Usage100及Synthetic Bounds都不能代替54筆受接受Token證據。Project RPM／TPM／RPD／batch accounting、有限Usage／Cost／Validity仍待真實Evidence／PM Grant。
+
+Bounded-risk Proposal只能提交PM：例如將8192/item、73728/batch、442368/campaign明確標為未觀測的Admission Risk Caps，固定6次attempt／30秒／No Retry，並保留UNKNOWN Quota及實際Usage／Billing未知。現有Full Runner不支援這個exception，不能把cap塞入`accepted_input_token_bounds`或虛構Quota過Validator；須先有精確Contract Decision及另授最小Source修訂，本輪不實作。若Free Tier仍適用，6 micro-USD只是6次內部Hold的候選限額，不是Google實際／最壞成本保證。原24576 Usage／3 Cost Hold與兩筆UNKNOWN保持不變。
+
+11/03 12:00（UTC+08:00）仍未取得合法Full54路徑時交PMStop-loss決策；不自動多Probe、不延Validity、不建Scheduler／Resume／Counting，不啟動BM25。此頁不是可直接執行Live或Activation的批准。
+
 ## Current Knowledge Delivery — 2026-11-01
 
 Authority：`PM-AIOPS-COMP-P0-KNOWLEDGE-DELIVERY-20261101`。本節是當前狀態；下方 2026-10-30 的 Draft／UNKNOWN／NOT EXECUTED 是當時歷史，不回溯改寫。Single Shared Demo、Two-UNKNOWN 與 Transport Fix 已經 Human Checkpoint；本輪新接線仍待 Source Review／Human Checkpoint，不能沿用舊 Live grant。
