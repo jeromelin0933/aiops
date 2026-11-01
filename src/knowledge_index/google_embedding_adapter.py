@@ -1003,6 +1003,9 @@ class GoogleEmbeddingAdapter:
 
         if request.capability != self._capability:
             return failed(BuildFailureCode.PROFILE_MISMATCH, "capability", "query capability mismatch")
+        if self._controlled_live_opt_in:
+            from .gemini_diagnostic import embed_query_for_retrieval
+            return embed_query_for_retrieval(request, live_opt_in=True)
         if type(self._client) is not _GeminiEmbedding2OfflineClient:
             return failed(
                 BuildFailureCode.PROVIDER_UNAVAILABLE, "provider_authorization",

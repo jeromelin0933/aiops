@@ -124,8 +124,9 @@ def _run(args: argparse.Namespace, config: KnowledgeIndexConfig) -> object:
                 identity_input=identity_input, limits=config.limits,
                 required_capability_identity=config.capability.capability_identity,
             )
-    if args.command == "retrieve" and config.capability.model == "gemini-embedding-2":
-        raise ValueError("Gemini2 live query needs separately authorized query integration; document build is not query authority")
+    if (args.command == "retrieve" and config.capability.model == "gemini-embedding-2"
+            and not args.live_opt_in):
+        raise ValueError("Gemini2 query requires explicit --live-opt-in and a separately authorized query campaign")
     with _store(config) as store:
         index = _index(config)
         build = KnowledgeBuildService(store, _provider(config, live=False), index)
@@ -179,6 +180,7 @@ def build_parser() -> argparse.ArgumentParser:
     retrieve.add_argument("--operation-key", required=True)
     retrieve.add_argument("--query", required=True)
     retrieve.add_argument("--filter", action="append", default=[])
+    retrieve.add_argument("--live-opt-in", action="store_true")
     return parser
 
 

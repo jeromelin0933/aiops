@@ -2,7 +2,13 @@
 
 Last reviewed against current governance baseline: 2026-10-02
 
-## Competition P0 — Single Shared Demo（2026-10-30）
+## Competition P0 — Current Knowledge Delivery（2026-11-01）
+
+Authority：`PM-AIOPS-COMP-P0-KNOWLEDGE-DELIVERY-20261101`，本輪僅授權離線整合。Human 已接受第三次 Single Probe SUCCESS：campaign `spec014-direct-embed52-third-20261031-01`、attempt `48e21df9ea19485aa0e0746781be9f6c`，一次 physical attempt／一筆 768D vector／observed usage 100，僅為 PROBE_OBSERVATION_ONLY。Human Post：attempts=3、historical UNKNOWN raw fences=2、reserved usage=24576／cost=3；歷史列未變。此為 Human Evidence，不是本輪重新查驗正式 Store，也不是完整 54→54 PASS。
+
+Document Provider→Build 與本輪 Query→Chroma→Knowledge Snapshot→validated RCA／publication 接線以隔離 stores、合成 Provider 驗證；Real 54→54、Query Live、Demo Build／Activation／Retrieval／RCA 均尚未執行。完整 Campaign 缺 Token／Project Quota／Budget 證據及專屬 Historical Review Grant；現行 Two-UNKNOWN 契約僅限 Single Probe，不能沿用到 full/query。Tracked Knowledge config 仍為 historical `text-embedding-004`；Gemini2 retrieval/applicability calibration／policy freeze 仍待完成，不直接更名沿用舊閾值。新 Source 須 Human Clean Checkpoint 及新 PM grant。詳見 [Knowledge Setup](docs/knowledge_index.md#current-knowledge-delivery--2026-11-01)。
+
+## Competition P0 — Single Shared Demo（2026-10-30 歷史紀錄）
 
 PM Authority：`PM-AIOPS-COMPETITION-SINGLE-DEMO-20261030`。Competition方向已核准；PRD-004／SPEC-014／SPEC-017新增精確條文為待Human／文件權責人核准的Narrow Amendment Draft，原Approved baseline及歷史結果不變。
 

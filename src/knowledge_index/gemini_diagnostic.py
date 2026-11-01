@@ -24,7 +24,7 @@ import httpx
 
 from .contracts import (
     BuildFailureCode, BuildFailureFact, EmbeddingVector, ProviderEmbeddingRequest,
-    ProviderEmbeddingResult, QueryEmbeddingRequest,
+    ProviderEmbeddingResult, QueryEmbeddingRequest, QueryEmbeddingResult,
     RetrySafetyDisposition,
 )
 from .gemini_diagnostic_controls import (
@@ -1323,10 +1323,29 @@ def embed_documents_for_build(
         observation.provider_attempts, units, units, units, units)
 
 
+def embed_query_for_retrieval(
+    request: QueryEmbeddingRequest, *, live_opt_in: bool = False,
+) -> QueryEmbeddingResult:
+    """Project the SAME guarded query attempt into Candidate-C's query port.
+
+    A document campaign grants no query authority. No vector is delivered until
+    completion and trustworthy usage persistence have both succeeded.
+    """
+    vectors = []
+    observation = _run_live(request, live_opt_in=live_opt_in, _query_vectors=vectors)
+    if observation.outcome != "SUCCESS" or observation.usage == "UNKNOWN":
+        return QueryEmbeddingResult(request.capability, (), observation.provider_attempts,
+            "controlled query did not complete with trustworthy usage")
+    if (len(vectors) != 1 or vectors[0][0] != _envelopes(request)[1][0]):
+        raise DiagnosticDenied("query result identity mismatch", code="INVALID_PROVIDER_RESPONSE")
+    return QueryEmbeddingResult(request.capability, tuple(vectors[0][1]),
+                                observation.provider_attempts, None, 1, 1, 1, 1)
+
+
 def _run_live(
     request: ProviderEmbeddingRequest | QueryEmbeddingRequest | None = None,
     *, live_opt_in: bool = False, operation: str = "CONTROLLED_PROVIDER_DIAGNOSTIC",
-    _build_vectors=None,
+    _build_vectors=None, _query_vectors=None,
 ) -> DiagnosticObservation:
     """Load protected campaign facts; reserve once before controlled dispatch.
 
@@ -1347,6 +1366,9 @@ def _run_live(
         raise DiagnosticDenied("counting cannot dispatch embedding", code="OPERATION_MISMATCH")
     if not isinstance(request, (ProviderEmbeddingRequest, QueryEmbeddingRequest)):
         raise DiagnosticDenied("authorized diagnostic input is not available")
+    if _query_vectors is not None and (not isinstance(request, QueryEmbeddingRequest)
+                                      or _build_vectors is not None):
+        raise DiagnosticDenied("query result projection requires one typed query", code="INPUT_MISMATCH")
     if _build_vectors is not None and (
         not isinstance(request, ProviderEmbeddingRequest) or len(request.chunks) != 54
         or not record.bounds_basis.startswith("SEQUENTIAL_BATCH_PLAN_V1:")
@@ -1440,7 +1462,7 @@ def _run_live(
 
     receipts = []
     observation = _dispatch_live(refreshed, approved, binding.sdk_byte_evidence, credential, revalidate,
-        _attempt_id=request_id, _usage_sink=receipts)
+        _attempt_id=request_id, _usage_sink=receipts, _vectors=_query_vectors)
     observation = _record_live_observation(usage, refreshed, request_id, observation, receipts, binding.sdk_byte_evidence)
     if is_single_document_probe(record):
         observation = replace(observation,

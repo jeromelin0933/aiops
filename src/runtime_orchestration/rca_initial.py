@@ -35,6 +35,7 @@ from .contracts import RuntimeWorkKind, RuntimeWorkRecord, RuntimeWorkStatus
 from .identity import runtime_work_id
 from .sqlite_work_store import (ContradictoryRuntimeWorkError, SqliteRuntimeWorkStore,
                                 RuntimeWorkStoreError)
+from .knowledge_query import bind_evidence_query
 
 
 class InitialRcaDisposition(str, Enum):
@@ -218,7 +219,11 @@ class InitialRcaOrchestrator:
     """S2 ordering: Incident → A aggregate → B → C → A Attempt, then stop."""
     def __init__(self, *, incidents: IncidentPublicReadPort, candidate_a: CandidateAPublicPort,
                  candidate_b: CandidateBPublicPort, candidate_c: CandidateCPublicPort,
-                 continuations: SqliteRcaContinuationStore) -> None:
+                 continuations: SqliteRcaContinuationStore,
+                 derive_knowledge_query: bool = False) -> None:
+        if type(derive_knowledge_query) is not bool:
+            raise ValueError("Evidence query composition must be explicit boolean")
+        self._derive_knowledge_query = derive_knowledge_query
         self._incidents = IncidentPublicAdapter(incidents)
         self._candidate_a = candidate_a
         self._candidate_b = candidate_b
@@ -270,6 +275,14 @@ class InitialRcaOrchestrator:
                 or continuation.attempt_id != attempt_id):
                 raise InitialRcaRepairRequired("pre-retrieval durable identity is incomplete or contradictory")
             operation = self._candidate_c.read_operation(request.retrieval_request.operation_key)
+            if self._derive_knowledge_query:
+                snapshot = self._candidate_b.resolve_snapshot(evidence.snapshot_id)
+                if (getattr(snapshot, 'revision_id', None) != evidence.revision_id
+                        or getattr(snapshot, 'snapshot_id', None) != evidence.snapshot_id
+                        or getattr(snapshot, 'capture_operation_id', None) != evidence.capture_operation_id):
+                    raise InitialRcaRepairRequired("query Evidence contradicts captured public authority")
+                request = replace(request, retrieval_request=bind_evidence_query(
+                    request.retrieval_request, request.incident_id, snapshot, operation))
             if operation.status is KnowledgeReadStatus.NOT_FOUND:
                 knowledge = self._candidate_c.resolve(request.retrieval_request, request.retrieval_limits)
             elif operation.status is KnowledgeReadStatus.FOUND:

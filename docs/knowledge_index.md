@@ -1,5 +1,37 @@
 # SPEC-014 Candidate-C Knowledge Index Setup
 
+## Current Knowledge Delivery — 2026-11-01
+
+Authority：`PM-AIOPS-COMP-P0-KNOWLEDGE-DELIVERY-20261101`。本節是當前狀態；下方 2026-10-30 的 Draft／UNKNOWN／NOT EXECUTED 是當時歷史，不回溯改寫。Single Shared Demo、Two-UNKNOWN 與 Transport Fix 已經 Human Checkpoint；本輪新接線仍待 Source Review／Human Checkpoint，不能沿用舊 Live grant。
+
+Human 已接受第三次 Probe（`6289a1653fecf0352135f4ebe736a46f88046986`）SUCCESS：campaign `spec014-direct-embed52-third-20261031-01`、attempt `48e21df9ea19485aa0e0746781be9f6c`、physical attempts=1、vector_count=1、observed usage=100。Human Post PASS：總 attempts=3、歷史 UNKNOWN raw fences=2、reserved usage=24576、reserved cost=3、historical rows unchanged=true。此處引用 Human Evidence；未重新讀寫正式 Store。Observed 100 不是整份 Corpus Token 上界，8192 不是 Observed Usage，internal cost hold 不是 Google Billing。
+
+### 最短共享 Demo 路徑與必要界線
+
+1. 使用同一 manifest／deterministic chunker 取得六份 SOP／RUNBOOK 的 54 個唯一有序 Chunk。正式 Global Ordinal 為 **0..53**；Probe 是 `chunks[52]`。六批各九筆（0–8、9–17、18–26、27–35、36–44、45–53）僅為可重現 serialization proposal，不是已通過 Provider／Quota Admission 的執行 Plan。完整 Runtime Plan 尚缺受接受的逐筆 Token Bounds、Provider Item／Aggregate／Payload Limits、Project RPM／TPM／RPD 與 Usage／Cost Budget；不得乘用 Probe 100 或8192補值。現行安全評估要求所有批次符合既有保守單一 quota window，沒有 scheduler／resume。
+2. Full Document 和 Query 都須獨立 PM Live grant。現行 `p0_two_unknown_reviews` 僅接受 Single Document Probe；兩筆歷史 UNKNOWN 對 Full／Query 仍阻擋，第三次 grant 不可延伸。需先由 PM／SPEC Lead 決定精確 Campaign Scope Amendment；本輪只提出 Draft，不修改 Admission／Global Fence SQL、不啟用例外。
+3. 完整真實 54→54／mapping／768D／finite／nonzero／norm 0.01／可信 Usage 持久化後，同一 `embed_documents_for_build()`→`stage()`→Chroma→`validate()`。完成新 Gemini2 retrieval calibration／applicability policy freeze，才可在隔離 Demo namespace explicit activate；保留 LKG。Tracked historical config 不自動轉為 Gemini2 或授予 Activation。
+4. Query v1.0：先在呼叫邊界 `strip()` canonical query；`CanonicalKnowledgeQuery` 拒絕未 canonical／錯誤版本／敏感形狀。Envelope 固定 `task: search result | query: {canonical_query}`。同一 Gemini2 capability／768D／profile，query identity 包含 frozen build＋query commitment；SDK 不傳 `task_type`／`auto_truncate`。`embed_query_for_retrieval()` 使用原 guarded execution core，只有成功且可信 Usage 已持久化才交付一筆向量；缺 Usage／Provider Failure 不作 NO_MATCH。
+5. CLI `retrieve` 對 Gemini2 新增 `--live-opt-in`；singular Runtime 新增 `--knowledge-live-opt-in`，僅允許呼叫既有 guarded query adapter，**不是授權或可直接執行的 Live Runbook**。兩者仍須完整 Query Authority／E4／Safety、凍結 Build、有效 budget、Atomic Reservation、Final Guard 與無 blocking fence。目前 Full／Query Live 均 NOT AUTHORIZED；不得在準備階段執行以上 opt-in。Runtime 的 flag 不授予 LLM Live。
+6. Candidate-C 保留 MATCH／NO_MATCH／RETRIEVAL_UNAVAILABLE／INVALID 或 REPAIR_REQUIRED；Operation Replay 使用 immutable Snapshot，矛盾操作拒絕。Snapshot／Source／Version／Section／Chunk／Score／Applicability Provenance 交付 SPEC-015，Incident Facts 只取 SPEC-013。既有 SPEC-016 Durable Publication 與 Public Read 接線不變；LLM 另需自己的授權／budget。SOP context 不建立 Incident Cause Authority。
+
+### 固定候選 Query（未驗證真實 Ranking／Applicability）
+
+**Finding 1 保守接線（2026-11-01，依 SPEC Lead 本輪確認）。** `runtime_orchestration.knowledge_query` 的 `incident-evidence-query-v1` 僅將 SPEC-013 immutable Snapshot `event_projections` 中已支援的 event_source／event_type、severity 與唯一合法 service_name selector 投影成 bounded canonical Query；沒有 Snapshot／Incident 一致性時停止。Initial 在既有 Capture／Materiality 之後、Candidate-C 之前衍生，Follow-up 共用同一 helper。Retrieval 的 external references 保存 Mapping Version 與 Evidence Snapshot Reference；既有已 frozen（包括歷史 Incident-ID Query）原樣重播，不改 Build／Operation／Snapshot／Recovery Authority。
+
+Public Facts 尚未提供四個 Applicability Scope，亦無已核准 Event→Scope 對照；SPEC Lead 已確認先完成保守 Mapping、另審 Scope 對照。因此此版本 **所有 Filters 省略**：service_name 不是 component_service_scope，detector event_type 不是已證實 failure cause；不得從目標 SOP Metadata 補值。即使相似度高，仍依原 Policy 判定不適用／NO_MATCH，不是可展示 MATCH 的完整 Mapping。既有隔離 MATCH Fixture 只驗證 Retrieval／RCA 介面，不能作 Incident-derived MATCH Evidence。下列 Query A／B 仍是候選，A 的文件 Scope Metadata 不能直接當成 Production Incident Filters。後續只缺由治理權責人核准、具 Public Fact Provenance 的四 Scope 對照；本輪不自行批准或降低門檻。
+
+- A：`Multiple services report database connection timeouts and dependency connection failures.` 使用實際事件支持的 shared database/network dependency operational context，四個 exact filters 從 manifest 的 `ops.shared-database-network-dependency-interruption` metadata 導出；候選適用 RUNBOOK，仍須真正 Provider／Chroma／既定 Policy 驗證。
+- B：`Filesystem reports disk read errors and a storage volume is read-only.` 若 Incident Context 確實是 storage volume／filesystem disk I/O，使用該真實 context（不是為製造 NO_MATCH 填假 filter）；目前 Corpus 沒有專屬磁碟修復文件，候選 Knowledge Gap，仍以正式 Policy 結果為準。
+
+上述候選不是 Oracle／Ground Truth，不注入 Scenario ID、不寫死結果、不調閾值。本輪測試以合成 unit vectors 驗證介面與 MATCH／NO_MATCH 分流，不是候選 Query 的真實相似度證據。既有 SPEC-015 `safe_text` 仍拒絕包含禁止字樣的 Knowledge Projection（包括部分 SOP 治理文字）；不刪改 Corpus 或放寬安全規則。成功 E2E 測試使用原始、可合法投影的 operational section；任意 SOP Section 全面可用尚未宣稱。
+
+### Offline verification / Human handoff
+
+`tests/test_knowledge_gemini_query_integration.py` 使用 Synthetic Credentials／MockTransport／Temporary Diagnostic SQLite／隔離 Chroma與A/B/C/D stores，驗證 guarded query→snapshot→validated evidence-grounded RCA→durable publication→public current read；未修改正式 Active／LKG。連同既有 Build、batch、admission、retrieval、snapshot、RCA 回歸交付 Review。**OFFLINE INTEGRATION PASS ≠ REAL EMBEDDING／REAL-RAG／RCA E2E PASS**。
+
+Human Review Diff→限定離線複核→Human Git Checkpoint後，所有新 Campaign／Authorization Digest／E4／Safety 均須重綁 Exact Clean Source、final plan／input／payload／profile／有效期與真實 publication time。先補 Token／Quota／Budget 與精確 Historical Review Scope 決策，再由 PM 核准 Full／Query Live。Generated Chroma／Knowledge SQLite 不推 Git；Diagnostic attempts.sqlite 不是 Knowledge Index；API Key 不分享。
+
 ## Competition P0 Shared Demo — 2026-10-30
 
 Authority：`PM-AIOPS-COMPETITION-SINGLE-DEMO-20261030`。PM已核准共享展示方向與必要離線修訂；相關PRD／SPEC精確新增條文仍待Human正式Approval。此區分適用於本頁下列historical setup／commands；**不要直接以歷史rebuild／real-integration test命令觸發新的Live呼叫**。

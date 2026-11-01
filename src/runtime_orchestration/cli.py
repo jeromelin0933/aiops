@@ -155,7 +155,7 @@ def _build_rca_host(
     incident_manager: IncidentManager, event_store: EventStore,
     work_store: SqliteRuntimeWorkStore, retry: DurableRetryController,
     clock: RuntimeClock, telemetry: StdlibRuntimeTelemetry,
-    owned_resources: list[object],
+    owned_resources: list[object], knowledge_live_opt_in: bool = False,
 ) -> RcaRuntimeHost:
     """Compose public A/B/C/D/008 ports in the existing Runtime process."""
     rca = config.rca
@@ -209,10 +209,14 @@ def _build_rca_host(
         distance_metric=knowledge_config.distance_metric,
         client=chroma_client,
     )
-    embedding_client = _LazyProviderClient(lambda: create_google_client(
-        timeout_seconds=knowledge_config.limits.timeout_seconds))
-    owned_resources.append(embedding_client)
-    provider = GoogleEmbeddingAdapter(embedding_client, knowledge_config.capability)
+    if knowledge_config.capability.model == "gemini-embedding-2":
+        provider = GoogleEmbeddingAdapter(None, knowledge_config.capability,
+                                          controlled_live_opt_in=knowledge_live_opt_in)
+    else:
+        embedding_client = _LazyProviderClient(lambda: create_google_client(
+            timeout_seconds=knowledge_config.limits.timeout_seconds))
+        owned_resources.append(embedding_client)
+        provider = GoogleEmbeddingAdapter(embedding_client, knowledge_config.capability)
     candidate_c = KnowledgeSnapshotService(
         candidate_c_store,
         KnowledgeRetrievalService(candidate_c_store, provider, index),
@@ -244,7 +248,7 @@ def _build_rca_host(
         initial=InitialRcaOrchestrator(
             incidents=incident_store, candidate_a=candidate_a,
             candidate_b=candidate_b, candidate_c=candidate_c,
-            continuations=continuations),
+            continuations=continuations, derive_knowledge_query=True),
         execution=RcaAttemptExecutor(
             candidate_a=candidate_a, candidate_d=candidate_d,
             d_store=candidate_d_store, handoff=handoff,
@@ -268,8 +272,11 @@ def _build_rca_host(
 
 
 def build_runtime_application(
-    config: RuntimeConfig, *, project_root: Path, config_path: Path
+    config: RuntimeConfig, *, project_root: Path, config_path: Path,
+    knowledge_live_opt_in: bool = False,
 ) -> RuntimeApplication:
+    if type(knowledge_live_opt_in) is not bool:
+        raise ValueError("knowledge live opt-in must be explicit boolean")
     def local(path: str) -> Path:
         return project_root / path
 
@@ -365,6 +372,7 @@ def build_runtime_application(
             incident_store=incident_store, incident_manager=incident_manager,
             event_store=event_store, work_store=work_store, retry=retry,
             clock=clock, telemetry=telemetry, owned_resources=stores_list,
+            knowledge_live_opt_in=knowledge_live_opt_in,
         ) if config.rca is not None else None)
         core = CorrelationRuntimeCore(
             bootstrap=bootstrap,
@@ -409,6 +417,8 @@ def main(
     parser.add_argument(
         "--config", default="configs/runtime_orchestration.yaml", help="Runtime YAML"
     )
+    parser.add_argument("--knowledge-live-opt-in", action="store_true",
+                        help="Opt into separately authorized guarded Gemini2 queries; never grants LLM authority")
     args = parser.parse_args(argv)
     project_root = Path(__file__).resolve().parents[2]
     config_path = Path(args.config)
@@ -419,9 +429,10 @@ def main(
         level=config.telemetry.level,
         format="%(levelname)s %(name)s: %(message)s",
     )
-    application = application_factory(
-        config, project_root=project_root, config_path=config_path
-    )
+    kwargs = dict(project_root=project_root, config_path=config_path)
+    if args.knowledge_live_opt_in:
+        kwargs["knowledge_live_opt_in"] = True
+    application = application_factory(config, **kwargs)
     previous: dict[int, object] = {}
 
     def request_drain(_signum, _frame) -> None:

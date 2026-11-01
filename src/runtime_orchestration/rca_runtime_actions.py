@@ -40,6 +40,7 @@ from .rca_followup import FollowUpDisposition
 from .rca_host import RcaRecoveryKind, RcaRecoverySubject
 from .rca_initial import InitialRcaDisposition, InitialRcaRequest
 from .rca_publication import PublicationRuntimeDisposition
+from .knowledge_query import bind_evidence_query
 
 
 class RcaRuntimeActions:
@@ -330,6 +331,8 @@ class RcaRuntimeActions:
             self._knowledge_config.capability.profile_reference,
             self._knowledge_config.capability.capability_identity,
         )
+        request = bind_evidence_query(request, incident_id, snapshot,
+                                     self._c.read_operation(request.operation_key))
         outcome = self._c.resolve(request, self._knowledge_config.limits)
         if outcome.resolution in (RetrievalResolution.INVALID,
                                   RetrievalResolution.REPAIR_REQUIRED):
