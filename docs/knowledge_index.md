@@ -2,6 +2,16 @@
 
 ## Demo Gate Reset Candidate — 2026-11-01
 
+### Full54 Option B Candidate — 2026-11-02
+
+SPEC Lead於2026-11-02依PM `PM-AIOPS-COMP-P0-FULL54-BOUNDED-RISK-20261101`正式核准SPEC-014 §24.10.1～§24.10.4精確Contract、固定契約參數及已審離線實作（含F-01修正）；正式Bounded-risk Exception尚未啟用。既有Runner以新的protected `full54_bounded_risk`與Plan `admission_basis=FULL54_DEMO_RISK_CAP_V1`區分Strict Evidence；四個Reference為本PM方向、真實精確契約Approval、Human Project Exclusive-use確認、Human Quota Evidence，完整進原Digest／E4／Safety。Project仍為gen-lang-client-0149178738／Free Tier／RPM100／TPM30000／RPD1000，profile／rev-1不變。
+
+固定54／6×9、最多6 Physical Attempts、每次30秒／No Retry／Parallel／Fallback／Resume；候選Reservation為8192/item、73728/batch、442368/campaign risk units及6 micro-USD內部Campaign Hold。這不是Accepted Token Evidence或Google費用保證；Provider Limits／Request Units明示UNKNOWN，不填假數字。保留原序列化Commitments與Payload Bounds；Parent全Corpus E4=52485 bytes，不能沿用Single Probe的4096-byte Grant。
+
+每批前從Run開始或上批可信Usage持久化後進行65秒有界Quiet，Wall／Monotonic Clock一致性與原Authority逐次檢查；每批可信正Usage須≤30000，本地尚適用Receipt亦須納入檢查。超限保留Observed Usage並形成新UNKNOWN；任何Timeout／429／缺Usage／Partial／Persistence異常即停止且不交付Build。不宣稱已證Google Window／共享流量／剩餘RPD或完整輸入不截斷。Human須確認停止其他可控Project流量；未知外部流量仍為Final Grant需接受的風險。只有全部54成功才能Stage／Validate；不自動Activate。
+
+最後文件Review後Human Clean Checkpoint→將本次真實Approval記錄由Human Publication Owner綁入受控Evidence／Human Project Exclusive-use確認／獨立PM Final Live Grant及執行Budget／Validity→重建Root／Child Authorization／E4／Safety→Human Publication／Preflight／Opt-in。不得任填Approval Reference或把契約批准當Final Grant。此處沒有新增可直接執行Live的CLI，不能用舊Probe Handoff。§24.9 Approved、原Strict／Production／Query／Formal義務、兩筆歷史UNKNOWN與全部Hold不變；Scope／Profile／Query／LLM仍各自待批准。下方Option B前的Pending描述保留歷史，本段不是Live操作許可。
+
 Authority：`PM-AIOPS-COMP-P0-DEMO-GATE-RESET-20261101`；Parent：`PM-AIOPS-COMP-P0-KNOWLEDGE-DELIVERY-20261101`。SPEC Lead於2026-11-01正式核准SPEC-014 §24.9.1～§24.9.5精確Competition Demo-only Narrow Amendment。本節優先說明已核准契約及尚待正式Binding的離線實作；下方Current／2026-10-30原Calibration前置與Scope限制保留歷史。此批准不包含四Scope候選值、Demo Profile／Threshold、Risk Exception、Live或Activation；正式例外未啟用。
 
 ### 一次真實54→54的Demo路徑

@@ -12,6 +12,7 @@ import json
 import math
 import socket
 import ssl
+import time
 from threading import Lock
 from uuid import uuid4
 from hashlib import sha256
@@ -38,6 +39,7 @@ from .gemini_diagnostic_controls import (
     COUNTING_OPERATION, COUNTING_CHUNK, COUNTING_INPUT, COUNTING_CORPUS, COUNTING_BODY, COUNTING_URL,
     _timestamp,
     is_single_document_probe, SINGLE_PROBE_RISK_CAP,
+    FULL54_RISK_BASIS,
 )
 from .google_embedding_adapter import (
     GEMINI_MODEL, GeminiEmbedding2Verification, GoogleEmbeddingAdapter,
@@ -145,7 +147,10 @@ def evaluate_diagnostic_safety(
     if not isinstance(basis, DiagnosticSafetyBasis):
         raise DiagnosticDenied("diagnostic safety evidence is missing")
     probe = is_single_document_probe(record) and not allow_synthetic
-    if basis.status != ("SYNTHETIC_OFFLINE_ONLY" if allow_synthetic else "VERIFIED"):
+    risk = record.full54_bounded_risk is not None and not allow_synthetic
+    if risk:
+        record.__post_init__()
+    if basis.status != ("SYNTHETIC_OFFLINE_ONLY" if allow_synthetic else "BOUNDED_RISK" if risk else "VERIFIED"):
         raise DiagnosticDenied("diagnostic safety evidence is not live applicable")
     if not allow_synthetic and proof.evidence_identity == "SYNTHETIC_OFFLINE_ONLY":
         raise DiagnosticDenied("synthetic token counter cannot establish live safety")
@@ -158,7 +163,7 @@ def evaluate_diagnostic_safety(
         or basis.sdk != record.sdk_baseline or basis.api != record.api_version
         or basis.kind != kind or basis.input_commitment != record.input_commitment
         or basis.bounds_basis != record.bounds_basis or basis.cost_basis != record.cost_basis
-        or basis.token_method != ("PM_ACCEPTED_MODEL_LIMIT_RISK_CAP" if probe else
+        or basis.token_method != (FULL54_RISK_BASIS if risk else "PM_ACCEPTED_MODEL_LIMIT_RISK_CAP" if probe else
                                   "SYNTHETIC_BYTES_NOT_TOKENS" if allow_synthetic
                                   else "MODEL_COMPATIBLE_UPPER_BOUND")
         or type(basis.valid_until) is not datetime
@@ -172,7 +177,13 @@ def evaluate_diagnostic_safety(
                                    else ("STANDARD_PAID_TEXT", "FREE_TIER_TEXT_V1"))
     ):
         raise DiagnosticDenied("cost price, account tier or currency is unverified")
-    if probe:
+    if risk:
+        if kind != "document" or any(v is not None for v in (basis.provider_item_limit,
+                basis.provider_item_token_limit, basis.provider_aggregate_token_limit, basis.provider_payload_byte_limit)):
+            raise DiagnosticDenied("risk caps cannot be represented as verified provider limits")
+        item_limit, item_token_limit, aggregate_limit = 9, 8192, 73728
+        payload_limit = record.maximum_payload_bytes
+    elif probe:
         record.__post_init__()
         # These are LOCAL admission caps under PM's bounded-risk exception,
         # not verified input counts, Google aggregate limits or system quotas.
@@ -207,7 +218,9 @@ def evaluate_diagnostic_safety(
         raise DiagnosticDenied("provider or approved item bound is exceeded")
     try:
         item_bytes = tuple(len(text.encode("utf-8")) for text in texts)
-        item_tokens = tuple(proof.count_tokens(text) for text in texts)
+        # Compatibility DTO fields named *_tokens carry explicitly labeled
+        # local admission units ONLY for this protected risk basis.
+        item_tokens = (8192,) * len(texts) if risk else tuple(proof.count_tokens(text) for text in texts)
         if probe and item_tokens != (SINGLE_PROBE_RISK_CAP,):
             raise ValueError("probe admission risk cap mismatch")
         payload = _serialized(contents, config)
@@ -257,7 +270,7 @@ def evaluate_diagnostic_safety(
     return DiagnosticSafetyDecision(
         digest, len(texts), item_bytes, item_tokens,
         aggregate, bounded_payload_bytes, conservative_cost, basis.status,
-        "PM_ACCEPTED_MODEL_LIMIT_RISK_CAP" if probe else
+        FULL54_RISK_BASIS if risk else "PM_ACCEPTED_MODEL_LIMIT_RISK_CAP" if probe else
         "SYNTHETIC_OFFLINE_ONLY" if allow_synthetic else "MODEL_COMPATIBLE_UPPER_BOUND",
     )
 
@@ -361,7 +374,7 @@ def _validate_sdk_evidence_binding(
     if not isinstance(evidence, DiagnosticSdkByteEvidence):
         raise DiagnosticDenied("SDK byte evidence is missing")
     if not offline_harness:
-        if (prepared.safety_decision.evidence_status != "VERIFIED"
+        if (prepared.safety_decision.evidence_status != ("BOUNDED_RISK" if prepared.record.full54_bounded_risk else "VERIFIED")
                 or evidence.status != "HOST_CONTROLLED_E4_ONLY"):
             raise DiagnosticDenied("trusted live SDK byte evidence source is not provisioned")
     if evidence.status not in ("SYNTHETIC_OFFLINE_ONLY", "HOST_CONTROLLED_E4_ONLY"):
@@ -850,6 +863,22 @@ def _safety_from_artifact(record, texts, artifact):
     value = artifact._validated_fields()
     if value["binding"]["authorization_record_sha256"] != _authorization_record_digest(record):
         raise DiagnosticDenied("safety authorization changed")
+    if record.full54_bounded_risk is not None:
+        artifact.require_full54_risk(record)
+        permission = artifact.require_free_tier_permission(record)
+        # Legacy adapter callback supplies risk units, never accepted tokens.
+        proof = GeminiEmbedding2Verification(count_tokens=lambda _: 8192, serialize_payload=_serialized,
+            max_item_tokens=8192, max_aggregate_tokens=73728, max_provider_items=9,
+            max_item_bytes=record.maximum_item_bytes, max_payload_bytes=record.maximum_payload_bytes,
+            normalization_tolerance=record.normalization_tolerance, evidence_identity=value["artifact_revision"])
+        basis = DiagnosticSafetyBasis("BOUNDED_RISK", value["artifact_revision"], record.campaign_id,
+            record.source_revision, record.input_scope_identity, _authorization_record_digest(record),
+            record.provider_identity, record.model_identity, record.sdk_baseline, record.api_version,
+            "document", record.input_commitment, value["e4_reference"]["canonical_json_sha256"],
+            record.bounds_basis, record.cost_basis, FULL54_RISK_BASIS, None, None, None, None,
+            "FREE_TIER_TEXT_V1", "USD", 0,
+            datetime.fromisoformat(value["validity"]["expires_at"].replace("Z", "+00:00")), permission)
+        return proof, basis, len(texts)*8192, 1
     if is_single_document_probe(record):
         artifact.require_single_probe(record)
         permission = artifact.require_free_tier_permission(record)
@@ -1169,9 +1198,9 @@ def _prepare_sequential_batches(request, binding, artifact, resolve_facts):
         child_basis = replace(basis, input_commitment=commitment,
             authorization_record_sha256=_authorization_record_digest(child_record),
             serialized_request_sha256=child_e4.canonical_json_sha256,
-            provider_item_limit=proof.max_provider_items,
-            provider_aggregate_token_limit=proof.max_aggregate_tokens,
-            provider_payload_byte_limit=proof.max_payload_bytes)
+            provider_item_limit=None if record.full54_bounded_risk else proof.max_provider_items,
+            provider_aggregate_token_limit=None if record.full54_bounded_risk else proof.max_aggregate_tokens,
+            provider_payload_byte_limit=None if record.full54_bounded_risk else proof.max_payload_bytes)
         tokens = sum(proof.count_tokens(t) for t in texts[start:end])
         cost = max(1, (tokens * basis.price_micro_units_per_million_tokens + 999_999) // 1_000_000)
         item = _preflight(load_record=lambda r=child_record: r, resolve_facts=resolve_facts,
@@ -1186,13 +1215,74 @@ def _prepare_sequential_batches(request, binding, artifact, resolve_facts):
     # Conservative admission: ALL planned requests fit one declared quota
     # window. Accounting units require reviewed source evidence; never infer
     # that one HTTP send consumes one RPM. No clock/scheduler/quota domain.
+    risk = record.full54_bounded_risk is not None
     if (len(prepared) > min(record.maximum_invocations, request.limits.maximum_invocations)
             or sum(len(item.texts) for item, _, _ in prepared) > record.maximum_items
-            or total_tokens > record.maximum_usage_units or total_tokens > quota["tpm"]
-            or len(prepared) * quota["request_units_per_invocation"] > min(quota["rpm"], quota["rpd"])
+            or total_tokens > record.maximum_usage_units or (not risk and total_tokens > quota["tpm"])
+            or (not risk and len(prepared) * quota["request_units_per_invocation"] > min(quota["rpm"], quota["rpd"]))
             or sum(item.cost_micro_units for item, _, _ in prepared) > record.maximum_cost_micro_units):
         raise DiagnosticDenied("batch campaign token, invocation, quota or cost bound exceeded", code="INPUT_BOUNDS_EXCEEDED")
     return plan, tuple(prepared)
+
+
+def _risk_clock():
+    return time.monotonic(), datetime.now(timezone.utc)
+
+
+class _Full54QuietWindow:
+    """One synchronous run, no persistent resume or provider quota guarantee.
+
+    A 65-second observed quiet period starts at run entry and after EVERY
+    durable receipt. Wall/monotonic agreement and authority are rechecked while
+    waiting. Other project traffic is not observable: Human exclusivity is an
+    explicit protected risk assumption, not a measurement of Google windows.
+    """
+    def __init__(self, record=None):
+        self.record = record
+        self.last = None
+        self.receipts = []
+        self.quiet_since = self.check_clock()[0]
+
+    def check_clock(self):
+        try:
+            mono, wall = _risk_clock()
+        except (OSError, ValueError, TypeError, OverflowError):
+            raise DiagnosticDenied("risk window clock unavailable") from None
+        if (type(mono) not in (int, float) or not math.isfinite(mono) or mono < 0
+                or type(wall) is not datetime or wall.tzinfo is None):
+            raise DiagnosticDenied("risk window clock unavailable")
+        if self.record is not None and not _timestamp(self.record.valid_from) <= wall < _timestamp(self.record.expires_at):
+            raise DiagnosticDenied("risk window grant expired or not yet valid")
+        if self.last is not None:
+            dm, dw = mono-self.last[0], (wall-self.last[1]).total_seconds()
+            if dm < 0 or dw < 0 or abs(dw-dm) > 2:
+                raise DiagnosticDenied("risk window clock discontinuity")
+        self.last = mono, wall
+        return self.last
+
+    def before_batch(self, refresh):
+        # A bounded wait, not guessed quota compliance or a retry mechanism.
+        for _ in range(70):
+            mono, _wall = self.check_clock()
+            refresh()
+            remaining = 65-(mono-self.quiet_since)
+            if remaining <= 0:
+                self.receipts = [(t,u) for t,u in self.receipts if mono-t < 65]
+                if self.receipts:
+                    raise DiagnosticDenied("risk window still has potentially applicable usage")
+                return
+            time.sleep(min(1.0, remaining))
+        raise DiagnosticDenied("risk quiet window did not advance reliably")
+
+    def completed(self, observed):
+        mono, _wall = self.check_clock()
+        if type(observed) is not int or not 0 < observed <= 30000:
+            raise DiagnosticDenied("observed batch input usage exceeds known TPM guard or is unavailable")
+        self.receipts = [(t,u) for t,u in self.receipts if mono-t < 65]
+        if sum(u for _,u in self.receipts)+observed > 30000:
+            raise DiagnosticDenied("observed local window input usage exceeds known TPM")
+        self.receipts.append((mono, observed))
+        self.quiet_since = mono
 
 
 def _validate_global_batch_vectors(request, collected, tolerance):
@@ -1211,8 +1301,11 @@ def _run_sequential_campaign(request, binding, artifact, resolve_facts, *, _buil
     try:
         plan, batches = _prepare_sequential_batches(request, binding, artifact, resolve_facts)
         usage, collected, observations = LiveDiagnosticUsage(), [], []
+        window = _Full54QuietWindow(binding.record) if binding.record.full54_bounded_risk else None
         for ordinal, (prepared, approved, evidence) in enumerate(batches):
             def refresh():
+                if window is not None:
+                    window.check_clock()
                 if load_live_binding() != binding or load_live_safety_artifact().fields != artifact.fields:
                     raise DiagnosticDenied("batch source, plan or campaign authority changed")
                 current = replace(prepared, facts=resolve_facts(prepared.record, request))
@@ -1225,6 +1318,8 @@ def _run_sequential_campaign(request, binding, artifact, resolve_facts, *, _buil
                     conservative_cost_micro_units=current.cost_micro_units)
                 return current
 
+            if window is not None:
+                window.before_batch(refresh)
             prepared = refresh()
             remaining = batches[ordinal:]
             required = (len(remaining), sum(len(p.texts) for p, _, _ in remaining),
@@ -1266,12 +1361,15 @@ def _run_sequential_campaign(request, binding, artifact, resolve_facts, *, _buil
                     ordered_identities=binding.approved_input.identities,
                     cost_estimate_micro_units=sum(o.cost_estimate_micro_units for o in observations),
                     input_commitment=binding.record.input_commitment)
+            if window is not None:
+                window.completed(int(state[1]))
         _validate_global_batch_vectors(request, collected, binding.record.normalization_tolerance)
         # Release nothing to Build until ALL batches, durable usage and global
         # validation succeed. No cross-run cache/import or second provider call.
         if _build_vectors is not None:
             _build_vectors.extend(collected)
-        return replace(observations[-1], category="BATCHED_OBSERVATION_MAPPING_REVIEW_REQUIRED",
+        return replace(observations[-1], category=("FULL54_BOUNDED_RISK_NOT_QUOTA_COMPLIANCE"
+            if window is not None else "BATCHED_OBSERVATION_MAPPING_REVIEW_REQUIRED"),
             ordered_identities=tuple(identity for identity, _ in collected), vector_count=54,
             provider_attempts=sum(o.provider_attempts for o in observations),
             cost_estimate_micro_units=sum(o.cost_estimate_micro_units for o in observations),

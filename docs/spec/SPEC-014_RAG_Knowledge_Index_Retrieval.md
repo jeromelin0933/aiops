@@ -9,6 +9,7 @@
 | 欄位 | 內容 |
 |---|---|
 | Document ID | SPEC-014 |
+| §24.10 Full54 Bounded-risk Narrow Amendment | 2026-11-02 APPROVED — SPEC Lead正式接受§24.10.1～§24.10.4精確Competition Demo-only契約及離線實作；核准基準Patch SHA-256：01e6bf7ba918abf525f6b18ebdfa832bf8cbf7ad61fe0572726eb5a7f6584cd0。Authority：PM-AIOPS-COMP-P0-FULL54-BOUNDED-RISK-20261101；Parent：PM-AIOPS-COMP-P0-DEMO-GATE-RESET-20261101。不構成Final Live Grant／執行Budget／Validity、Exclusive-use確認、正式Risk啟用或Activation |
 | §24.9 Competition Demo-only Narrow Amendment | 2026-11-01 APPROVED — SPEC Lead正式接受§24.9.1～§24.9.5精確條款；Authority：PM-AIOPS-COMP-P0-DEMO-GATE-RESET-20261101；Parent：PM-AIOPS-COMP-P0-KNOWLEDGE-DELIVERY-20261101。僅核准Demo-only Calibration Deferral及Full54 Historical Scope契約；不核准Scope候選值、Profile／Threshold、Risk Exception、Live或Activation，不改§24.8 Draft與Formal／Production義務 |
 | Two-UNKNOWN Narrow Amendment | 2026-10-31 APPROVED — SPEC Lead正式核准；PM Conditional Continue Gemini／Final Stop-Loss Boundary授權本次有限離線修訂；第二筆Human Review ACCEPTED WITH EVIDENCE LIMITATION（2026-10-31T12:58:56+08:00），第三次Live NOT AUTHORIZED，正式例外未啟用；既有D-1與Shared Demo核准不變 |
 | D-1 P0 UNKNOWN Exception Amendment | 2026-10-30 Approved — SPEC Lead富裕正式核准；Authority：PM-AIOPS-COMP-P0-UNBLOCK-20261030-01；D-1 Audit Finding CLOSED；正式例外未啟用，D-2 Live未授權 |
@@ -45,6 +46,8 @@
 
 | Version | Date | Status | Change |
 |---|---|---|---|
+| v1.4-based §24.10 approval closure | 2026-11-02 | Approved — SPEC Lead | SPEC Lead依PM Option B、Implementation Offline Evidence、Independent Audit及F-01 Targeted Recheck，正式接受§24.10.1～§24.10.4精確條款及固定契約參數；核准Patch SHA-256：01e6bf7ba918abf525f6b18ebdfa832bf8cbf7ad61fe0572726eb5a7f6584cd0。本次僅Approval Metadata／直接引用收尾；保留原DRAFT、§24.9 Approved、Strict／Production、Historical UNKNOWN及Formal義務。不虛構Approval Reference，不授權Live／正式例外／Activation或Formal Completion。 |
+| v1.4-based §24.10 draft／F-01 correction | 2026-11-02 | Historical Draft — exact approval was pending | PM-AIOPS-COMP-P0-FULL54-BOUNDED-RISK-20261101授權有限離線Option B；F-01將可信正Usage超限與零／缺失／不可信Usage分開，保留後者可能SUCCESS Outcome但UNKNOWN Usage的實際Fence／Build Stop語意。原DRAFT記錄及技術條款保留，下方現行Approval不倒寫此歷史狀態。 |
 | v1.4-based §24.9 approval closure | 2026-11-01 | Approved — SPEC Lead | SPEC Lead依PM-AIOPS-COMP-P0-DEMO-GATE-RESET-20261101及Parent PM-AIOPS-COMP-P0-KNOWLEDGE-DELIVERY-20261101正式接受§24.9.1～§24.9.5精確Competition Demo-only Narrow Amendment。僅收尾Approval Metadata／直接引用狀態，不修改已審技術條款；保留原DRAFT、§24.8 Draft、歷史UNKNOWN／Hold及既有Approval。Scope候選值、Profile／Threshold、Bounded-risk、Full54／Query／LLM Live、Activation與Formal Completion未獲本決定核准。 |
 | v1.4-based two-UNKNOWN approval closure | 2026-10-31 | Approved — SPEC Lead | SPEC Lead已完成Two-UNKNOWN Source Patch、Offline Verification Evidence與Human Review Summary審閱，依PM Conditional Continue Gemini／Final Stop-Loss Boundary（2026-10-31）正式核准本次限定Source／SPEC契約修訂。僅完成Approval／Status Closure；保留原DRAFT歷史、既有D-1 Approval及第二筆Evidence Limitation，技術邏輯與Shared Demo／Formal契約不變。第三次Google Live NOT AUTHORIZED；正式雙UNKNOWN Admission Exception NOT ACTIVATED；Human Git Checkpoint待執行。 |
 | v1.4-based two-UNKNOWN draft | 2026-10-31 | Draft — SPEC Lead Approval Pending | PM Conditional Continue Gemini／Final Stop-Loss Boundary（2026-10-31）授權有限離線個案修訂，保留Parent PM-AIOPS-COMP-P0-UNBLOCK-20261030-01。新增互斥、精確兩筆Review Binding及既有Atomic Fence分類；第二筆Human Acceptance已取得；僅新Grant及全部Binding有效時可適用，不擴張原D-1、不修改正式Store／Authority、不授權第三次Live。Single Shared Demo及Formal／Production契約不變。 |
@@ -1559,3 +1562,41 @@ S5 Shared Dependency與S2 Knowledge Gap只是PM優先候選，不預判MATCH／N
 ### 24.9.5 Review／Stop-loss
 
 本節精確條文已由SPEC Lead正式核准；本輪Approval Status Closure仍交SPEC Lead最後整合審查後由Human Checkpoint，最終Live Grant／E4／Safety綁新Clean SHA。2026-11-03 12:00 UTC+08:00前仍無合法路徑時，交PM決定最小Stop-loss；不自動啟動BM25，不延展Live Grant、不加Probe。Competition A／Formal B與歷史NOT EXECUTED狀態保持誠實。
+
+## 24.10 Full54 Competition Demo Bounded-risk — Approved Narrow Amendment
+
+**APPROVED — SPEC Lead Exact Competition Demo-only Narrow Amendment；Approval Date：2026-11-02。** Decision：APPROVE — SPEC-014 §24.10.1～§24.10.4 EXACT COMPETITION DEMO-ONLY NARROW AMENDMENT。PM Authority：`PM-AIOPS-COMP-P0-FULL54-BOUNDED-RISK-20261101`；Parent：`PM-AIOPS-COMP-P0-DEMO-GATE-RESET-20261101`。接受版本為累積Patch SHA-256 `01e6bf7ba918abf525f6b18ebdfa832bf8cbf7ad61fe0572726eb5a7f6584cd0`，包含F-01修正後Usage／Outcome語意及既有固定契約參數。僅核准Contract／Offline Implementation，不構成Google Live、正式Risk啟用、PM Final Live Grant／執行Budget／Validity、Human Exclusive-use確認、Query／LLM Live、Demo／Production Activation或Formal Completion。若Loader需要具名Approval Reference，由具權限Human Publication Owner將本次真實批准記錄綁入受控Evidence；本節不編造Reference，也不得將其當作Final Live Grant。§24.9 Approved及原正式契約不變。
+
+**Historical draft record（原文保留，不代表目前仍Pending）：**
+
+**DRAFT — SPEC LEAD EXACT APPROVAL PENDING（2026-11-02）。** PM Authority：`PM-AIOPS-COMP-P0-FULL54-BOUNDED-RISK-20261101`；Parent：`PM-AIOPS-COMP-P0-DEMO-GATE-RESET-20261101`。PM已選Option B並授權本次最小離線契約／工程；不是Final Live Grant。本節不更改§24.9 Approved、原Strict Safety／Production／Query契約、Historical Reviews、Knowledge Identity／Activation／LKG或Formal Acceptance。未正式接受本節精確條款前，不得發布依賴它的正式Authority或執行Live。
+
+### 24.10.1 Exact-scope authority
+
+只允許一個另有PM Final Live Grant的`CONTROLLED_PROVIDER_DIAGNOSTIC` document Campaign，`delivery_scope=COMPETITION_DEMO_ONLY`，Approved六文件／54 ordered inputs／原Global Commitment，固定6×9 contiguous sequential batches；每批最多一個Physical Attempt、30秒、No Retry／Fallback／Parallel／Automatic Resume。重用原Entry、SQLite、Atomic Reservation-before-Credential、Final Guard、Source／Host／Runner／Credential／Authorization／E4／Safety及Immutable Build管線。
+
+同一protected Authorization新增可選`full54_bounded_risk`，精確四欄：`authority_reference`固定本PM Authority；`contract_approval_reference`為真實SPEC Lead精確條款Acceptance；`project_exclusive_use_reference`為Human在Grant有效期內接管Project並停止其他可控流量的確認；`quota_evidence_reference`為本Project的Human Dashboard Evidence。這些Reference必須是實際受控記錄，不接受PENDING／PROPOSED／方向Authority代替精確Approval。普通Caller不得提供grant／Safety／client override；正式路徑只從既有ACL保護Loader取得Authority。Reference本身不是密碼學批准證明，發布Owner須核對真實內容與適用期間。
+
+`project_identity=gen-lang-client-0149178738`、profile=`spec014-gemini-embedding-2-profile-v1`、revision=`rev-1`、Google `gemini-embedding-2`／Stable v1／`google-genai==2.25.0`／768D／norm tolerance0.01必須精確一致。另須完整`p0_full54_history_scope`及原兩份`p0_two_unknown_reviews`；原Row／Evidence／Review／限制均不改。Final PM Grant不能是本工程Authority或已消耗的Probe Grant。新可選欄位缺省None時不進Canonical Digest，舊Digest不變；存在時完整納入Digest及Root／Child E4／Safety。正式Source須Human Clean Checkpoint，不使用候選未提交程式執行。
+
+### 24.10.2 Evidence, risk units and finite budget
+
+Risk wire與Strict `token_evidence`／`accepted_input_token_bounds`互斥；`provider_limits`四個數值欄位明示UNKNOWN，不填入虛構Provider Limits。獨立Safety appendix須逐欄等於Authorization的`full54_bounded_risk`，publication.method_acceptance_reference精確等於contract_approval_reference，維持Free Tier／Outbound／Project／Revision／實際Publication／Validity驗證。已確認RPM100／TPM30000／RPD1000保持不變；Safety及Plan引用同一Quota Evidence，`request_units_per_invocation=UNKNOWN`，不是0、Unlimited、1或9的已驗證計數。
+
+Plan新增`admission_basis=FULL54_DEMO_RISK_CAP_V1`；無此Basis或無完整風險Grant時，原Strict Token／Campaign-total TPM／Request-unit檢查完整保留。Risk限定6個確切9-item範圍，原Input／SDK Body Commitments不變。有限內部Reservation：8192 risk units/item、73728/batch、442368/campaign；Maximum Physical Attempts6；每Attempt Hold1 micro-USD，Campaign Maximum Cost6 micro-USD，Free Tier價格證據仍須有效。Maximum Item Envelope1302 bytes，Parent E4為52485 bytes；Authorization Payload Bound至少涵蓋Parent E4及所有既有實際／保守Serialization檢查，且不超過既有1,000,000-byte本地限制。
+
+以上風險值為本候選精確條款所需SPEC Lead／PM最終Grant核准的固定值，均不是已驗證Token Count、Model-compatible Bounds、Google Quota Units或Google最壞費用保證。為重用原DTO／Ledger，`maximum_*_tokens`、`item_tokens`及Plan.maximum_batch_tokens僅在此Basis解釋為明示Admission Risk Units；不得對外標為Verified Input Tokens。SafetyDecision.admission_usage_basis及成功Observation Category必須標明此差異。SDK原始Body／Canonical JSON、Envelope Bytes與逐批可信Provider Usage各自保留，不以Bytes或Probe Usage100推算Tokens。
+
+### 24.10.3 Local quiet window and uncertainty
+
+在原單一同步Runner Lock內，本地Window以Monotonic Clock計經過時間，UTC Wall Clock交叉驗證；Clock不可用、倒退、相鄰兩時計經過量差異超過2秒或等待無法可靠前進即STOP。每一批（含第一批）Reservation前，須從Run開始或上批可信Usage持久化完成後，觀察至少65秒Quiet Period；最多70次有界等待，每次最多1秒，逐次重驗Source／Authority／Validity，不增加Physical Attempt。不是Scheduler或Persistent Resume。這個65秒是事前固定的本地隔離風險選擇，非Google官方Window規格，也不是以Sleep證明Quota Compliance。
+
+本Run每筆可信Input Usage及持久化完成Monotonic Time保留於記憶體；下一批前檢查65秒內仍可能適用的本地Receipt，若存在則不得發送。每批可信正Usage及該本地Window累計均須≤30000。可信正Usage超過30000時，原Completion Transaction保存實際可信Usage並將新Attempt Outcome標為UNKNOWN，保留Reservation／Cost Hold，阻擋後續Batch。零值／缺失／不可信Usage不形成可信Receipt，`usage_observed=UNKNOWN`；若Provider Vector Response本身完整，Attempt Outcome仍可能為SUCCESS，但不代表Campaign Success或Usage Acceptance。既有UNKNOWN Usage Fence必須阻擋後續Batch；不得將零值冒充可信Usage。上述情況均不退款、不重置、不交付部分STAGED Build、不Retry／Resume。只有可信成功Usage經既有Response-bound Receipt持久化且讀回確認後才能開始下個Quiet Period。
+
+本地Quiet不能證明Google採同一Window，也無法觀測其他Host／Key共享的Project流量或目前剩餘RPD。Human Exclusive-use確認、初始Quiet、六次上限只能降低風險。首次及每批實際Token未知，可能超過30000或Provider其他限制；未知Request Accounting不作已驗證RPM／RPD算式。Final Grant必須明確接受這些未知、429／拒絕／Truncation／Billing與無法完成54筆的風險；不得改寫實際Project配額或宣稱Provider一定接受。無Human可控獨占使用確認時拒絕此候選，不能用假零流量通過。
+
+### 24.10.4 Completion and stop boundary
+
+每批須完整Response／Count／Mapping／Order／768D／Finite／Nonzero／norm0.01、可信Usage、Budget與持久化確認才繼續。429、Timeout、UNKNOWN、Invalid／Partial Response、Usage缺失或不可信、已知本地Usage Guard超限、Persistence Ambiguity、Source／Input／Authority變更、Duplicate或額外UNKNOWN／TIMEOUT／IN_FLIGHT立即STOP；既有歷史例外不涵蓋任何新Attempt。只有全54及global order／mapping通過才向既有Build交付Vectors，不發布部分STAGED Build、不自動Activate、不重啟續跑或另開Campaign自動重送。
+
+Formal／Production及Query不得選用本Basis；其Strict Gate不變。此契約、Source Offline PASS及Human Checkpoint均不構成Live、Demo Activation、Calibration、AC-014-X或SPEC-017 PASS。2026-11-03 12:00 UTC+08:00仍無可授權固定路徑時停止追加工程，交PM決定方案C；本輪不實作BM25。

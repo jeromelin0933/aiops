@@ -774,6 +774,8 @@ _P0_UNBLOCK_AUTHORITY = "PM-AIOPS-COMP-P0-UNBLOCK-20261030-01"
 _P0_SCOPE_AUTHORITY = "PM-AIOPS-COMPETITION-SINGLE-DEMO-20261030"
 _P0_DEMO_GATE_AUTHORITY = "PM-AIOPS-COMP-P0-DEMO-GATE-RESET-20261101"
 _P0_KNOWLEDGE_AUTHORITY = "PM-AIOPS-COMP-P0-KNOWLEDGE-DELIVERY-20261101"
+FULL54_RISK_AUTHORITY = "PM-AIOPS-COMP-P0-FULL54-BOUNDED-RISK-20261101"
+FULL54_RISK_BASIS = "FULL54_DEMO_RISK_CAP_V1"
 _P0_HUMAN_REVIEW_REFERENCE = "SPECLEAD-SPEC014-D1-UNKNOWN-REVIEW-20261030-01"
 # One verified historical case, NOT a ledger, grant or generic adjudication registry.
 # Source/input association was explicitly confirmed by SPEC Lead; the old row
@@ -921,6 +923,42 @@ class P0Full54HistoryScope:
 
 
 @dataclass(frozen=True, slots=True)
+class Full54BoundedRisk:
+    """Protected, Human-published acceptance; never verified token evidence.
+
+    Numeric risk caps/pacing are fixed by this source candidate. A separate
+    exact-contract approval and final live grant are mandatory before use.
+    """
+    authority_reference: str
+    contract_approval_reference: str
+    project_exclusive_use_reference: str
+    quota_evidence_reference: str
+
+    def matches_record(self, record) -> None:
+        for value in (self.contract_approval_reference, self.project_exclusive_use_reference,
+                      self.quota_evidence_reference):
+            if (type(value) is not str or not 1 <= len(value) <= 256 or value != value.strip()
+                    or any(word in value.upper() for word in ("PENDING", "PROPOSED", "HUMAN_REQUIRED"))):
+                raise DiagnosticDenied("Full54 risk acceptance evidence is missing")
+        if (self.authority_reference != FULL54_RISK_AUTHORITY
+                or record.pm_approval_reference == FULL54_RISK_AUTHORITY
+                or self.contract_approval_reference in (FULL54_RISK_AUTHORITY, record.pm_approval_reference)
+                or record.p0_full54_history_scope is None
+                or record.p0_two_unknown_reviews is None
+                or record.project_identity != "gen-lang-client-0149178738"
+                or record.credential_profile_identity != "spec014-gemini-embedding-2-profile-v1"
+                or record.credential_profile_revision != "rev-1"
+                or record.maximum_invocations != 6 or record.maximum_items != 54
+                or record.maximum_item_tokens != 8192 or record.maximum_aggregate_tokens != 73728
+                or record.maximum_usage_units != 442368 or record.maximum_cost_micro_units != 6
+                or record.maximum_item_bytes != 1302 or not 52485 <= record.maximum_payload_bytes <= 1_000_000
+                or record.cost_basis != "FULL54_INTERNAL_HOLD_V1"
+                or record.normalization_tolerance != 0.01):
+            raise DiagnosticDenied("Full54 bounded-risk grant differs from the exact candidate")
+        record.p0_full54_history_scope.matches_record(record)
+
+
+@dataclass(frozen=True, slots=True)
 class DiagnosticAuthorizationRecord:
     campaign_id: str
     pm_approval_reference: str
@@ -959,6 +997,7 @@ class DiagnosticAuthorizationRecord:
     p0_unknown_review: P0UnknownAttemptReview | None = None
     p0_two_unknown_reviews: tuple[P0UnknownAttemptReview, P0SecondUnknownAttemptReview] | None = None
     p0_full54_history_scope: P0Full54HistoryScope | None = None
+    full54_bounded_risk: Full54BoundedRisk | None = None
 
     def __post_init__(self) -> None:
         for field in (
@@ -974,7 +1013,7 @@ class DiagnosticAuthorizationRecord:
         if self.pm_approval_reference == "PM-RAG-EMBEDDING-MIGRATION-20261022":
             raise DiagnosticDenied("migration approval is not live campaign approval")
         if self.pm_approval_reference in (_P0_UNBLOCK_AUTHORITY, _P0_SCOPE_AUTHORITY,
-                                         _P0_DEMO_GATE_AUTHORITY, _P0_KNOWLEDGE_AUTHORITY):
+                                         _P0_DEMO_GATE_AUTHORITY, _P0_KNOWLEDGE_AUTHORITY, FULL54_RISK_AUTHORITY):
             raise DiagnosticDenied("P0 preparation/unblocking authority is not live campaign approval")
         if any(word in self.credential_profile_identity.lower() for word in (
             "api_key", "secret", "bearer", "token", "authorization", ":", "=",
@@ -1010,7 +1049,7 @@ class DiagnosticAuthorizationRecord:
                 for value in (self.project_identity, self.credential_profile_revision):
                     if type(value) is not str or not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", value):
                         raise DiagnosticDenied("probe project or profile revision is invalid", code="CREDENTIAL_PROFILE_MISMATCH")
-            elif self.project_identity is not None or self.credential_profile_revision is not None:
+            elif self.full54_bounded_risk is None and (self.project_identity is not None or self.credential_profile_revision is not None):
                 raise DiagnosticDenied("counting-only authorization fields are not embedding authority")
             _positive(self.maximum_item_tokens, "maximum_item_tokens")
             _positive(self.maximum_aggregate_tokens, "maximum_aggregate_tokens")
@@ -1050,13 +1089,17 @@ class DiagnosticAuthorizationRecord:
                                        code="HISTORICAL_REVIEW_MISMATCH")
             for review in reviews:
                 review.matches_record(self)
+        if self.full54_bounded_risk is not None:
+            if type(self.full54_bounded_risk) is not Full54BoundedRisk:
+                raise DiagnosticDenied("Full54 risk must use the protected exact wire")
+            self.full54_bounded_risk.matches_record(self)
 
     @classmethod
     def from_json(cls, data: bytes) -> "DiagnosticAuthorizationRecord":
         try:
             value = _unique_json(data)
             optional = {"project_identity", "credential_profile_revision", "p0_unknown_review",
-                        "p0_two_unknown_reviews", "p0_full54_history_scope"}
+                        "p0_two_unknown_reviews", "p0_full54_history_scope", "full54_bounded_risk"}
             if (type(value) is not dict or not set(cls.__dataclass_fields__) - optional <= set(value)
                     or not set(value) <= set(cls.__dataclass_fields__)):
                 raise DiagnosticDenied("authorization record fields are incomplete or extra")
@@ -1080,6 +1123,11 @@ class DiagnosticAuthorizationRecord:
                     raise DiagnosticDenied("Full54 historical scope wire is invalid")
                 value["p0_full54_history_scope"] = P0Full54HistoryScope(**{
                     **scope, "batch_input_commitments": tuple(scope["batch_input_commitments"])})
+            risk = value.get("full54_bounded_risk")
+            if risk is not None:
+                if type(risk) is not dict or set(risk) != set(Full54BoundedRisk.__dataclass_fields__):
+                    raise DiagnosticDenied("Full54 risk wire is incomplete or extra")
+                value["full54_bounded_risk"] = Full54BoundedRisk(**risk)
             return cls(**value)
         except (UnicodeError, TypeError, ValueError) as exc:
             if isinstance(exc, DiagnosticDenied):
@@ -1094,7 +1142,7 @@ def authorization_record_digest(record: DiagnosticAuthorizationRecord) -> str:
     fields = asdict(record)
     # Historical embedding grants retain their exact pre-extension digest.
     for name in ("project_identity", "credential_profile_revision", "p0_unknown_review",
-                 "p0_two_unknown_reviews", "p0_full54_history_scope"):
+                 "p0_two_unknown_reviews", "p0_full54_history_scope", "full54_bounded_risk"):
         if fields[name] is None:
             fields.pop(name)
     canonical = json.dumps(fields, sort_keys=True, ensure_ascii=True,
@@ -1316,6 +1364,16 @@ _BATCH_PLAN_SCHEMA = dict(schema_version=(1,), total_inputs=(54,),
     quota=dict(rpm="I64+", tpm="I64+", rpd="I64+",
                request_units_per_invocation="I64+", source=_SAFETY_SOURCE))
 
+# Risk metadata is separate from accepted token evidence and provider limits.
+_FULL54_RISK_SCHEMA = {k: v for k, v in _SAFETY_SCHEMA.items() if k != "token_evidence"}
+_FULL54_RISK_SCHEMA["provider_limits"] = _PROBE_SAFETY_SCHEMA["provider_limits"]
+_FULL54_RISK_SCHEMA["full54_bounded_risk"] = dict(
+    authority_reference=(FULL54_RISK_AUTHORITY,), contract_approval_reference="S256",
+    project_exclusive_use_reference="S256", quota_evidence_reference="S256")
+_RISK_BATCH_PLAN_SCHEMA = dict(_BATCH_PLAN_SCHEMA, admission_basis=(FULL54_RISK_BASIS,), quota=dict(
+    rpm=(100,), tpm=(30000,), rpd=(1000,),
+    request_units_per_invocation=("UNKNOWN",), source=_SAFETY_SOURCE))
+
 
 @dataclass(frozen=True, slots=True)
 class DiagnosticBatchPlan:
@@ -1330,7 +1388,8 @@ class DiagnosticBatchPlan:
         try:
             value = dict(value)
             batches = value.pop("batches")
-            _validate_safety_wire(value, _BATCH_PLAN_SCHEMA)
+            _validate_safety_wire(value, _RISK_BATCH_PLAN_SCHEMA
+                                  if value.get("admission_basis") == FULL54_RISK_BASIS else _BATCH_PLAN_SCHEMA)
             if type(batches) is not list or not 1 <= len(batches) <= min(54, value["maximum_batches"]):
                 raise DiagnosticDenied("batch count is empty or exceeds plan")
             ranges, cursor = [], 0
@@ -1356,6 +1415,15 @@ class DiagnosticBatchPlan:
     def matches_record_input(self, record: DiagnosticAuthorizationRecord,
                              approved: ApprovedDiagnosticInput) -> None:
         approved.matches_record(record)
+        risk = record.full54_bounded_risk
+        if (risk is not None) != (self.fields.get("admission_basis") == FULL54_RISK_BASIS):
+            raise DiagnosticDenied("strict and risk plans cannot be mixed")
+        if risk is not None:
+            risk.matches_record(record)
+            if (tuple((s, e) for s, e, _ in self.ranges) != tuple((i, i+9) for i in range(0, 54, 9))
+                    or self.fields["maximum_batches"] != 6 or self.fields["maximum_batch_items"] != 9
+                    or self.fields["maximum_batch_tokens"] != 73728):
+                raise DiagnosticDenied("risk path requires the exact six-by-nine plan")
         if (record.bounds_basis != "SEQUENTIAL_BATCH_PLAN_V1:" + self.commitment
                 or approved.kind != "document" or len(approved.identities) != 54
                 or len(set(approved.identities)) != 54
@@ -1455,6 +1523,7 @@ class DiagnosticSafetyArtifact:
                                parse_constant=constant)
             counting = type(value) is dict and value.get("operation") == COUNTING_OPERATION
             probe = type(value) is dict and "single_probe" in value
+            risk = type(value) is dict and "full54_bounded_risk" in value
             if counting:
                 _validate_safety_wire(value, _COUNTING_SAFETY_SCHEMA)
             # Optional exact-input bound table. Old metadata remains readable,
@@ -1465,7 +1534,9 @@ class DiagnosticSafetyArtifact:
             batch_e4 = value.pop("batch_sdk_evidence", None) if type(value) is dict else None
             _validate_safety_wire(value, {k: v for k, v in _COUNTING_SAFETY_SCHEMA.items()
                                          if k != "free_tier_evidence"} if counting else
-                                 _PROBE_SAFETY_SCHEMA if probe else _SAFETY_SCHEMA)
+                                 _PROBE_SAFETY_SCHEMA if probe else _FULL54_RISK_SCHEMA if risk else _SAFETY_SCHEMA)
+            if risk and (probe or counting or bounds is not None or plan is None or batch_e4 is None):
+                raise DiagnosticDenied("risk assumptions cannot inherit token/probe/counting evidence")
             if probe and (counting or bounds is not None or plan is not None or batch_e4 is not None):
                 raise DiagnosticDenied("single probe cannot inherit counting, token proof or batch authority")
             if plan is not None or batch_e4 is not None:
@@ -1493,6 +1564,8 @@ class DiagnosticSafetyArtifact:
                 raise DiagnosticDenied("counting requires the approved Free Tier pricing context")
             if probe and pricing["price_tier"] != "FREE_TIER_TEXT_V1":
                 raise DiagnosticDenied("single probe requires the approved Free Tier context")
+            if risk and pricing["price_tier"] != "FREE_TIER_TEXT_V1":
+                raise DiagnosticDenied("Full54 risk requires the approved Free Tier context")
             if bounds is not None:
                 if type(bounds) is not dict or not 1 <= len(bounds) <= 128:
                     raise DiagnosticDenied("accepted token bounds are invalid")
@@ -1513,7 +1586,7 @@ class DiagnosticSafetyArtifact:
                     or value["lifecycle_state"] != "ACTIVE"):
                 raise DiagnosticDenied("safety publication, validity or revocation is invalid")
             for key in (("provider_limits", "pricing_evidence", "single_probe") if probe else
-                        ("provider_limits", "pricing_evidence") if counting
+                        ("provider_limits", "pricing_evidence") if counting or risk
                         else ("token_evidence", "provider_limits", "pricing_evidence")):
                 source = value[key]["source"]
                 if not _safety_time(source["effective_from"]) <= start < end <= _safety_time(source["expires_at"]):
@@ -1586,6 +1659,10 @@ class DiagnosticSafetyArtifact:
         if is_single_document_probe(record):
             self.require_single_probe(record, approved, e4)
             return
+        if record.full54_bounded_risk is not None:
+            self.require_full54_risk(record)
+        elif "full54_bounded_risk" in value:
+            raise DiagnosticDenied("risk evidence is not strict campaign authority")
         if "single_probe" in value:
             raise DiagnosticDenied("probe evidence is not full embedding authority")
         if value.get("operation") == COUNTING_OPERATION:
@@ -1670,6 +1747,24 @@ class DiagnosticSafetyArtifact:
                     dict(bounds), sort_keys=True, separators=(",", ":")).encode()).hexdigest()):
             raise DiagnosticDenied("accepted safety evidence and trusted credential metadata are not provisioned")
         return bounds
+
+    def require_full54_risk(self, record):
+        record.__post_init__()
+        value = self._validated_fields()
+        risk = record.full54_bounded_risk
+        if (risk is None or dict(value.get("full54_bounded_risk", {})) != asdict(risk)
+                or value["publication"]["method_acceptance_reference"] != risk.contract_approval_reference
+                or value["binding"]["authorization_record_sha256"] != authorization_record_digest(record)
+                or value["pricing_evidence"]["account_reference"] != record.project_identity
+                or value["credential_binding"]["secret_revision"] != record.credential_profile_revision):
+            raise DiagnosticDenied("Full54 risk acceptance, project or safety binding mismatch")
+        quota = value["free_tier_evidence"]["quota_evidence"]
+        if (tuple(quota[k] for k in ("rpm", "tpm", "rpd")) != (100, 30000, 1000)
+                or quota["source"]["reference"] != risk.quota_evidence_reference
+                or value["sequential_batch_plan"]["quota"]["source"]["reference"] != risk.quota_evidence_reference):
+            raise DiagnosticDenied("Human project quota must remain unchanged")
+        self.require_free_tier_permission(record)
+        return risk
 
     def require_single_probe(self, record, approved=None, e4=None):
         record.__post_init__()
@@ -2488,6 +2583,10 @@ class TemporaryDiagnosticUsage:
             if row is None or row[0] != "IN_FLIGHT":
                 raise DiagnosticDenied("diagnostic attempt outcome is ambiguous")
             excess = observed != "UNKNOWN" and int(observed) > row[1]
+            if record.full54_bounded_risk is not None and observed != "UNKNOWN":
+                # Keep exact receipt usage; a violated known local TPM guard
+                # becomes a NEW ambiguity fence, never an automatic exemption.
+                excess = excess or not 0 < int(observed) <= 30000
             expected = ("UNKNOWN" if excess else outcome, observed)
             updated = db.execute(
                 "UPDATE attempts SET outcome=?,usage_observed=? "

@@ -46,12 +46,12 @@ def sealed(offline_sdk, monkeypatch):
 
 
 @pytest.fixture
-def setup_build(tmp_path, monkeypatch, batched):
+def setup_build(tmp_path, monkeypatch, batched, request):
     # The SDK isolation fixture deliberately supplies an empty environment.
     # Keep optional Chroma cache path discovery inside the isolated test root.
     monkeypatch.setattr(Path, 'home', classmethod(lambda cls: tmp_path))
     cap = select_gemini_embedding2_capability(
-        OpaqueExternalReference(OpaqueReferenceType.CREDENTIAL_PROFILE, 'synthetic-build-profile'))
+        OpaqueExternalReference(OpaqueReferenceType.CREDENTIAL_PROFILE, getattr(request, 'param', 'synthetic-build-profile')))
     cfg = load_knowledge_config(ROOT/'configs/knowledge_index.yaml')
     cfg = replace(cfg, capability=cap, normalization_semantics='provider-normalized-conditional-v1',
         limits=replace(cfg.limits, maximum_invocations=6, maximum_batch_items=54,

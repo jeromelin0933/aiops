@@ -4,9 +4,11 @@ Last reviewed against current governance baseline: 2026-10-02
 
 ## Competition P0 — Demo Gate Reset Candidate（2026-11-01）
 
+2026-11-02 Full54 Option B：SPEC Lead依PM `PM-AIOPS-COMP-P0-FULL54-BOUNDED-RISK-20261101`正式核准§24.10.1～§24.10.4精確Demo-only契約、固定契約參數及已審離線實作（含F-01修正）。固定6×9／六次上限，Risk Units與Verified Tokens分離；Human配額100／30000／1000不變。逐批可信Usage持久化、65秒本地Quiet及Clock交叉檢查不等於Google Quota Compliance。Human獨占使用確認、新Clean Source、獨立PM Final Live Grant／執行Budget／Validity及E4／Safety仍須完成；目前無Full54 Live、正式Risk啟用或Activation。Strict／Production／Query路徑不變。
+
 最新 Authority：`PM-AIOPS-COMP-P0-DEMO-GATE-RESET-20261101`；Parent：`PM-AIOPS-COMP-P0-KNOWLEDGE-DELIVERY-20261101`。SPEC Lead於2026-11-01正式核准SPEC-014 §24.9.1～§24.9.5精確Competition Demo-only Narrow Amendment。一套共享Demo可依已核准契約使用同一次完整真實54→54→既有Demo Build／Validate→Human Explicit Demo Activation→Real Retrieval／RCA；Formal／Production仍保留獨立Calibration、Policy Freeze、Separate Build、AC-014-X及SPEC-017。沒有重新向量化、Import或Rename捷徑；契約批准不等於Live、Activation、Profile／Scope或Risk Exception授權。
 
-本輪Full54歷史Scope Candidate只接受原兩筆精確Human Review、固定Plan與新的獨立Live Grant；原Raw UNKNOWN／Hold不動，Query不適用。Token／Quota仍須原正式證據；Bounded-risk僅Proposal。S5／S2只是候選，四Scope規則未批准，Runtime繼續保守省略Filters。Default沒有Live／Demo Activation；正式Profile與Threshold亦未批准。以下Current Knowledge Delivery文字為本次Gate Reset前的狀態快照；完整操作邊界見[Knowledge Setup](docs/knowledge_index.md#demo-gate-reset-candidate--2026-11-01)。
+本輪Full54歷史Scope Candidate只接受原兩筆精確Human Review、固定Plan與新的獨立Live Grant；原Raw UNKNOWN／Hold不動，Query不適用。Strict Token／Quota仍依原正式證據；Alternative Admission依已核准§24.10，正式啟用仍待獨立Final Live Grant及全部Binding。S5／S2只是候選，四Scope規則未批准，Runtime繼續保守省略Filters。Default沒有Live／Demo Activation；正式Profile與Threshold亦未批准。以下Current Knowledge Delivery文字為本次Gate Reset前的狀態快照；完整操作邊界見[Knowledge Setup](docs/knowledge_index.md#demo-gate-reset-candidate--2026-11-01)。
 
 ## Competition P0 — Current Knowledge Delivery（2026-11-01）
 

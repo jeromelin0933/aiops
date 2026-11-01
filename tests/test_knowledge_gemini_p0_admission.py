@@ -198,7 +198,7 @@ def test_review_never_bypasses_other_gates(reviewed,monkeypatch,gate):
 
 
 def test_legacy_digest_and_closed_review_json_schema(probe):
-    r=probe['grant']; old=asdict(r);old.pop('p0_unknown_review');old.pop('p0_two_unknown_reviews');old.pop('p0_full54_history_scope')
+    r=probe['grant']; old=asdict(r);old.pop('p0_unknown_review');old.pop('p0_two_unknown_reviews');old.pop('p0_full54_history_scope');old.pop('full54_bounded_risk')
     for field in ('project_identity','credential_profile_revision'):
         if old[field] is None:old.pop(field)
     expected=hashlib.sha256(json.dumps(old,sort_keys=True,ensure_ascii=True,separators=(',',':')).encode()).hexdigest()
