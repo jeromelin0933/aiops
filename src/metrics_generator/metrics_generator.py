@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+from contextlib import contextmanager
+from threading import RLock, Thread
 from typing import Any
 
 from prometheus_client import Gauge, start_http_server
@@ -15,17 +17,100 @@ METRIC_QPS = Gauge("api_requests_per_sec", "Mock API requests per second")
 METRIC_DB_POOL = Gauge("db_pool_active_connections", "Mock active database pool connections")
 
 
+class ExporterLifecycleError(RuntimeError):
+    """Cleanup is incomplete; ownership must not be discarded or reported safe."""
+
+
 class MetricsGenerator:
     """Update the four formal gauges; no labels or detector-facing metadata are emitted."""
 
     def __init__(self, config: Any) -> None:
         self._config = config
         self._exporter_started = False
+        self._exporter_handles = None
+        self._exporter_lock = RLock()
+        self._shutdown_worker = None
+        self._shutdown_error = None
 
-    def start_exporter(self) -> None:
-        if not self._exporter_started:
-            start_http_server(self._config.raw["metrics"]["exporter_port"])
+    def start_exporter(self, *, address: str | None = None) -> None:
+        """Retain the existing server/thread pair, leaving default bind unchanged."""
+        with self._exporter_lock:
+            if self._shutdown_worker is not None:
+                raise ExporterLifecycleError("exporter shutdown is in progress or incomplete")
+            if self._exporter_started:
+                return
+            port = self._config.raw["metrics"]["exporter_port"]
+            handles = (start_http_server(port) if address is None
+                       else start_http_server(port, addr=address))
+            self._exporter_handles = handles
             self._exporter_started = True
+            if not isinstance(handles, tuple) or len(handles) != 2:
+                raise ExporterLifecycleError("exporter returned no owned server/thread pair")
+
+    @property
+    def exporter_running(self) -> bool:
+        with self._exporter_lock:
+            return self._exporter_started
+
+    def stop_exporter(self, *, timeout_seconds: float = 2.0) -> None:
+        """Bound waiting for cleanup; never claim to cancel a stuck server call.
+
+        The helper owns exporter shutdown only, not Runtime/Domain work. A wait
+        timeout retains all handles and blocks restart. No capture retry occurs.
+        Normal completion requires shutdown, joined serving thread and socket
+        close. This is not a hard process-exit or authoritative-I/O guarantee.
+        """
+        if (type(timeout_seconds) not in (int, float)
+                or not math.isfinite(timeout_seconds) or timeout_seconds <= 0):
+            raise ValueError("exporter shutdown wait must be positive and finite")
+        with self._exporter_lock:
+            if not self._exporter_started:
+                return
+            if not isinstance(self._exporter_handles, tuple) or len(self._exporter_handles) != 2:
+                raise ExporterLifecycleError("exporter ownership is unresolved")
+            handles = self._exporter_handles
+            server, serving = handles
+            if self._shutdown_worker is None:
+                def shutdown_owned() -> None:
+                    try:
+                        server.shutdown()
+                        serving.join(timeout_seconds)
+                        if serving.is_alive():
+                            raise ExporterLifecycleError("exporter serving thread has not stopped")
+                        server.server_close()
+                    except BaseException as exc:
+                        self._shutdown_error = exc
+                self._shutdown_worker = Thread(
+                    target=shutdown_owned, name="aiops-owned-exporter-shutdown", daemon=True)
+                self._shutdown_worker.start()
+            worker = self._shutdown_worker
+        worker.join(timeout_seconds)
+        with self._exporter_lock:
+            # Another Stop may have completed this generation and allowed a
+            # restart while we joined. Never finalize a replacement's state.
+            if self._shutdown_worker is not worker or self._exporter_handles is not handles:
+                return
+            if worker.is_alive():
+                raise ExporterLifecycleError("exporter shutdown wait expired; handles retained")
+            if self._shutdown_error is not None:
+                raise ExporterLifecycleError("exporter cleanup failed; handles retained") from self._shutdown_error
+            if serving.is_alive():
+                raise ExporterLifecycleError("exporter is still serving")
+            self._exporter_handles = None
+            self._shutdown_worker = None
+            self._exporter_started = False
+
+    def close(self) -> None:
+        self.stop_exporter()
+
+    @contextmanager
+    def owned_exporter(self, *, address: str | None = None, timeout_seconds: float = 2.0):
+        """Explicit ownership for callers; exceptions still execute cleanup."""
+        self.start_exporter(address=address)
+        try:
+            yield self
+        finally:
+            self.stop_exporter(timeout_seconds=timeout_seconds)
 
     def values_for(self, snapshot: ScenarioRuntimeSnapshot, rng: Any) -> dict[str, float]:
         baseline = self._config.raw["metrics"]["baseline"]

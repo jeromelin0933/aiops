@@ -299,12 +299,15 @@ class AutoAssignOrchestrator:
         return outcome
 
     def recover_all(
-        self, *, should_stop: Callable[[], bool] | None = None
+        self, *, should_stop: Callable[[], bool] | None = None,
+        on_failure: Callable[[Exception], None] | None = None,
     ) -> AutoAssignRecoveryResult:
         """Discover obligations from Processed authority, never correlation replay."""
         stop_requested = should_stop or (lambda: False)
         if not callable(stop_requested):
             raise TypeError("should_stop must be callable")
+        if on_failure is not None and not callable(on_failure):
+            raise TypeError("on_failure must be callable")
         work = self._work_store.enumerate_all()
         if not isinstance(work, RuntimeWorkEnumeration):
             raise AutoAssignIntegrityError("D2 returned an invalid enumeration")
@@ -338,7 +341,7 @@ class AutoAssignOrchestrator:
             processed = processed_by_event[event_id]
             try:
                 outcomes.append(self.handle_processed_created_incident(processed))
-            except WorkflowDomainError:
+            except WorkflowDomainError as exc:
                 incident_id = processed.incident_id
                 if incident_id is None:
                     raise AutoAssignIntegrityError(
@@ -366,6 +369,8 @@ class AutoAssignOrchestrator:
                 )
                 self._emit_outcome(outcome)
                 outcomes.append(outcome)
+                if on_failure is not None:
+                    on_failure(exc)
         return AutoAssignRecoveryResult(tuple(outcomes))
 
     def _emit_outcome(self, outcome: AutoAssignOutcome) -> None:

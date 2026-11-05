@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 import math
+import re
 from threading import Event
 from typing import Protocol
 
@@ -14,7 +15,7 @@ from alert_correlation.state import ResolvedCorrelationState, RetryDisposition
 from .assignment import AutoAssignOutcomeKind, AutoAssignOrchestrator
 from .clock import RuntimeClock, canonical_utc
 from .orchestrator import RuntimeBootstrap
-from .pending import PendingOrchestrator, PendingSweepScheduler
+from .pending import PendingOrchestrator, PendingSweepScheduler, PendingOutcomeKind
 from .recovery import RuntimeDispatchKind
 from .retry import DurableRetryController
 from .contracts import RuntimeWorkKind, RuntimeWorkRecord, RuntimeWorkStatus, RuntimeWorkStore
@@ -149,6 +150,37 @@ class RuntimeRetryExecutionError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class CaptureStopBinding:
+    """Resolved execution evidence; not an approval or permission to run.
+
+    The capture controller must verify the owner's record and clean source
+    before constructing this value. No CLI/config boolean enables this mode.
+    """
+    run_id: str
+    source_revision: str
+    config_sha256: str
+    execution_binding_sha256: str
+    approval_reference: str
+
+    def __post_init__(self) -> None:
+        if self.run_id not in {
+            "competition-capture-20261104-01-s5",
+            "competition-capture-20261104-01-s2",
+        } or not isinstance(self.approval_reference, str) or not self.approval_reference.strip():
+            raise ValueError("exact capture run and resolved approval required")
+        for value, size in ((self.source_revision, 40), (self.config_sha256, 64),
+                            (self.execution_binding_sha256, 64)):
+            if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{%d}" % size, value) is None:
+                raise ValueError("capture evidence commitment is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureFailureStop:
+    stage: str
+    error_type: str
+
+
 class CorrelationRuntimeCore:
     """Compose authoritative intake, Pending and AUTO_ASSIGN in one cycle."""
 
@@ -165,6 +197,7 @@ class CorrelationRuntimeCore:
         stop: RuntimeStopController,
         telemetry: RuntimeTelemetry | None = None,
         rca: RcaRuntimePort | None = None,
+        capture_stop_binding: CaptureStopBinding | None = None,
     ) -> None:
         if not isinstance(bootstrap, RuntimeBootstrap):
             raise TypeError("bootstrap must be RuntimeBootstrap")
@@ -178,6 +211,12 @@ class CorrelationRuntimeCore:
             raise TypeError("retry must be DurableRetryController")
         if not isinstance(retry_executor, AuthoritativeTerminalRetryExecutor):
             raise TypeError("retry_executor must be AuthoritativeTerminalRetryExecutor")
+        if capture_stop_binding is not None and (
+            not isinstance(capture_stop_binding, CaptureStopBinding) or rca is not None
+        ):
+            raise ValueError("capture stop requires exact binding and no RCA")
+        self._capture_stop_binding = capture_stop_binding
+        self.capture_failure: CaptureFailureStop | None = None
         self._bootstrap = bootstrap
         self._initial_dispatcher = initial_dispatcher
         self._pending_scheduler = pending_scheduler
@@ -190,6 +229,13 @@ class CorrelationRuntimeCore:
         self._rca = rca
 
     def startup(self) -> None:
+        try:
+            self._startup()
+        except Exception as exc:
+            self._capture_fail("STARTUP", type(exc).__name__)
+            raise
+
+    def _startup(self) -> None:
         self._telemetry.emit(
             RuntimeTelemetryEvent.STARTUP,
             observed_at=self._clock.now(),
@@ -220,6 +266,8 @@ class CorrelationRuntimeCore:
                     else:
                         self._retry_executor.restore_before_ready(retry_work)
                 except Exception as exc:
+                    if self._capture_stop_binding is not None:
+                        raise
                     if not isinstance(
                         getattr(exc, "retry_disposition", None), RetryDisposition
                     ):
@@ -229,6 +277,7 @@ class CorrelationRuntimeCore:
                     classification.event_id
                 )
                 self._emit_correlation_outcome(outcome, stage="PENDING_RECOVERY")
+                self._capture_recovery_barrier()
             elif classification.dispatch_kind in {
                 RuntimeDispatchKind.ACTIVE_PENDING,
                 RuntimeDispatchKind.ACTIVE_PENDING_BLOCKED,
@@ -254,8 +303,10 @@ class CorrelationRuntimeCore:
             ):
                 self._retry_executor.restore_before_ready(work)
         assignment = self._auto_assign.recover_all(
-            should_stop=lambda: self._stop.requested
+            should_stop=lambda: self._stop.requested,
+            **self._capture_callback("on_failure", self._capture_assignment_failure),
         )
+        self._capture_recovery_barrier()
         for outcome in assignment.outcomes:
             self._telemetry.emit(
                 RuntimeTelemetryEvent.RECOVERY,
@@ -280,15 +331,47 @@ class CorrelationRuntimeCore:
             reconciliation_result="REQUIRED_RECOVERY_COMPLETED",
         )
 
+    def _capture_recovery_barrier(self) -> None:
+        if self.capture_failure is not None:
+            raise RuntimeError("capture failure: Startup Recovery Barrier remains closed")
+
+    def _capture_callback(self, name: str, callback: object) -> dict:
+        return {name: callback} if self._capture_stop_binding is not None else {}
+
+    def _capture_fail(self, stage: str, error_type: str) -> None:
+        if self._capture_stop_binding is not None:
+            if self.capture_failure is None:
+                self.capture_failure = CaptureFailureStop(stage, error_type)
+            self._stop.request_stop()
+
+    def _capture_assignment_failure(self, exc: Exception) -> None:
+        self._capture_fail("AUTO_ASSIGN", type(exc).__name__)
+
+    def _capture_pending_outcome(self, outcome: object) -> None:
+        kind = getattr(outcome, "outcome_kind", None)
+        if kind in {PendingOutcomeKind.BLOCKED_EVALUATION_FAILURE,
+                    PendingOutcomeKind.BLOCKED_POLICY_UNAVAILABLE,
+                    PendingOutcomeKind.EVENT_MISSING, PendingOutcomeKind.FAILED_CLOSED}:
+            self._capture_fail("PENDING", kind.value)
+
     def run_cycle(self) -> RuntimeCycleResult:
+        try:
+            return self._run_cycle()
+        except Exception as exc:
+            self._capture_fail("CYCLE", type(exc).__name__)
+            raise
+
+    def _run_cycle(self) -> RuntimeCycleResult:
         acquired = completed = 0
         if self._stop.requested:
             return RuntimeCycleResult(0, 0)
         try:
             assignment = self._auto_assign.recover_all(
-                should_stop=lambda: self._stop.requested
+                should_stop=lambda: self._stop.requested,
+                **self._capture_callback("on_failure", self._capture_assignment_failure),
             )
         except Exception as exc:
+            self._capture_fail("AUTO_ASSIGN", type(exc).__name__)
             disposition = getattr(exc, "retry_disposition", None)
             if not isinstance(disposition, RetryDisposition):
                 raise
@@ -347,6 +430,7 @@ class CorrelationRuntimeCore:
                     classification.event_id
                 )
             except Exception as exc:
+                self._capture_fail("INITIAL", type(exc).__name__)
                 disposition = getattr(exc, "retry_disposition", None)
                 if not isinstance(disposition, RetryDisposition):
                     raise
@@ -364,6 +448,7 @@ class CorrelationRuntimeCore:
             try:
                 self._retry_executor.execute_retry(work)
             except Exception as exc:
+                self._capture_fail("RETRY", type(exc).__name__)
                 if not isinstance(
                     getattr(exc, "retry_disposition", None), RetryDisposition
                 ):
@@ -374,7 +459,8 @@ class CorrelationRuntimeCore:
             None
             if self._stop.requested
             else self._pending_scheduler.poll(
-                should_stop=lambda: self._stop.requested
+                should_stop=lambda: self._stop.requested,
+                **self._capture_callback("on_outcome", self._capture_pending_outcome),
             )
         )
         if pending is not None:
@@ -395,6 +481,7 @@ class CorrelationRuntimeCore:
         return RuntimeCycleResult(acquired, completed, next_at)
 
     def _emit_correlation_outcome(self, outcome: object, *, stage: str) -> None:
+        self._capture_pending_outcome(outcome)
         terminal = getattr(outcome, "terminal", None)
         processed = getattr(terminal, "processed", None)
         decision = getattr(terminal, "decision", None)

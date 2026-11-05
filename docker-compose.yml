@@ -40,7 +40,7 @@ services:
     container_name: aiops-promtail
 
     volumes:
-      - ./logs:/var/log/aiops
+      - ${AIOPS_CAPTURE_LOG_DIR:-./logs}:/var/log/aiops:${AIOPS_CAPTURE_LOG_MODE:-rw}
       - ./docker/promtail/promtail-config.yml:/etc/promtail/config.yml
 
     command: -config.file=/etc/promtail/config.yml

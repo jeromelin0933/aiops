@@ -181,13 +181,16 @@ class PendingOrchestrator:
         )
 
     def sweep_once(
-        self, *, should_stop: Callable[[], bool] | None = None
+        self, *, should_stop: Callable[[], bool] | None = None,
+        on_outcome: Callable[[PendingEventOutcome], None] | None = None,
     ) -> PendingSweepResult:
         """Process every member of one deterministic Pending candidate set."""
         self._require_ready()
         stop_requested = should_stop or (lambda: False)
         if not callable(stop_requested):
             raise TypeError("should_stop must be callable")
+        if on_outcome is not None and not callable(on_outcome):
+            raise TypeError("on_outcome must be callable")
         candidate_ids = self._pending_event_ids()
         snapshot = self._event_intake.scan_authoritative()
         outcomes: list[PendingEventOutcome] = []
@@ -196,22 +199,20 @@ class PendingOrchestrator:
                 break
             event = snapshot.event_by_id.get(event_id)
             if event is None:
-                outcomes.append(
-                    PendingEventOutcome(event_id, PendingOutcomeKind.EVENT_MISSING)
-                )
-                continue
-            try:
-                outcomes.append(self._reevaluate_one(event_id, event))
-            except (KeyboardInterrupt, SystemExit):
-                raise
-            except Exception as exc:
-                outcomes.append(
-                    PendingEventOutcome(
-                        event_id,
-                        PendingOutcomeKind.FAILED_CLOSED,
+                outcome = PendingEventOutcome(event_id, PendingOutcomeKind.EVENT_MISSING)
+            else:
+                try:
+                    outcome = self._reevaluate_one(event_id, event)
+                except (KeyboardInterrupt, SystemExit):
+                    raise
+                except Exception as exc:
+                    outcome = PendingEventOutcome(
+                        event_id, PendingOutcomeKind.FAILED_CLOSED,
                         error_type=type(exc).__name__,
                     )
-                )
+            outcomes.append(outcome)
+            if on_outcome is not None:
+                on_outcome(outcome)
         return PendingSweepResult(candidate_ids, tuple(outcomes))
 
     def recover_authoritative_intent(self, event_id: str) -> InitialExecutionResult:
@@ -408,11 +409,15 @@ class PendingSweepScheduler:
         return self._next_due
 
     def poll(
-        self, *, should_stop: Callable[[], bool] | None = None
+        self, *, should_stop: Callable[[], bool] | None = None,
+        on_outcome: Callable[[PendingEventOutcome], None] | None = None,
     ) -> PendingSweepResult | None:
         now = self._monotonic()
         if now < self._next_due:
             return None
-        result = self._orchestrator.sweep_once(should_stop=should_stop)
+        result = self._orchestrator.sweep_once(
+            should_stop=should_stop,
+            **({"on_outcome": on_outcome} if on_outcome is not None else {}),
+        )
         self._next_due = now + self._cadence_seconds
         return result

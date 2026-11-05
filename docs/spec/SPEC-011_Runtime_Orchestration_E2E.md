@@ -1300,3 +1300,44 @@ D1～D8是既有approved product requirements的engineering orchestration contra
 Historical v1.1 gate：v1.0既有scope的Implementation、Docker integration、Final Full Contract Audit及PM Final Review均已完成；D1～D8持續凍結。v1.1新增PM-approved RCA Runtime accommodation boundary，當時Implementation Status為Pending；exact RCA work record／worker／metric未由v1.1凍結。
 
 Current v1.2 closure：SPEC-016 Candidate E已實作v1.1 additive boundary，並保留SPEC-011為唯一Runtime authority。RCA business semantics仍屬PRD-004／SPEC-016與Candidates A～D／SPEC-008；external operational adapters、Candidate F、final real-LLM／RAG evaluation、HA／distributed runtime、production hardening與完整AIOps closed loop仍不在本implementation closure範圍內。
+
+
+## Competition Capture-only First-failure Stop - Narrow Amendment Candidate
+
+Status: DRAFT - PM EXACT PATCH / SPEC LEAD APPROVAL PENDING.
+Authority: PM-AIOPS-COMP-P0-FINAL-DEMO-GATE-20261103.
+
+- Default Disabled. Only a Human-approved, resolved Capture Execution Binding may enable it;
+  the typed binding is not approval evidence. Controller must verify issuer, clean source,
+  config/input/store commitments, validity and explicit Human opt-in before construction.
+- No RCA/Knowledge/Query/LLM/Activation routes. No retry.limit=0 or second scheduler.
+- First observable failure means a public operation exception (including retryable failure),
+  or new Pending BLOCKED_EVALUATION_FAILURE / BLOCKED_POLICY_UNAVAILABLE / EVENT_MISSING /
+  FAILED_CLOSED outcome. Normal Pending, claim contention, EMPTY and NO_MATCH are not failures.
+- Observe only after the synchronous public operation returns or raises, retaining its existing
+  durable persistence contract; request controlled stop before another intake/retry/pending item.
+  AUTO_ASSIGN notifies only after its existing failure continuity checks, not on ordinary waiting.
+- Startup failure must leave the Recovery Barrier closed; capture must not report READY.
+  An unhandled exception remains an exception. Typed stop records the first failure only;
+  DRAINED is not capture success. Controller must persist the stop/partial report externally.
+- Do not clear/reclassify/delete durable work, reset attempts or eligibility, undo receipts,
+  or force-interrupt an in-flight mutation. Timeout is not forced cancellation: stop acquiring
+  work and wait for a safe boundary; an unresponsive operation requires STOP/UNVERIFIED.
+- No automatic capture resume/retry. Remaining work needs a separate authorized recovery;
+  ordinary Runtime recovery/retry semantics and stable identities remain unchanged.
+- This proposal grants no execution permission. Controller/isolation/observability compatibility,
+  bounded execution, Human Git Checkpoint and exact Capture Authorization remain separate gates.
+
+### D3 implementation status addendum - 2026-11-04 (SPEC Lead review pending)
+
+The approved Runtime stop-hook implementation is preserved without changes to
+D1-D8, default retry/recovery, Runtime Clock, receipt identity or READY barrier.
+Controller approval verification and isolated interface tests are implemented.
+The fixture driver is no longer an execution entry in production source; both
+public and internal capture execution deny while safety prerequisites are open.
+Metrics exporter ownership/cleanup is implemented independently of Domain work.
+Cleanup wait expiry retains handles; it is not a cancellation guarantee.
+Synchronous local persistence has no proven whole-operation deadline. Controller
+safety and factory/cadence wiring remain pending that exact contract decision.
+This status does not approve SPEC-013 v2 request/projection semantics.
+Real Capture: NOT EXECUTED. No new execution authority or Formal Acceptance.

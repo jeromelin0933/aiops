@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from hashlib import sha256
 import logging
 from pathlib import Path
 import signal
@@ -55,6 +56,7 @@ from .telemetry import StdlibRuntimeTelemetry
 from .worker import (
     AuthoritativeTerminalRetryExecutor,
     CorrelationRuntimeCore,
+    CaptureStopBinding,
     RuntimeStopController,
     RuntimeWorker,
     RuntimeWorkerMode,
@@ -274,9 +276,18 @@ def _build_rca_host(
 def build_runtime_application(
     config: RuntimeConfig, *, project_root: Path, config_path: Path,
     knowledge_live_opt_in: bool = False,
+    capture_stop_binding: CaptureStopBinding | None = None,
 ) -> RuntimeApplication:
     if type(knowledge_live_opt_in) is not bool:
         raise ValueError("knowledge live opt-in must be explicit boolean")
+    if capture_stop_binding is not None:
+        if not isinstance(capture_stop_binding, CaptureStopBinding):
+            raise ValueError("capture requires resolved typed execution binding")
+        if config.rca is not None or knowledge_live_opt_in:
+            raise ValueError("capture forbids RCA and knowledge live opt-in")
+        if (sha256(config_path.read_bytes()).hexdigest() != capture_stop_binding.config_sha256
+                or config != load_runtime_config(config_path)):
+            raise ValueError("capture config commitment mismatch")
     def local(path: str) -> Path:
         return project_root / path
 
@@ -389,6 +400,7 @@ def build_runtime_application(
             stop=stop,
             telemetry=telemetry,
             rca=rca_host,
+            capture_stop_binding=capture_stop_binding,
         )
         return RuntimeApplication(
             RuntimeWorker(

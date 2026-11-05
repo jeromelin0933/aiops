@@ -12,6 +12,14 @@ clients:
 
 scrape_configs:
   - job_name: aiops-json-logs
+    pipeline_stages:
+      - json:
+          expressions:
+            service_name: service_name
+            downstream_service: downstream_service
+      - labels:
+          service_name:
+          downstream_service:
     static_configs:
       - targets:
           - localhost
