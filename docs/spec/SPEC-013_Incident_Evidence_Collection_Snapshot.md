@@ -1403,3 +1403,279 @@ This v1.0 Engineering Contract is Approved — Implementation Pending as of 2026
 ## 23.1 Post-Integration Implementation Closure（2026-09-26）
 
 SPEC-013 current Status為`Implemented`。Current repository reality包含production Evidence capability、Evidence Store、trusted-core capture、Loki／Prometheus adapters、Materiality、recovery與security behavior。Human提供的Candidate-A／B／C integrated develop full regression結果為`1669 passed, 3 skipped, 0 failed`（63.11s），該階段develop integration baseline為`b034921eab7d0fa17754eea902c9e12bc2932052`。此historical evidence及documentation-only closure不修改v1.0 Approved contract或D1～D5。Candidate D／SPEC-015與Candidate E／SPEC-016現已實作；這不表示Candidate B擁有LLM generation或Runtime authority，也不宣稱Candidate F、final RCA／RAG evaluation或Production Ready。
+
+
+# 24. Competition P0 D3 Compatibility - Exact Amendment Candidate
+
+Status: DRAFT - SPEC LEAD EXACT APPROVAL PENDING.
+Authority: PM-AIOPS-COMP-P0-FINAL-DEMO-GATE-20261103.
+Work: AIOPS-COMP-P0-D3-CONTROLLER-SAFETY-20261104.
+Correction: AIOPS-COMP-P0-A01-D3-NARROW-CORRECTION-20261104.
+Prior candidate SHA-256: 704642860460a1b5a3aac1b02182ec845f48bacba565055776fdd38d11c30e5f.
+This candidate is not applied and creates no Capture Execution Authorization.
+
+## 24.1 Version isolation and exact proposed DTO surface
+
+Existing SelectorFact, SourceAdapterRequest, QueryProvenance, CollectionProvenance,
+Snapshot/Revision validators and identities retain their v1 meanings and readers.
+Do not encode a service list or regex into v1 normalized_value, or reuse repeated
+same-field AND selectors as OR. Do not add optional fields to persisted v1 JSON.
+
+Propose parallel, explicit demo-v2 representations:
+- DemoEvidenceRequestV2(base_request, original_selectors, applied_predicate,
+  scope, parsing_policy_identity, projection_version).
+- BoundedServiceOrV1(service_facts, dependency_fact, membership_provenance).
+- MembershipProvenanceV1(incident_id, incident_projection_version,
+  incident_projection_sha256, event_projection_version,
+  event_references[(event_id, event_projection_sha256)],
+  canonical_serialization_version, digest_algorithm, source_policy_version,
+  source_revision, provenance_commitment).
+- StructuredTraceV2(trace_fact, parser_policy_identity,
+  completeness_basis="BOUNDED_PRE_FILTER_RESPONSE").
+- QueryProvenanceV2(original_selectors, applied_predicate, server_query_identity,
+  client_filter_identity, scope, resolution_seconds, policy_commitments).
+- CollectionProvenanceV2(v1_collection_facts, raw_fetch_coverage, parsing_coverage).
+- RawFetchCoverageV1: exact fields and derivation rules in section 24.2.
+- ParsingCoverageV1(scanned_count, valid_object_count, invalid_count,
+  missing_trace_count, nonmatching_trace_count, matching_trace_count,
+  covered_response_commitment, filtered_candidate_count, filtered_result_count).
+- GlobalLatencyContextV1(resource, unit, scope, original_labels, samples,
+  original_selectors, applied_selectors, nonapplication_reason,
+  aggregation_facts, omission_facts, query_provenance, source_provenance,
+  completeness, strength="CONTEXTUAL_ONLY", strong_evidence_eligible=false).
+
+All fields are mandatory for their selected branch; unknown branches or fields
+fail closed. Existing source policies are not automatically upgraded. Exact
+effective config, approved policy records and Source Revision bind demo-v2.
+No v2 data may be written until versioned canonicalization/read/validation
+dispatch is implemented and approved. Old rows, identity algorithms and recovery
+remain unchanged. No migration or new authoritative store is authorized here.
+
+## 24.2 Structured Trace: raw fetch before parsing and filtering
+
+The original server-filter-only v1 candidate remains unapproved. A filtered
+empty response cannot establish raw fetch coverage or parser coverage.
+
+Proposed profile loki-demo-bounded-json-trace-v2 /
+logql-index-plus-client-json-v1 executes this strict order:
+Bounded Index Fetch -> Raw Fetch Completeness -> Client JSON Parsing ->
+Trace Filtering -> Source Admission. This is not a change to Legacy v1.
+
+Let N = the already-approved max_records raw admission cap, with N >= 1.
+Send exactly one index-only bounded range request using the canonical applied
+Service/Dependency predicate, approved start/end/direction and limit = N + 1.
+The extra row is an overflow sentinel, not an admitted record or extra budget.
+Trace must not be applied server-side before the raw coverage decision.
+Do not increase N, widen the window, retry or fetch another page to find a trace.
+
+Raw Count counts physical returned rows across every stream BEFORE JSON line
+parsing, trace filtering or deduplication. Duplicates and nonmatching traces count.
+raw_response_count is exact only after complete bounded response enumeration;
+otherwise it is null, with observed_raw_lower_bound retained where known.
+The response count is not the total matching dataset size.
+Observing >= N + 1 rows is overflow: INVALID / DEGRADED, no admitted partial
+records, no claim that total dataset size equals the sentinel count.
+
+RawFetchCoverageV1 must bind:
+- raw_admission_cap=N, requested_limit=N+1, actual applied predicate and window;
+- raw_response_count (int or null), observed_raw_lower_bound, overflow_sentinel_seen;
+- transport/envelope validation, applicable source warnings/caps/omission facts;
+- continuation_complete (true/false/unknown) and its actual evidence basis;
+- truncation (true/false/unknown), fetch_completeness=COMPLETE/INCOMPLETE/UNKNOWN;
+- coverage_contract_reference/commitment, deployed source/config identity,
+  response observation facts, query/selector provenance and response commitment.
+Do not invent a Loki cursor, exhaustion flag, truncation flag or server assertion.
+Unknown is not false; missing count is not zero.
+
+COMPLETE requires ALL of:
+1. Complete successful transport/envelope validation for this exact bounded query.
+2. A verified applicable source enumeration/exhaustion contract and deployment
+   evidence establishing that the request enumerates all relevant rows until
+   the requested sentinel limit. Effective backend limits must not silently cap
+   the response below N+1 or omit streams/shards/rows without observable failure.
+3. Exact raw_response_count <= N; no sentinel, truncation, omitted continuation,
+   cap/warning or other unresolved coverage limitation.
+4. continuation_complete=true and truncation=false, derived from real source
+   evidence or the verified enumeration contract and actual response facts.
+
+A count below N+1, HTTP success or absence of a continuation field alone is
+insufficient. Parsing every received line does NOT establish fetch completeness.
+An implementation may derive exhaustion from below-sentinel count ONLY under the
+verified applicable limit/enumeration contract and configuration above; it must
+record that derivation and evidence. This candidate supplies no such evidence.
+If Loki/API/config cannot provide the necessary basis, the path stays blocked.
+No generic pagination framework or implicit additional request is authorized.
+
+INCOMPLETE/UNKNOWN fetch -> existing compatible SOURCE_INVALID / INVALID,
+DEGRADED, continuation/truncation uncertainty retained, zero admitted records.
+Transport/source failure -> SOURCE_UNAVAILABLE / UNAVAILABLE, DEGRADED.
+Malformed protocol data, unknown representation or violated bound -> INVALID.
+Do not report EMPTY, FULL or a partial successful subset in these cases.
+
+Only after fetch COMPLETE, parse every returned raw line through the versioned
+client JSON pipeline. Require exactly one canonical nonempty request Trace and
+at least one concrete Service/Dependency predicate; reject multiple as identity.
+Keep canonical selector validation/escaping and all existing query/time/byte caps.
+Malformed JSON, non-object content, non-string present trace or parser-error
+label -> INVALID / DEGRADED, no admitted partial records. A missing/invalid
+request Trace is INVALID. Per-line missing trace and other valid trace values
+are explicitly counted nonmatches, not silently omitted parse errors.
+
+Parsing coverage is complete only if scanned_count == raw_response_count and
+every raw row has been classified with invalid_count == 0. Retain scanned,
+valid-object, missing-trace, nonmatching-trace and matching-trace counts, policy
+identity and covered-response commitment. Filtered candidate count is recorded
+before deduplication; filtered result count is the admitted count after dedup.
+Candidate/omission facts remain separate from raw fetch and selection facts.
+
+EMPTY requires fetch COMPLETE, complete successful parsing coverage, zero
+filtered results, and every applicable existing admission/bounds rule satisfied.
+AVAILABLE requires those same coverage conditions and >=1 filtered result.
+Source-level completeness does not automatically upgrade overall Snapshot
+completeness; existing temporal/post-context and multi-source admission still apply.
+FULL is limited to the verified collection basis, not proof that all upstream
+logs were ingested, all future arrivals were captured, or all Loki data is absent.
+Query/Selector Provenance must retain original facts, actual index predicate,
+raw request limit/window, client-filter identity, coverage evidence and counts.
+Unsupported v2 provenance/projection -> fail closed, not a v1 fallback.
+
+## 24.3 Bounded membership OR
+
+Only public trusted-core admission may supply Incident/Event membership facts.
+Every member must resolve authoritatively and provide concrete service and
+dependency facts. Aggregate-only, missing, conflicting, duplicate/contradictory
+identity or unstable Incident state is a typed failure, never EMPTY.
+Distinct services: 1..8; exact dependency identity must be unambiguous.
+Deduplicate and sort services canonically, validate each through existing
+build_selector_fact, retain projection-qualified references under section 24.3.1.
+No fabricated revision is permitted when the immutable Event exposes only ID
+and content identity.
+
+A v2 compiler may use an anchored alternation of individually quoted literals:
+^(?:literal_1|literal_2|...|literal_n)$
+Literal quoting escapes each regex metacharacter; then encode the complete
+pattern as a LogQL quoted string. No caller-supplied regex, wildcard, free-form
+LogQL or control-character service name is accepted. The OR node is distinct
+from scalar SelectorFact; matching a|b as a literal or AND is forbidden.
+The dependency and other approved predicates remain AND constraints.
+Membership replacement and every unapplied original aggregate fact must be
+explicit in QueryProvenanceV2. Source bounds and completeness are unchanged.
+No Scenario ID, raw generator state, Expected Answer, SOP metadata or oracle
+participates. No authoritative membership registry is added.
+
+### 24.3.1 Exact membership commitment projection and version
+
+A membership content commitment means a digest of the following admitted
+capture-relevant projection, NOT SHA-256 of complete raw Event JSON/bytes.
+The current inspection names incident_content_commitment / event_references
+carry these projection digests; they do not already publish projection-version
+metadata. The proposed wire provenance must make that interpretation explicit.
+
+Proposed projection identities (not Event revisions):
+- incident_projection_version = spec013-incident-capture-projection-v1;
+- event_projection_version = spec013-trusted-event-membership-projection-v1;
+- canonical_serialization_version = spec013-canonical-json-serialization-v1;
+- digest_algorithm = SHA-256 / UTF-8 / no salt / no namespace prefix.
+
+Event projection includes EXACTLY the TrustedEvent fields:
+event_id, detected_at, event_source, event_type, severity, selector_values.
+selector_values is the admitted ordered list of [field_name, value] pairs,
+preserving trusted-core order: service_name, trace_id, source_ip,
+downstream_service, external_service, target_service, omitting absent values.
+target_service may be derived from triggered_features.target_service by existing
+trusted-core admission; that selected value IS included. These facts are not
+restricted to selectors applied by a particular source. No pair re-sort occurs
+inside an individual event digest.
+
+Incident projection includes EXACTLY the IncidentCaptureProjection fields:
+incident_id, event_ids, status, severity, created_at, updated_at,
+last_correlated_at, anchor_event_id, correlation_family, anchor_strength,
+anchor_event_type, normalized_fingerprint, anchor_policy_id,
+anchor_policy_version, promoted_from_weak.
+
+Use the existing incident_evidence.identity.canonical_json of that projection:
+dataclass -> named mapping; mapping keys sorted; tuple/list -> JSON array in
+existing order; aware datetimes -> UTC with six fractional digits and Z;
+enum values represented by their canonical underlying values; compact separators
+comma/colon, no formatting whitespace, UTF-8, ensure_ascii=false, finite numbers.
+No extra Unicode normalization or raw-JSON byte normalization is implied.
+projection_sha256 = lowercase_hex(SHA256(UTF8(canonical_json(projection)))).
+This is the existing inspection _commit behavior, not the namespace-separated
+semantic_identity algorithm and not a producer signature or full-record hash.
+
+Explicitly excluded from the Event digest are raw_log_sample, confidence,
+detection_method, the full triggered_features object, status, original JSON key
+order/whitespace,
+original timestamp spelling/offset and other fields absent from TrustedEvent.
+Upstream admission may validate these fields; the full fields are not thereby
+included, except values projected into selector_values as explicitly stated.
+Validated changes confined to excluded fields or equivalent raw encoding
+can leave the projected digest unchanged. Do not use it as raw-byte attestation.
+
+MembershipProvenanceV1 must carry the projection identities, serialization and
+digest algorithm, incident_id/incident_projection_sha256, sorted distinct
+(event_id, event_projection_sha256) references, and source policy/source revision.
+Bind those descriptors and references together in a separate provenance
+commitment over their canonical named mapping. The version tags are sidecar
+interpretation data, not retroactively inserted into current projection hashes.
+Any change of included fields or canonicalization requires a new projection
+version; do not silently reinterpret an existing digest.
+Do not fabricate an Event revision, re-read private generator state, create an
+Event authority or persist a second membership store. Inspection remains read-only.
+
+## 24.4 Explicit GLOBAL latency context
+
+Only api_p95_latency_ms, unit ms, 15-second step and explicit GLOBAL scope are
+eligible. Query window and existing budgets remain explicit. Original incident
+Service/Dependency facts remain in provenance even when this GLOBAL dataset
+cannot apply them; nonapplication_reason="GLOBAL_SERIES_NOT_SERVICE_LABELED".
+The applied predicate must be separate from original facts, never silently
+rewriting or deleting the latter. Target labels, if any, require independently
+approved deployment provenance and canonical validation; none are invented.
+
+Require one unambiguous original series; unexpected multiple series are INVALID,
+not automatically aggregated or assigned a service. Preserve original labels,
+samples, source/query provenance, aggregation NONE, omission/completeness facts.
+After applicable request/source completeness checks, a valid empty dataset is
+EMPTY, source failure UNAVAILABLE, malformed/conflicting data INVALID; none means absence of a specific service fault.
+Projection is CONTEXTUAL_ONLY and is ineligible as strong evidence, dependency
+role proof or root-cause conclusion. Consumers must preserve scope/strength or
+reject v2, never flatten it into unqualified per-incident evidence.
+No metric names/labels, thresholds, model features or Event classification change.
+
+## 24.5 Implementation and acceptance boundary
+
+Potential exact source scope after approval:
+contracts.py (parallel DTOs/version dispatch), capture_plan.py (public membership
+expression), capture_service.py (request/projection/config commitment),
+adapters/loki.py (bounded JSON pipeline), adapters/prometheus.py (explicit global
+mode), and the existing canonical read/materiality validation paths as required.
+No such production semantic change is applied by this candidate.
+Tests must cover parser errors, canonical escaping/regex injection, all 1..8/9
+cardinality boundaries, public membership changes, source status/completeness,
+v1 replay and old identity preservation, and v2 consumer rejection/acceptance.
+Real Loki engine integration remains a separate authorized test gate.
+
+## 24.6 Controller safety decision retained
+
+SPEC Lead retains Option A: hard completion requirement. Controller safety stays
+BLOCKED. Cooperative Deadline / Option B is not accepted or enabled. No execute
+CLI, capture execution, kill/resume framework or hard-I/O-completion claim.
+
+
+## 24.7 Approval and implementation record - 2026-11-05
+
+The exact text in sections 24.1-24.6, including its historical candidate status,
+was accepted by the SPEC Lead on 2026-11-05: APPROVED WITH EXPLICIT CONDITIONS -
+CONTRACT SEMANTICS ONLY. Approved amendment patch SHA-256:
+40932e399b4bc934d14596f25bac150a669ac1fb10a4b5d6f5bf613cd2be70a8.
+The preceding candidate wording is preserved as the decision's exact review record;
+it does not supersede this dated approval or authorize Capture Execution.
+
+Work AIOPS-COMP-P0-SPEC013-D3-IMPLEMENTATION-20261105 implements explicit demo-v2
+DTO/adapter/compiler and canonical-consumer dispatch. Source implementation and
+affected-scope offline regression are pending independent implementation audit;
+they are not Production Acceptance or real Loki engine/deployment evidence.
+Deployment/config enumeration evidence and actual source coverage: PENDING.
+Controller Safety: BLOCKED; Option A hard completion requirement retained.
+Actual S5/S2 Capture: NOT EXECUTED. Legacy v1 and frozen D1-D5 remain applicable.

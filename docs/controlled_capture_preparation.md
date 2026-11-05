@@ -142,3 +142,55 @@ have no proven whole-operation deadline. A busy timeout only addresses lock
 waiting; HTTP timeout is not a total capture/process deadline. No force-kill,
 new scheduler or silent softening of this requirement has been introduced.
 Factory/cadence wiring remains withheld under the explicit prerequisite gate.
+
+
+## SPEC-013 D3 source implementation - 2026-11-05
+
+This dated entry supersedes the earlier D3 contract-pending readiness notes only
+for the exact amendment approved on 2026-11-05 (SHA-256
+40932e399b4bc934d14596f25bac150a669ac1fb10a4b5d6f5bf613cd2be70a8).
+It does not unblock Controller execution or authorize Capture.
+
+`incident_evidence.demo_v2` supplies parallel typed requests, bounded membership
+OR compilation, a single N+1 raw Loki fetch followed by completeness admission,
+client JSON classification/exact trace filtering, and explicit GLOBAL latency
+context. Legacy adapters and the default capture configuration stay v1.
+`EvidenceCaptureService(..., demo_v2=binding)` explicitly requires both v2 adapters;
+its effective config includes the pinned policy record, publication hash and
+versioned canonical/source semantics. Public membership comes from existing
+trusted-core Incident/Event admission, never scenario labels or SOP metadata.
+Missing independent trace, membership, dependency, policy or coverage proof fails
+closed; the OR capability does not manufacture a trace for S5.
+
+The Human publication owner must independently provide the policy record bytes,
+expected publication SHA-256 and clean source revision to
+`DemoPolicyBinding.from_published_record`. The expected hash must come from the
+controlled publication channel, not the supplied untrusted record itself.
+This is an integrity pin at that trust boundary, not a signature, a registry,
+proof of Human identity, Controller approval or Capture permission. The record
+binds exact version/decision/issuer role/reference/scope/source/SPEC patch,
+validity, endpoint SHA-256 values, and coverage evidence. Endpoint identity is
+SHA-256 of the exact configured endpoint string, without credentials.
+
+Loki COMPLETE additionally requires real, applicable enumeration-contract and
+deployment-config commitments/reference, an effective backend limit >= N+1,
+indexed-label capability, exhaustive/all-stream enumeration, no silent caps,
+observable warnings and compatible actual response facts. Those attestations
+must be verified by the publication owner; test records are synthetic and prove
+no deployment fact. A low row count alone cannot establish completeness.
+UNKNOWN/INCOMPLETE coverage admits no records or legal EMPTY. Real deployment
+and enumeration evidence remain PENDING; no extra fetch, paging or retry exists.
+
+GLOBAL api_p95_latency_ms retains original predicates separately from applied
+empty predicates, ms/15s/GLOBAL/CONTEXTUAL_ONLY/strong_evidence_eligible=false,
+original labels/samples and omission/source/query facts. It proves no core-db
+fault. A canonical reader must explicitly accept `spec013-demo-evidence-v2`:
+`resolve_snapshot(id, accepted_demo_version=VERSION)` and likewise Revision.
+The configured v2 capture service supplies this acceptance. Default readers and
+unadapted materiality/LLM consumers reject v2 rather than drop scope/strength.
+Read acceptance does not grant execution permission. Recovery and identity
+algorithms are retained; there is no store migration.
+
+Implementation is pending independent audit. Mock/offline regression is not real
+Loki/Prometheus deployment integration. Controller remains BLOCKED under Option A;
+no execute CLI/factory bypass, actual Capture, Query, LLM or Activation is enabled.

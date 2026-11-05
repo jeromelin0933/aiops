@@ -117,6 +117,7 @@ class EvidenceCaptureService:
         adapters: Mapping[EvidenceSource, SourceAdapter],
         admission_policy: SourceAdmissionPolicy | None = None,
         request_policies: Mapping[EvidenceSource, SourceRequestPolicy] | None = None,
+        demo_v2=None,
     ) -> None:
         if not isinstance(store, SqliteEvidenceStore):
             raise TypeError("store must be a SqliteEvidenceStore")
@@ -129,6 +130,15 @@ class EvidenceCaptureService:
         self._admission = admission_policy or SourceAdmissionPolicy()
         self._adapters = dict(adapters)
         self._request_policies = dict(request_policies or DEFAULT_SOURCE_REQUEST_POLICIES)
+        self._demo_v2 = demo_v2
+        if demo_v2 is not None:
+            from .demo_v2 import DemoPolicyBinding, LokiDemoV2Adapter, PrometheusDemoV2Adapter
+            if not isinstance(demo_v2, DemoPolicyBinding):
+                raise ValueError("explicit pinned demo-v2 policy required")
+            demo_v2.require_current()
+            if not isinstance(self._adapters.get(EvidenceSource.LOKI), LokiDemoV2Adapter) or not isinstance(
+                    self._adapters.get(EvidenceSource.PROMETHEUS), PrometheusDemoV2Adapter):
+                raise ValueError("demo-v2 cannot silently use legacy adapters")
         expected = self._admission.configured_sources
         if set(self._adapters) != set(expected):
             raise ValueError("adapters must exactly match configured sources")
@@ -140,6 +150,14 @@ class EvidenceCaptureService:
         self._effective_policy = replace(
             policy, config_identity=self._effective_config_identity
         )
+        if demo_v2 is not None:
+            from .demo_v2 import CANONICAL_VERSION, SOURCE_VERSION
+            self._effective_config_identity = semantic_identity("spec013-effective-demo-v2-config", {
+                "base_identity": self._effective_config_identity, "policy": demo_v2.record_json,
+                "publication_sha256": demo_v2.record_sha256})
+            self._effective_policy = replace(self._effective_policy,
+                config_identity=self._effective_config_identity,
+                canonicalization_version=CANONICAL_VERSION, source_policy_version=SOURCE_VERSION)
 
     def capture_evidence(
         self,
@@ -183,11 +201,22 @@ class EvidenceCaptureService:
 
         results: dict[EvidenceSource, LokiSourceResult | PrometheusSourceResult] = {}
         requests: dict[EvidenceSource, SourceAdapterRequest] = {}
+        demo_metadata = {}
         try:
             for source in sorted(self._admission.configured_sources, key=lambda item: item.value):
                 request = self._source_request(plan, source)
+                if self._demo_v2 is not None:
+                    from .demo_v2 import request_for_plan, DemoSourceResultV2
+                    request_v2 = request_for_plan(plan, request, self._demo_v2)
+                    request = request_v2.base_request
+                    result_v2 = self._adapters[source].collect(request_v2)
+                    if not isinstance(result_v2, DemoSourceResultV2):
+                        raise ValueError("demo adapter returned an incompatible result")
+                    result = result_v2.base_result
+                    demo_metadata[source.value] = result_v2.projection()
+                else:
+                    result = self._adapters[source].collect(request)
                 requests[source] = request
-                result = self._adapters[source].collect(request)
                 if source is EvidenceSource.LOKI and not isinstance(result, LokiSourceResult):
                     raise EvidenceDomainError(
                         EvidenceFailureKind.SOURCE_INVALID,
@@ -228,6 +257,15 @@ class EvidenceCaptureService:
 
         try:
             revision_content = self._revision_content(plan, results, completeness)
+            if self._demo_v2 is not None:
+                from .demo_v2 import VERSION
+                revision_content["demo_v2"] = {"version": VERSION,
+                    "global_scope": "GLOBAL", "global_strength": "CONTEXTUAL_ONLY"}
+                for record in revision_content["normalized_evidence"].get("PROMETHEUS", []):
+                    record.update(scope="GLOBAL", unit="ms", resource="api_p95_latency_ms",
+                                  strength="CONTEXTUAL_ONLY", strong_evidence_eligible=False)
+                    record["record_semantic_identity"] = semantic_identity("spec013-global-metric-record-v1",
+                        {key:value for key,value in record.items() if key != "record_semantic_identity"})
             revision = EvidenceRevision.from_content(
                 incident_id=command.incident_id,
                 canonicalization_version=command.canonicalization_version,
@@ -236,6 +274,10 @@ class EvidenceCaptureService:
             snapshot_content = self._snapshot_content(
                 plan, results, revision_content, finalization
             )
+            if self._demo_v2 is not None:
+                from .demo_v2 import VERSION
+                snapshot_content["demo_v2"] = {"version": VERSION,
+                    "binding": self._demo_v2.projection(), "sources": demo_metadata}
             if len(canonical_json(snapshot_content).encode("utf-8")) > self._policy.bounds.max_total_bytes:
                 raise EvidenceDomainError(
                     EvidenceFailureKind.SOURCE_INVALID,
@@ -267,9 +309,15 @@ class EvidenceCaptureService:
         return self._store.read_capture_outcome(capture_operation_id)
 
     def resolve_snapshot(self, snapshot_id: str) -> EvidenceSnapshot | None:
+        if self._demo_v2 is not None:
+            from .demo_v2 import VERSION
+            return self._store.resolve_snapshot(snapshot_id, accepted_demo_version=VERSION)
         return self._store.resolve_snapshot(snapshot_id)
 
     def resolve_revision(self, revision_id: str) -> EvidenceRevision | None:
+        if self._demo_v2 is not None:
+            from .demo_v2 import VERSION
+            return self._store.resolve_revision(revision_id, accepted_demo_version=VERSION)
         return self._store.resolve_revision(revision_id)
 
     def compare_materiality(self, request: MaterialityRequest) -> MaterialityResult:
@@ -303,7 +351,7 @@ class EvidenceCaptureService:
 
         persisted_identity: str | None
         if outcome.snapshot_id is not None:
-            snapshot = self._store.resolve_snapshot(outcome.snapshot_id)
+            snapshot = self.resolve_snapshot(outcome.snapshot_id)
             if snapshot is None:  # pragma: no cover - store integrity validates this first.
                 raise EvidenceDomainError(
                     EvidenceFailureKind.DANGLING_EVIDENCE_REFERENCE,

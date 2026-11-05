@@ -294,17 +294,19 @@ class SqliteEvidenceStore:
         with self._lock, self._read_transaction():
             return self._read_outcome_locked(capture_operation_id)
 
-    def resolve_snapshot(self, snapshot_id: str) -> EvidenceSnapshot | None:
+    def resolve_snapshot(self, snapshot_id: str, *, accepted_demo_version=None) -> EvidenceSnapshot | None:
         self._reference(snapshot_id, "snapshot_id")
         self.validate_integrity()
         with self._lock, self._read_transaction():
-            return self._read_snapshot_locked(snapshot_id)
+            from .demo_v2 import require_consumer
+            return require_consumer(self._read_snapshot_locked(snapshot_id), accepted_demo_version)
 
-    def resolve_revision(self, revision_id: str) -> EvidenceRevision | None:
+    def resolve_revision(self, revision_id: str, *, accepted_demo_version=None) -> EvidenceRevision | None:
         self._reference(revision_id, "revision_id")
         self.validate_integrity()
         with self._lock, self._read_transaction():
-            return self._read_revision_locked(revision_id)
+            from .demo_v2 import require_consumer
+            return require_consumer(self._read_revision_locked(revision_id), accepted_demo_version)
 
     def read_materiality_result(self, materiality_result_id: str) -> MaterialityResult | None:
         self._reference(materiality_result_id, "materiality_result_id")

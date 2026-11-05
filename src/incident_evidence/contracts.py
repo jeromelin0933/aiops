@@ -915,6 +915,8 @@ class EvidenceRevision:
                 raise ValueError(f"Revision {field} must be an object")
         if semantic["completeness"] not in {item.value for item in EvidenceCompleteness}:
             raise ValueError("Revision completeness is invalid")
+        from .demo_v2 import validate_persisted
+        validate_persisted(decoded, self.canonicalization_version, snapshot=False)
         projection = {
             "incident_id": self.incident_id,
             "canonicalization_version": self.canonicalization_version,
@@ -1133,6 +1135,8 @@ class EvidenceSnapshot:
         )
         if self.snapshot_id != expected:
             raise ValueError("snapshot_id contradicts capture operation identity")
+        from .demo_v2 import validate_persisted
+        validate_persisted(content, self.canonicalization_version, snapshot=True)
 
     @classmethod
     def from_content(
