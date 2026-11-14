@@ -64,9 +64,10 @@ from .worker import (
 
 
 class RuntimeApplication:
-    def __init__(self, worker: RuntimeWorker, stores: tuple[object, ...]) -> None:
+    def __init__(self, worker: RuntimeWorker, stores: tuple[object, ...], *, capture_handles=None) -> None:
         self.worker = worker
         self._stores = stores
+        self.capture_handles = capture_handles
 
     def run(self, mode: RuntimeWorkerMode):
         return self.worker.run(mode)
@@ -411,12 +412,82 @@ def build_runtime_application(
                 telemetry=telemetry,
             ),
             tuple(stores_list),
+            capture_handles=(core, incident_store, event_store) if capture_stop_binding is not None else None,
         )
     except BaseException:
         try:
             _close_resources(stores_list)
         except BaseException:
             pass
+        raise
+
+
+def _build_december_capture_components(verified, repository, demo_policy, clock, *, owned_resources):
+    """Owned-thread composition; invoked only after controller grant/intent guard.
+
+    No RCA host, Knowledge Store, activation or generation provider is created.
+    Existing scenario and detector implementations retain their own semantics.
+    """
+    from incident_evidence import CaptureCommand
+    from incident_evidence.demo_v2 import (CANONICAL_VERSION, SOURCE_VERSION,
+        LokiDemoV2Adapter, PrometheusDemoV2Adapter)
+    from incident_evidence.identity import semantic_identity
+    from .capture_controller import CaptureComponents, _require_verified, CaptureDenied
+    from .capture_preparation import DECEMBER_PROFILE
+    from scenario_runtime.config import ScenarioConfigLoader
+    from scenario_runtime.integration import GeneratorAdapter
+    from scenario_runtime.runtime import MockDataRuntime
+    from event_detection.runner import EventDetectionRunner
+    _require_verified(verified)
+    if verified.facts.get("capture_profile") != DECEMBER_PROFILE:
+        raise CaptureDenied("December composition requires a verified December grant")
+    root = Path(verified.facts["child"]["root"])
+    config_path = root / "configuration/runtime.yaml"
+    config = load_runtime_config(config_path)
+    if config.rca is not None:
+        raise ValueError("capture forbids RCA")
+    resources = owned_resources
+    try:
+        app = build_runtime_application(config, project_root=root, config_path=config_path,
+                                        capture_stop_binding=verified.stop)
+        resources.append(app)
+        core, incident, events = app.capture_handles
+        scenario_config = ScenarioConfigLoader.load(root / "configuration/scenarios.yaml",
+            thresholds_path=root / "configuration/thresholds.yaml",
+            metrics_iforest_path=root / "configuration/metrics_iforest.yaml",
+            event_detection_path=root / "configuration/event_detection.yml")
+        generator = GeneratorAdapter(scenario_config)
+        # Register cleanup before acquiring the exporter socket.
+        class ExporterOwner:
+            def close(self):
+                generator.metrics_generator.stop_exporter(timeout_seconds=verified.limits["io_timeout_seconds"])
+        resources.append(ExporterOwner())
+        detection = EventDetectionRunner(root / "configuration/event_runner.yaml", clock=clock.monotonic)
+        class DetectionOwner:
+            def close(self): detection.stop()
+        resources.append(DetectionOwner())
+        scenario = MockDataRuntime(scenario_config, clock=clock.monotonic, tick_sink=generator.tick)
+        policy = load_evidence_policy(repository / "configs/incident_evidence.yaml")
+        evidence_path = root / "stores/evidence.sqlite3"
+        evidence = SqliteEvidenceStore(evidence_path)
+        resources.append(evidence)
+        endpoints = verified.facts["endpoints"]
+        service = EvidenceCaptureService(store=evidence, incident_reader=incident, event_reader=events,
+            policy=policy, demo_v2=demo_policy, adapters={
+                EvidenceSource.LOKI: LokiDemoV2Adapter(endpoints["loki"], selector_allowlist=policy.selector_allowlist),
+                EvidenceSource.PROMETHEUS: PrometheusDemoV2Adapter(endpoints["prometheus"], selector_allowlist=policy.selector_allowlist)})
+        identity = semantic_identity("spec013-effective-demo-v2-config", {
+            "base_identity":effective_capture_config_identity(policy, SourceAdmissionPolicy(), DEFAULT_SOURCE_REQUEST_POLICIES),
+            "policy":demo_policy.record_json,"publication_sha256":demo_policy.record_sha256})
+        def command_for(incident_id, now):
+            return CaptureCommand("capture-" + verified.stop.run_id, incident_id, now,
+                policy.capture_contract_version, CANONICAL_VERSION, SOURCE_VERSION,
+                policy.bounds_policy_version, identity)
+        generator.start()
+        return CaptureComponents(scenario, detection, core, service, incident, command_for,
+                                 lambda: _close_resources(resources))
+    except BaseException:
+        _close_resources(resources)
         raise
 
 

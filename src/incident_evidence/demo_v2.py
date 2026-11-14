@@ -31,6 +31,12 @@ SPEC_PATCH_SHA = "40932e399b4bc934d14596f25bac150a669ac1fb10a4b5d6f5bf613cd2be70
 EVENT_PROJECTION = "spec013-trusted-event-membership-projection-v1"
 INCIDENT_PROJECTION = "spec013-incident-capture-projection-v1"
 SERIALIZATION = "spec013-canonical-json-serialization-v1"
+DECEMBER_POLICY = "spec013-december-demo-d3-policy-v1"
+DECEMBER_SCOPE = "DECEMBER_DEMO_ONLY"
+# SHA-256 over UTF-8/LF, §24.8 heading through its last clause, stripped
+# trailing whitespace plus one LF; excludes the following Change History.
+DECEMBER_AMENDMENT_SHA256 = "d3c0ceeffc8c63770bfae09b448d46e4b271033c39cc277ece4fb39a40f9bacb"
+_DECEMBER_BINDING_FIELDS = {"policy_identity", "scope_approval_reference", "scope_approval_sha256"}
 _PIN = object()
 _LOKI_FIELDS = frozenset({"service_name", "downstream_service", "trace_id", "source_ip",
                           "external_service", "target_service"})
@@ -82,7 +88,8 @@ class DemoPolicyBinding:
 
     @classmethod
     def from_published_record(cls, raw: bytes, *, expected_sha256: str,
-                              expected_source_revision: str, now: datetime):
+                              expected_source_revision: str, now: datetime,
+                              scope_approval_pin: tuple[str, str] | None = None):
         _hash(expected_sha256); _hash(expected_source_revision, 40)
         if not isinstance(raw, bytes) or not 0 < len(raw) <= 65536:
             raise ValueError("bounded policy record required")
@@ -92,9 +99,18 @@ class DemoPolicyBinding:
         required = {"version", "decision", "issuer_role", "reference", "scope",
                     "source_revision", "spec_patch_sha256", "valid_from", "expires_at",
                     "loki_endpoint_sha256", "prometheus_endpoint_sha256", "coverage_evidence"}
+        december = record.get("scope") == DECEMBER_SCOPE
+        if december:
+            required |= _DECEMBER_BINDING_FIELDS
+            if (not isinstance(scope_approval_pin, tuple) or len(scope_approval_pin) != 2
+                    or record.get("policy_identity") != DECEMBER_POLICY
+                    or record.get("scope_approval_sha256") != DECEMBER_AMENDMENT_SHA256
+                    or (record.get("scope_approval_reference"), record.get("scope_approval_sha256")) != scope_approval_pin):
+                raise ValueError("independent December scope approval pin required")
+            _reference(scope_approval_pin[0]); _hash(scope_approval_pin[1])
         if set(record) != required or (record["version"], record["decision"], record["issuer_role"],
             record["scope"], record["source_revision"], record["spec_patch_sha256"]) != (
-                VERSION, "APPROVE", "SPEC_LEAD", "COMPETITION_DEMO_ONLY",
+                VERSION, "APPROVE", "SPEC_LEAD", DECEMBER_SCOPE if december else "COMPETITION_DEMO_ONLY",
                 expected_source_revision, SPEC_PATCH_SHA):
             raise ValueError("policy record version/scope/approval mismatch")
         _reference(record["reference"])
@@ -121,9 +137,12 @@ class DemoPolicyBinding:
             raise ValueError("demo policy is outside validity")
 
     def projection(self):
-        return {"version": VERSION, "scope": "COMPETITION_DEMO_ONLY",
+        result = {"version": VERSION, "scope": self.record["scope"],
                 "reference": self.record["reference"], "record_sha256": self.record_sha256,
                 "source_revision": self.record["source_revision"], "spec_patch_sha256": SPEC_PATCH_SHA}
+        if self.record["scope"] == DECEMBER_SCOPE:
+            result.update({name: self.record[name] for name in _DECEMBER_BINDING_FIELDS})
+        return result
 
 
 @dataclass(frozen=True)
@@ -618,8 +637,18 @@ def _validate_persisted(content: dict, canonicalization_version: str, *, snapsho
         if set(marker)!={"version","binding","sources"}:
             raise ValueError("demo Snapshot binding is invalid")
         binding=marker["binding"]
-        if set(binding)!={"version","scope","reference","record_sha256","source_revision","spec_patch_sha256"} or (
-                binding["version"],binding["scope"],binding["spec_patch_sha256"])!=(VERSION,"COMPETITION_DEMO_ONLY",SPEC_PATCH_SHA):
+        december = binding.get("scope") == DECEMBER_SCOPE
+        fields = {"version","scope","reference","record_sha256","source_revision","spec_patch_sha256"}
+        if december:
+            fields |= _DECEMBER_BINDING_FIELDS
+            if binding.get("policy_identity") != DECEMBER_POLICY:
+                raise ValueError("unknown December policy")
+            _reference(binding["scope_approval_reference"]); _hash(binding["scope_approval_sha256"])
+            if binding["scope_approval_sha256"] != DECEMBER_AMENDMENT_SHA256:
+                raise ValueError("unknown December scope amendment commitment")
+        if set(binding)!=fields or (
+                binding["version"],binding["scope"],binding["spec_patch_sha256"])!=(
+                    VERSION, DECEMBER_SCOPE if december else "COMPETITION_DEMO_ONLY", SPEC_PATCH_SHA):
             raise ValueError("demo policy scope/version mismatch")
         _reference(binding["reference"]);_hash(binding["record_sha256"]);_hash(binding["source_revision"],40)
         if set(marker["sources"])!=set(content["provenance"]):raise ValueError("demo source set mismatch")

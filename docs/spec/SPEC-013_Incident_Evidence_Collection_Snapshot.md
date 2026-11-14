@@ -1679,3 +1679,85 @@ they are not Production Acceptance or real Loki engine/deployment evidence.
 Deployment/config enumeration evidence and actual source coverage: PENDING.
 Controller Safety: BLOCKED; Option A hard completion requirement retained.
 Actual S5/S2 Capture: NOT EXECUTED. Legacy v1 and frozen D1-D5 remain applicable.
+
+### 24.8 December Demo D3 Scope — Minimal Additive Amendment
+
+Status：ACCEPTED — SPEC LEAD EXACT CONTRACT ACCEPTANCE
+Candidate Date：2026-11-14
+Acceptance Date：2026-11-14
+Policy Identity：spec013-december-demo-d3-policy-v1
+Scope：DECEMBER_DEMO_ONLY
+
+### 1. Purpose與Scope
+
+本Policy僅適用2026-12-17專題嘉年華及明確核准的準備／錄製時段、S2／S5及指定Demo Host／Environment。
+
+本Policy不得覆寫、延長或重新解釋歷史COMPETITION_DEMO_ONLY Record。Scenario識別僅供外部Input選擇，不得進入Production Event／Incident／Applicability事實推導。
+
+### 2. Exact Binding
+
+Policy及Final Execution Binding須共同固定：
+
+- Human Clean Source Revision與Source Manifest。
+- Exact Effective Config及Input／Model Commitments。
+- Demo Host／Environment與Child Store／Output Paths。
+- D3 v2 Profile、Selector／Metric Policy。
+- Loki／Prometheus Endpoint、Deployment及Coverage Evidence。
+- 有效時間、Deadline、有限Execution／Query／Resource Bounds。
+- PM／SPEC Lead／Human Approval及Explicit Opt-in。
+
+未確認值不得以假Reference／SHA補足。Policy方向核准不等於Final Execution Authorization。
+
+### 3. Explicit Policy Dispatch
+
+Loader應保留既有Competition分支，新增明確December分支。December Record必須包含本Policy Identity及可核實的December Scope Approval Binding。
+
+不得使用通用allow_demo_scope、任意Scope字串或Caller Boolean。未知Policy、欄位、版本、不相容Binding或假Approval必須Fail Closed。
+
+原D3 Technical Contract Commitment與新增Scope Amendment Commitment須明確區分；後者於精確核准後計算，不得冒用既有Commitment。
+
+### 4. Canonical Validation與Readback
+
+Policy Projection及Canonical Validation須明確辨識December Binding，同時保留Competition及Legacy v1 Readback。
+
+不得改變既有Snapshot／Revision Identity公式、Evidence Store Schema或Atomic Publication Authority。不同有效Binding正常產生不同內容Commitment，不得重新賦值歷史Identity。
+
+Archived Evidence Readback不得被誤當成目前有效的Capture授權。
+
+### 5. Frozen D3 Preservation
+
+Structured Trace v2、Bounded Raw Fetch、N+1 Sentinel、Fetch／Parsing Coverage、BoundedServiceOrV1及MembershipProvenanceV1維持原語意。
+
+GLOBAL api_p95_latency_ms仍須為ms、15秒Step、GLOBAL、CONTEXTUAL_ONLY及strong_evidence_eligible=false。不得推定特定服務故障或升格Strong Evidence。
+
+本次Scope修訂不改變Materiality核心判定語意。
+
+### 6. Public Evidence與Completeness
+
+Membership僅能來自可信Public Incident／Event。不得以Scenario、Expected Answer、SOP Metadata或Generator內部資訊補足。
+
+Aggregate Trace／Service不得當作具體Identity。Static Config、HTTP成功或低於Fetch Limit的Count均不單獨證明Completeness。
+
+Missing、Conflict、Unsupported或Coverage不足時，沿用既有Typed Failure／Admission規則，不得製造合法EMPTY或部分成功Snapshot。
+
+### 7. 五項獨立Gate與Controller適用性
+
+正式Capture須分別通過：
+
+1. December Exact Policy Contract Approval。
+2. Exact Source／Config／Environment Binding。
+3. Deployment／Coverage Verification。
+4. Controller Safety Implementation／Acceptance。
+5. Final S2／S5 Child Capture Authorization。
+
+任一PASS不得替代其他Gate。
+
+既有§24.6／24.7的歷史Option A及BLOCKED紀錄保留。只有在本December Scope及上述Gate成立時，方可採SPEC-011已接受的Minimal Option B；不構成其他Scope的全域放寬。
+
+### 8. Exclusions與Acceptance Boundary
+
+本條不授權RCA、Knowledge、Query Embedding、LLM、Knowledge Build／Activation、Full54、Historical Store Mutation或Store Migration。
+
+Acceptance應限定驗證December／Competition Dispatch、Approval Binding、未知版本拒絕、Canonical Readback及受影響Compatibility。Source PASS不等於Deployment或Actual Capture PASS。
+
+Change History（2026-11-14）：新增已接受的 §24.8；保留歷史 §24.6／24.7 及 Frozen D3。Source／Independent Audit、Deployment／Coverage 與 Final Execution 分別驗證，Actual Capture 未執行。

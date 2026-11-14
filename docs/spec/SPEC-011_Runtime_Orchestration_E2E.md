@@ -1341,3 +1341,107 @@ Synchronous local persistence has no proven whole-operation deadline. Controller
 safety and factory/cadence wiring remain pending that exact contract decision.
 This status does not approve SPEC-013 v2 request/projection semantics.
 Real Capture: NOT EXECUTED. No new execution authority or Formal Acceptance.
+
+## December Demo Minimal One-shot Capture — Option B Additive Amendment
+
+Status：ACCEPTED — SPEC LEAD EXACT CONTRACT ACCEPTANCE
+Candidate Date：2026-11-14
+Acceptance Date：2026-11-14
+Implementation Work：AIOPS-DEC17-MINIMAL-CONTROLLER-D3-IMPLEMENTATION-20261114
+
+### 1. 適用範圍與既有契約
+
+本附錄僅適用於經正式核准的 December Demo S2／S5 單次受控 Capture，採用 Minimal Reuse／One-shot Controlled Capture。
+
+本附錄不改變一般 Runtime、D1～D8、RetryDisposition、Attempt Budget、Stable Operation Identity、Runtime Clock、Startup Recovery Barrier或Domain Recovery Authority。不新增OS Lock、Supervisor、Scheduler或第二套Recovery Framework。
+
+### 2. 授權與入場
+
+Controller必須在建構可寫入Store或啟動Exporter前，驗證Human-controlled Publication Pin、Issuer／Authority、Validity、Exact Source／Config／Input／Model／Policy／Store／Environment Binding及Explicit Opt-in。
+
+CaptureStopBinding僅為執行資料，不構成授權。非空Reference、格式正確的SHA或Caller提供的Boolean不得取代受控Approval Evidence。
+
+每份Final Execution Authorization僅允許一個固定Child。S2／S5不得共用重疊的執行安排。
+
+### 3. One-shot Atomic Child Intent
+
+沿用既有capture-intent.json作一次性入場防護，使用原子exclusive creation；不得覆寫既有Intent。
+
+Child Root得預先包含經核准、完整核對的乾淨觀測目錄及Hash相符的配置白名單。任何舊Store、執行資料、Report、Intent或未知檔案均應拒絕入場。
+
+Intent建立、寫入或讀回失敗時，不得進入Domain Work；不得刪除空白或部分Intent後重新嘗試。更換Child Root不得規避未核對的舊執行。
+
+### 4. Single Active Session與Owned Worker
+
+同一Process僅允許一個Active Capture Session。Timeout後，前次Worker尚未安全結束前，不得釋放可重入資格。
+
+正式Composition須由Owned Worker建構、使用及關閉相容的Runtime／SQLite／Exporter Handles。Controller返回後仍須保留Worker、Stop及Cleanup Ownership。
+
+正式Entry不得使用Test Harness，也不得接受可繞過Approval Guard的Caller-supplied Production Components。
+
+### 5. Deadline與停止新工作
+
+Controller使用既有Runtime Clock及核准的固定Deadline。到達Deadline後，禁止新的Trigger、Cycle、Capture Command及其他新執行單位入場。
+
+不得自動延長Deadline、Retry或Resume。呼叫端的Bounded Wait不構成所有同步I/O、Process Exit或OS排程的Hard Completion Guarantee。
+
+### 6. 已入場同步操作
+
+已開始的同步操作依既有安全邊界處理，不強制中斷SQLite Commit或其他權威Mutation。
+
+已入場Capture Command得完成其固定、已核准的Source Reads、Normalization及原子Outcome Commit。此規定不得用於增加Source Request、擴大Query Window、追加Fetch或開始另一Capture Command。
+
+已入場Detection／Correlation Cycle沿用原有Stop Hook與安全邊界，不新增Domain Retry Authority。
+
+### 7. Timeout與Late Outcome
+
+Controller Timeout只能回報「逾時／結果未確認」，不能回報Capture SUCCESS，也不等於Domain Failure。
+
+晚到的Domain SUCCESS應如實保存，但不得改寫Deadline已超過的事實。Operational Report只需區分正常完成、Timeout／未確認、已確認失敗及核對受阻；不得因此新增或改寫Domain Enum。
+
+普通Pending、EMPTY、NO_MATCH或DRAINED不自動等於Capture成功或失敗。
+
+### 8. 成功與Public Readback
+
+正常Capture成功須具備：
+
+- 正式Capture SUCCESS Outcome。
+- 可讀且一致的Public Snapshot／Revision。
+- 正確Incident／Capture Operation／Revision Binding。
+- 已確認的安全收尾狀態。
+
+HTTP成功、Fixture成功或Report中的SUCCESS字串均不得替代上述條件。Worker／Cleanup未確認時，不得核准下一次Capture。
+
+### 9. Report Authority Boundary
+
+Intent／Report為Operational Diagnostics及入場防護，不取代Domain Authority。
+
+Report缺失、部分寫入或與Receipt不一致時，不得推定Capture未執行或Mutation已回滾。應以原Store、Operation、Receipt及Outcome核對。
+
+Report Persistence亦可能阻塞；不得為保存Report而宣稱整條Capture具有硬完成保證。不為本單次Demo新增Report Persistence Framework。
+
+### 10. Restart／Receipt／Recovery
+
+Process Restart不得自動重送原Capture。應先確認舊Process／Worker／Exporter已停止或可信隔離，再核對原Intent、Work、Receipt及Outcome。
+
+Receipt不存在、Controller Timeout或Report缺失，均不足以單獨證明操作未執行。
+
+Startup Recovery或Reconciliation若會寫入Durable State，須取得適用Recovery Authorization，不得稱為唯讀Preflight。無法可靠核對時維持BLOCKED／REPAIR_REQUIRED。
+
+不得清空Store、刪除Pending、重設Attempt、重判Receipt或假設Mutation已回滾。
+
+### 11. Next Child Human Clearance
+
+新Child執行前，須確認前次執行已安全停止或隔離、沒有未確認的重疊Mutation、Receipt／Outcome已可靠核對、必要Recovery已完成，且新的Source／Config／Policy／Execution Authorization有效。
+
+不同Child的串行安全依賴單一受控Host／Operator及可信Deployment Evidence。若存在未受控第二Writer或無法確認共享Store邊界，必須拒絕Final Capture Authorization；不得將同Child Atomic Intent宣稱為環境級跨Process排他。
+
+### 12. Acceptance與Execution分離
+
+本附錄以AC-01～05驗證：正式元件離線接線、重複／重疊拒絕、Timeout／Unknown、Restart／Receipt核對及Legacy／D3 Compatibility。
+
+Offline PASS不等於真實S2／S5 Capture PASS。Contract Acceptance、Source Implementation Acceptance、Independent Audit、Human Clean Source Checkpoint、Deployment／Coverage Verification及Final Capture Authorization均為不同Gate。
+
+本附錄的契約核准不直接啟用Controller Execute。
+
+Change History（2026-11-14）：新增上述已接受的 December 限定條文；歷史狀態保留。Source Implementation／Independent Audit、Deployment／Coverage、Final Capture Authorization 依各自 Gate 驗證，Actual Capture 未執行。

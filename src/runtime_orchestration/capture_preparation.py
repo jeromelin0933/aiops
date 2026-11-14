@@ -39,13 +39,31 @@ STORE_PATHS = {
     "evidence": "stores/evidence.sqlite3",
 }
 
+DECEMBER_PROFILE = "december-demo-v1"
+DECEMBER_POLICY = "spec013-december-demo-d3-policy-v1"
+# Contract/source preparation basis, NEVER a Final Capture Grant.
+DECEMBER_AUTHORITY = "AIOPS-DEC17-MINIMAL-CONTROLLER-D3-IMPLEMENTATION-20261114"
+DECEMBER_CONFIG = "configs/capture_december_demo.yaml"
 
-def child_binding(case: str) -> dict:
+
+def december_profile(repository: Path) -> dict:
+    data = yaml.safe_load((repository / DECEMBER_CONFIG).read_bytes())
+    if (not isinstance(data, dict) or set(data) != {"identity", "scope", "status", "parent_run", "external_root"}
+            or (data["identity"], data["scope"], data["status"]) != (
+                DECEMBER_POLICY, "DECEMBER_DEMO_ONLY", "PREPARATION_ONLY")
+            or not isinstance(data["parent_run"], str) or not data["parent_run"].startswith("december-capture-")
+            or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789-" for c in data["parent_run"])
+            or not Path(data["external_root"]).is_absolute()):
+        raise ValueError("invalid December preparation profile")
+    return data
+
+
+def child_binding(case: str, *, december: dict | None = None) -> dict:
     """Case IDs select controller inputs only, never Event/Incident semantics."""
     if case not in INPUT_SHA:
         raise ValueError("only the exact S5/S2 preparation cases are supported")
-    run_id = PARENT_RUN + "-" + case
-    root = EXTERNAL_ROOT / run_id
+    run_id = (PARENT_RUN if december is None else december["parent_run"]) + "-" + case
+    root = (EXTERNAL_ROOT if december is None else Path(december["external_root"])) / run_id
     return {
         "run_id": run_id, "root": str(root),
         "stores": {key: str(root / value) for key, value in STORE_PATHS.items()},
@@ -55,6 +73,49 @@ def child_binding(case: str) -> dict:
         "maximum_seconds_proposed": 600, "maximum_triggers_proposed": 1,
         "maximum_captures_proposed": 1,
     }
+
+
+def december_config_bundle(repository: Path, base: RuntimeConfig, case: str) -> tuple[dict, dict[str, bytes]]:
+    """Pure derivation. No writes, unpickling, environment or Store construction.
+
+    Only approved deployment paths change; thresholds/features/model parameters
+    are copied verbatim. Every derived byte must be pinned before execution.
+    """
+    profile = december_profile(repository)
+    child = child_binding(case, december=profile)
+    root = Path(child["root"])
+    def raw(name): return yaml.safe_load((repository / "configs" / name).read_bytes())
+    scenario = raw("scenarios.yaml")
+    if sha256((repository / "configs/scenarios.yaml").read_bytes()).hexdigest() != SCENARIO_SHA:
+        raise ValueError("scenario source commitment changed")
+    scenario["log"]["output_path"] = child["log_output"]
+    log = raw("event_detection.yml")
+    log["log_reader"]["log_file_path"] = child["log_output"]
+    log["output"]["event_store_path"] = child["stores"]["event"]
+    log["output"]["model_path"] = str(repository / "models/log_isolation_forest.pkl")
+    threshold = raw("thresholds.yaml")
+    forest = raw("metrics_iforest.yaml")
+    for data in (threshold, forest): data["output"]["event_store_path"] = child["stores"]["event"]
+    forest["model"]["path"] = str(repository / "models/metrics_isolation_forest.pkl")
+    runner = raw("event_runner.yaml")
+    for name, filename in (("log_event_detection", "event_detection.yml"),
+                           ("metrics_threshold_detection", "thresholds.yaml"),
+                           ("metrics_iforest_detection", "metrics_iforest.yaml")):
+        runner["pipelines"][name]["config_path"] = str(root / "configuration" / filename)
+    runtime = asdict(capture_only_runtime(base))
+    # The normal loader's logging level is a YAML name, not logging's integer.
+    import logging
+    runtime["telemetry"]["level"] = logging.getLevelName(base.telemetry.level)
+    runtime["retry"] = {"limit": runtime.pop("retry_limit"), "delays_seconds": runtime.pop("retry_delays_seconds")}
+    runtime.pop("rca")
+    runtime["assignment"] = runtime.pop("assignment_policy")
+    runtime["assignment"]["engineers"] = list(base.assignment_policy.engineers)
+    runtime["work_store"]["adapter"] = "sqlite3"
+    values = {"scenarios.yaml": scenario, "event_detection.yml": log, "thresholds.yaml": threshold,
+              "metrics_iforest.yaml": forest, "event_runner.yaml": runner, "runtime.yaml": runtime}
+    bundle = {"configuration/" + name: yaml.safe_dump(data, sort_keys=True, allow_unicode=True).encode("utf-8")
+              for name, data in values.items()}
+    return child, bundle
 
 
 def capture_only_runtime(base: RuntimeConfig) -> RuntimeConfig:

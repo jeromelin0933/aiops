@@ -167,6 +167,8 @@ class CaptureStopBinding:
         if self.run_id not in {
             "competition-capture-20261104-01-s5",
             "competition-capture-20261104-01-s2",
+            "december-capture-20261214-01-s2",
+            "december-capture-20261214-01-s5",
         } or not isinstance(self.approval_reference, str) or not self.approval_reference.strip():
             raise ValueError("exact capture run and resolved approval required")
         for value, size in ((self.source_revision, 40), (self.config_sha256, 64),
