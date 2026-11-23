@@ -4,6 +4,7 @@ from dataclasses import replace
 import json
 import os
 import sys
+import socket
 from types import SimpleNamespace
 
 import pytest
@@ -11,6 +12,7 @@ import pytest
 from llm_generation.contracts import FailureClass
 from llm_generation.google_generation_adapter import (
     GoogleGenerationAdapter, create_google_generation_client,
+    GEMINI35_MODEL, GEMINI35_PROFILE,
 )
 from llm_generation.service import (
     ProviderCapability, ProviderFailureKind, ProviderInvocationError,
@@ -19,6 +21,19 @@ from llm_generation.service import (
 from rca_persistence.contracts import AdmittedRetryDisposition
 from test_llm_generation_phase2 import case, _structured
 from test_llm_generation_service import environment
+
+
+@pytest.fixture(autouse=True)
+def offline_only(monkeypatch):
+    # Never discover/read a host credential, even in the SDK factory tests.
+    monkeypatch.setattr(os, "environ", {})
+
+    def deny(*args, **kwargs):
+        raise AssertionError("offline adapter tests cannot use a socket")
+
+    monkeypatch.setattr(socket.socket, "connect", deny)
+    monkeypatch.setattr(socket.socket, "connect_ex", deny)
+    monkeypatch.setattr(socket, "getaddrinfo", deny)
 
 
 class SDKError(Exception):
@@ -224,3 +239,261 @@ def test_output_bound_and_malformed_usage_are_typed(case):
         provider.invoke_once(request)
     assert bound.value.kind is ProviderFailureKind.BOUNDS
     assert provider.token_preflight_calls == provider.generation_calls == 1
+
+
+class Mock35Models(MockModels):
+    def __init__(self, *args, model=GEMINI35_MODEL, finish="STOP", usage=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.response_model = model
+        self.finish = finish
+        self.usage = usage
+
+    def generate_content(self, **kwargs):
+        result = super().generate_content(**kwargs)
+        result.model_version = self.response_model
+        result.candidates = [SimpleNamespace(finish_reason=self.finish)]
+        if self.usage is not None:
+            result.usage_metadata = SimpleNamespace(**self.usage)
+        return result
+
+
+def capability35():
+    return ProviderCapability("google", GEMINI35_MODEL, GEMINI35_PROFILE,
+                              "spec015-rca-result-v1", "1", True)
+
+
+def provider35(models=None):
+    return GoogleGenerationAdapter(capability35(), profile_version="1",
+                                   client=SimpleNamespace(models=models or Mock35Models()))
+
+
+def request35(**changes):
+    return replace(ProviderRequest("google", GEMINI35_MODEL, GEMINI35_PROFILE,
+        "bounded observed facts", "spec015-rca-result-v1", "1", 30, 4096, 128), **changes)
+
+
+@pytest.mark.parametrize("changes", [
+    {"model": "gemini-3.5-flash-lite-preview"}, {"model": "gemini-3.5-flash"},
+    {"profile_id": "unknown-profile"}, {"profile_id": GEMINI35_PROFILE + "-extra"},
+    {"schema_id": "unknown-schema"}, {"schema_version": "2"},
+    {"hidden_retries_disabled": False}, {"provider": "unknown"},
+])
+def test_gemini35_exact_admission(changes):
+    with pytest.raises(ValueError):
+        GoogleGenerationAdapter(replace(capability35(), **changes), profile_version="1")
+
+
+@pytest.mark.parametrize("version", [None, "2", 1, True])
+def test_gemini35_requires_exact_profile_version(version):
+    with pytest.raises(ValueError):
+        GoogleGenerationAdapter(capability35(), profile_version=version)
+
+
+def test_gemini35_profile_cannot_select_legacy_or_unpinned_sdk(monkeypatch):
+    with pytest.raises(ValueError):
+        GoogleGenerationAdapter(replace(capability35(), model="gemini-2.5-flash"))
+    import llm_generation.google_generation_adapter as module
+    monkeypatch.setattr(module, "version", lambda name: "2.26.0")
+    with pytest.raises(ValueError):
+        provider35()
+
+
+def test_gemini35_exact_model_and_explicit_wire_configuration():
+    models = Mock35Models()
+    provider = provider35(models)
+    assert provider.input_token_upper_bound("bounded observed facts", 30) == 10
+    result = provider.invoke_once(request35())
+    assert result.metadata.total_tokens == 15
+    assert models.count_calls == [{"model": GEMINI35_MODEL, "contents": "bounded observed facts"}]
+    assert len(models.generate_calls) == 1
+    call = models.generate_calls[0]
+    assert call["model"] == GEMINI35_MODEL
+    assert call["config"] == {
+        "max_output_tokens": 128, "response_mime_type": "application/json",
+        "thinking_config": {"thinking_level": "MINIMAL"},
+        "automatic_function_calling": {"disable": True}, "tools": [],
+    }
+    assert provider.token_preflight_calls == provider.generation_calls == 1
+
+
+@pytest.mark.parametrize("model", [None, "", 35, "gemini-2.5-flash",
+    GEMINI35_MODEL + "-001", "models/" + GEMINI35_MODEL])
+def test_gemini35_unknown_response_routing_fails_closed(model):
+    models = Mock35Models(model=model)
+    provider = provider35(models)
+    with pytest.raises(ProviderInvocationError) as rejected:
+        provider.invoke_once(request35())
+    assert rejected.value.kind is ProviderFailureKind.CAPABILITY
+    assert rejected.value.request_sent and len(models.generate_calls) == 1
+
+
+@pytest.mark.parametrize("finish", [None, "MAX_TOKENS", "SAFETY", "OTHER"])
+def test_gemini35_incomplete_output_rejected(finish):
+    with pytest.raises(ProviderInvocationError) as rejected:
+        provider35(Mock35Models(finish=finish)).invoke_once(request35())
+    assert rejected.value.kind is ProviderFailureKind.MALFORMED
+
+
+@pytest.mark.parametrize("usage", [
+    {"prompt_token_count": None, "candidates_token_count": 5, "total_token_count": 15},
+    {"prompt_token_count": 10, "candidates_token_count": True, "total_token_count": 15},
+    {"prompt_token_count": 10, "candidates_token_count": 5, "total_token_count": None},
+    {"prompt_token_count": 10, "candidates_token_count": 5, "total_token_count": 14},
+    {"prompt_token_count": 10, "candidates_token_count": 5, "total_token_count": 15, "thoughts_token_count": 2},
+    {"prompt_token_count": 10, "candidates_token_count": 5, "total_token_count": 15, "thoughts_token_count": -1},
+    {"prompt_token_count": 10, "candidates_token_count": 5, "total_token_count": 16, "tool_use_prompt_token_count": 1},
+])
+def test_gemini35_unknown_or_inconsistent_usage_rejected(usage):
+    with pytest.raises(ProviderInvocationError) as rejected:
+        provider35(Mock35Models(usage=usage)).invoke_once(request35())
+    assert rejected.value.kind is ProviderFailureKind.MALFORMED
+
+
+@pytest.mark.parametrize("thoughts", [None, 2])
+def test_gemini35_all_post_input_tokens_are_bounded(thoughts):
+    usage = {"prompt_token_count": 10, "candidates_token_count": 5, "total_token_count": 17}
+    if thoughts is not None:
+        usage["thoughts_token_count"] = thoughts
+    result = provider35(Mock35Models(usage=usage)).invoke_once(request35())
+    assert result.metadata.output_tokens == 7
+    with pytest.raises(ProviderInvocationError) as rejected:
+        provider35(Mock35Models(usage=usage)).invoke_once(request35(maximum_output_tokens=6))
+    assert rejected.value.kind is ProviderFailureKind.BOUNDS
+
+
+@pytest.mark.parametrize("stage", ["count", "generation"])
+@pytest.mark.parametrize("error,kind", [
+    (TimeoutError(), ProviderFailureKind.TIMEOUT),
+    (SDKError(503, "UNAVAILABLE"), ProviderFailureKind.UNAVAILABLE),
+    (SDKError(429, "RESOURCE_EXHAUSTED"), ProviderFailureKind.QUOTA),
+])
+def test_gemini35_provider_errors_never_retry_or_fallback(stage, error, kind):
+    models = Mock35Models(count_error=error if stage == "count" else None,
+                          error=error if stage == "generation" else None)
+    provider = provider35(models)
+    with pytest.raises(ProviderInvocationError) as rejected:
+        if stage == "count":
+            provider.input_token_upper_bound("bounded observed facts", 30)
+        else:
+            provider.invoke_once(request35())
+    assert rejected.value.kind is kind and rejected.value.request_sent
+    assert len(models.count_calls) == (stage == "count")
+    assert len(models.generate_calls) == (stage == "generation")
+
+
+def test_gemini35_wrong_timeout_and_request_pin_are_rejected_before_call():
+    models = Mock35Models()
+    provider = provider35(models)
+    with pytest.raises(ProviderInvocationError):
+        provider.input_token_upper_bound("bounded observed facts", 31)
+    with pytest.raises(ProviderInvocationError):
+        provider.invoke_once(request35(profile_id="other-profile"))
+    assert models.count_calls == models.generate_calls == []
+
+
+@pytest.mark.parametrize("failure_stage", [None, "countTokens", "generateContent"])
+def test_gemini35_real_pinned_sdk_mock_transport(monkeypatch, failure_stage):
+    import httpx
+    from google import genai
+    real_client = genai.Client
+    requests = []
+    created = []
+
+    def transport(request):
+        requests.append((request.url.path, json.loads(request.content)))
+        if failure_stage and request.url.path.endswith(":" + failure_stage):
+            return httpx.Response(503, json={"error": {
+                "code": 503, "message": "synthetic unavailable", "status": "UNAVAILABLE"}})
+        if request.url.path.endswith(":countTokens"):
+            return httpx.Response(200, json={"totalTokens": 10})
+        assert request.url.path.endswith(":generateContent")
+        return httpx.Response(200, json={
+            "modelVersion": GEMINI35_MODEL,
+            "candidates": [{"content": {"role": "model", "parts": [{"text": "{}"}]}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5,
+                              "thoughtsTokenCount": 2, "totalTokenCount": 17},
+        })
+
+    def factory(*, api_key, http_options, debug_config):
+        assert api_key == "synthetic-offline-only"
+        assert http_options.api_version == "v1beta"
+        assert http_options.timeout == 30_000 and http_options.retry_options.attempts == 1
+        assert debug_config.client_mode is None
+        http_options.client_args = {"transport": httpx.MockTransport(transport), "trust_env": False}
+        http_options.async_client_args = {"transport": httpx.MockTransport(transport), "trust_env": False}
+        client = real_client(api_key=api_key, http_options=http_options, debug_config=debug_config)
+        created.append(client)
+        return client
+
+    monkeypatch.setenv("GEMINI_API_KEY", "synthetic-offline-only")
+    monkeypatch.setattr(genai, "Client", factory)
+    provider = GoogleGenerationAdapter(capability35(), profile_version="1")
+    try:
+        if failure_stage:
+            with pytest.raises(ProviderInvocationError) as failure:
+                provider.input_token_upper_bound("bounded observed facts", 30)
+                provider.invoke_once(request35())
+            assert failure.value.kind is ProviderFailureKind.UNAVAILABLE
+            assert len(requests) == (1 if failure_stage == "countTokens" else 2)
+            assert sum(path.endswith(":" + failure_stage) for path, _ in requests) == 1
+            return
+        assert provider.input_token_upper_bound("bounded observed facts", 30) == 10
+        assert provider.invoke_once(request35()).metadata.output_tokens == 7
+        assert len(requests) == 2
+        assert all("/models/" + GEMINI35_MODEL + ":" in path for path, _ in requests)
+        cfg = requests[1][1]["generationConfig"]
+        # The pinned SDK forwards ThinkingConfig's protobuf field spelling.
+        # Assert the actual wire payload, rather than assuming camelCase.
+        assert cfg["thinkingConfig"] == {"thinking_level": "MINIMAL"}
+        assert cfg["responseMimeType"] == "application/json"
+        assert not {"candidateCount", "temperature", "topP", "topK"} & cfg.keys()
+        assert provider.token_preflight_calls == provider.generation_calls == 1
+    finally:
+        for client in created:
+            client.close()
+
+
+def test_gemini35_generation_service_preserves_grounding_and_replay(case, tmp_path):
+    from dataclasses import asdict
+    from llm_generation.config import load_generation_config, parse_generation_config, InvocationBounds
+    from llm_generation.contracts import VersionedIdentity, ValidationFact
+    from llm_generation.identity import semantic_commitment
+    from rca_persistence.contracts import GenerationProvenance
+    base = load_generation_config("configs/rca_generation.json")
+    raw = {
+        "version": base.version, "provider": "google", "model": GEMINI35_MODEL,
+        "profile": {"identity": GEMINI35_PROFILE, "version": "1"},
+        "prompt": asdict(base.pin.prompt), "result_schema": asdict(base.pin.result_schema),
+        "configuration": {"identity": "", "version": "1"}, "bounds": asdict(base.bounds),
+        "hidden_retries_disabled": True, "prompt_template": base.prompt_template,
+        "result_schema_commitment": base.result_schema_commitment,
+    }
+    raw["configuration_commitment"] = semantic_commitment((
+        raw["version"], raw["provider"], raw["model"], VersionedIdentity(**raw["profile"]),
+        base.pin.prompt, base.pin.result_schema, "1", InvocationBounds(**raw["bounds"]),
+        True, raw["prompt_template"], raw["result_schema_commitment"],
+    ))
+    raw["configuration"]["identity"] = "cfg_" + raw["configuration_commitment"]
+    case.config = parse_generation_config(raw)
+    case.content = replace(case.content, input=replace(case.content.input, pin=case.config.pin),
+        validation_facts=(ValidationFact("schema", "1", base.result_schema_commitment),))
+    previous = case.attempts.get_attempt_lineage("attempt-1")
+    lineage = replace(previous.attempt.lineage, generation_provenance=GenerationProvenance(
+        "google", GEMINI35_MODEL, base.pin.prompt.identity,
+        case.config.pin.configuration.identity, GEMINI35_PROFILE))
+    case.attempts = SimpleNamespace(get_attempt_lineage=lambda _: replace(previous,
+        attempt=replace(previous.attempt, lineage=lineage)))
+    service, _, grant, resources = environment(case, tmp_path)
+    models = Mock35Models(json.dumps(_structured(case.content, case.config)))
+    service.provider = provider35(models)
+    first = service.execute(case.content.input, case.config, grant, resources)
+    assert first.result is not None
+    replay = service.execute(case.content.input, case.config, grant, resources)
+    assert replay.result == first.result and replay.physical_invocations == 0
+    assert len(models.count_calls) == len(models.generate_calls) == 1
+    bad = _structured(case.content, case.config)
+    bad["summary"] = "A statement absent from claims"
+    other, _, grant2, resources2 = environment(case, tmp_path / "ungrounded")
+    other.provider = provider35(Mock35Models(json.dumps(bad)))
+    rejected = other.execute(case.content.input, case.config, grant2, resources2)
+    assert rejected.failure.failure_class is FailureClass.GROUNDING

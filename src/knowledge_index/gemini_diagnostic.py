@@ -37,6 +37,9 @@ from .gemini_diagnostic_controls import (
     LiveDiagnosticUsage, load_live_safety_artifact, resolve_diagnostic_credential,
     _issue_provider_usage_receipt,
     COUNTING_OPERATION, COUNTING_CHUNK, COUNTING_INPUT, COUNTING_CORPUS, COUNTING_BODY, COUNTING_URL,
+    QUERY_COUNTING_OPERATION, QUERY_COUNTING_BUILD, QUERY_COUNTING_TEXT,
+    QUERY_COUNTING_ENVELOPE, QUERY_COUNTING_INPUT, QUERY_COUNTING_BODY,
+    is_counting_operation,
     _timestamp,
     is_single_document_probe, SINGLE_PROBE_RISK_CAP,
     FULL54_RISK_BASIS,
@@ -965,7 +968,7 @@ class _DiagnosticLiveTransport(httpx.BaseTransport):
                 raise DiagnosticDenied("diagnostic resend denied", code="RUNNER_CONFLICT")
             self._entered = True
             self._revalidate()
-            if self._prepared.record.purpose == COUNTING_OPERATION:
+            if is_counting_operation(self._prepared.record.purpose):
                 _compare_counting_bytes(self._prepared, self._evidence, request)
             else:
                 compare_sdk_request_bytes(self._prepared, self._approved, self._evidence, request)
@@ -994,7 +997,7 @@ class _DiagnosticLiveTransport(httpx.BaseTransport):
                 # Observe only the already guarded physical response. The
                 # pinned SDK drops this field; no SDK patch/raw-body storage.
                 if 200 <= response.status_code < 300:
-                    if self._prepared.record.purpose == COUNTING_OPERATION:
+                    if is_counting_operation(self._prepared.record.purpose):
                         self._counting_tokens = _counting_token_count(bytes(body))
                         self._counting_response_sha256 = sha256(body).hexdigest()
                     else:
@@ -1454,6 +1457,10 @@ def _run_live(
         if request is not None:
             raise DiagnosticDenied("counting takes only its fixed repository input", code="INPUT_MISMATCH")
         return run_counting_observation(live_opt_in=live_opt_in)
+    if operation == QUERY_COUNTING_OPERATION:
+        if request is not None:
+            raise DiagnosticDenied("query counting takes only its protected exact input", code="INPUT_MISMATCH")
+        return run_query_counting_observation(live_opt_in=live_opt_in)
     if operation != "CONTROLLED_PROVIDER_DIAGNOSTIC":
         raise DiagnosticDenied("diagnostic operation is invalid", code="OPERATION_MISMATCH")
     if live_opt_in is not True:
@@ -1557,6 +1564,10 @@ def _run_live(
             raise DiagnosticDenied("diagnostic source or safety changed before transport")
         if load_live_safety_artifact().fields != artifact.fields:
             raise DiagnosticDenied("diagnostic safety metadata changed before transport")
+        if record.query_count_success_review is not None:
+            usage.revalidate_query_success_review(record, request_id,
+                items=len(refreshed.identities), usage_units=refreshed.usage_units,
+                cost_micro_units=refreshed.cost_micro_units)
 
     receipts = []
     observation = _dispatch_live(refreshed, approved, binding.sdk_byte_evidence, credential, revalidate,
@@ -1663,10 +1674,12 @@ def _prepare_counting(binding, artifact):
 
 
 def _compare_counting_bytes(prepared, evidence, request):
-    if (prepared.record.purpose != COUNTING_OPERATION or request.method != "POST"
+    purpose = prepared.record.purpose
+    expected = QUERY_COUNTING_BODY if purpose == QUERY_COUNTING_OPERATION else COUNTING_BODY
+    if (not is_counting_operation(purpose) or request.method != "POST"
             or str(request.url) != COUNTING_URL or request.content != prepared.body
-            or sha256(request.content).hexdigest() != COUNTING_BODY
-            or evidence.sdk_body_sha256 != COUNTING_BODY
+            or sha256(request.content).hexdigest() != expected
+            or evidence.sdk_body_sha256 != expected
             or request.extensions.get("timeout") != dict(connect=30.0, read=30.0, write=30.0, pool=30.0)):
         raise DiagnosticDenied("actual counting request mismatch", code="PAYLOAD_MISMATCH")
 
@@ -1731,7 +1744,51 @@ def _dispatch_counting(prepared, binding, credential, revalidate, request_id):
     return outcome, code, guard
 
 
+def _prepare_query_counting(binding, artifact):
+    """Exact S2-only admission; no caller query/profile/source override."""
+    record, approved, e4 = binding.record, binding.approved_input, binding.sdk_byte_evidence
+    record.__post_init__()
+    if record.purpose != QUERY_COUNTING_OPERATION:
+        raise DiagnosticDenied("query counting operation mismatch", code="OPERATION_MISMATCH")
+    scope = "build:" + QUERY_COUNTING_BUILD
+    if (approved.kind != "query" or approved.scope_identity != scope
+            or record.input_scope_identity != scope
+            or approved.identities != (QUERY_COUNTING_BUILD,)
+            or approved.envelopes != (QUERY_COUNTING_ENVELOPE,)
+            or input_commitment("query", approved.identities, approved.envelopes) != QUERY_COUNTING_INPUT):
+        raise DiagnosticDenied("query counting approved input mismatch", code="INPUT_MISMATCH")
+    contents, body, route = _prepare_counting_sdk_request(QUERY_COUNTING_ENVELOPE)
+    if (route != {"model": "models/" + GEMINI_MODEL} or len(body) != 351
+            or sha256(body).hexdigest() != QUERY_COUNTING_BODY
+            or e4.sdk_body_sha256 != QUERY_COUNTING_BODY
+            or e4.sdk_body_bytes != len(body) or e4.output_dimensionality is not None
+            or e4.canonical_json_sha256 != sha256(_canonical_request(body)).hexdigest()):
+        raise DiagnosticDenied("query counting SDK/E4 payload mismatch", code="PAYLOAD_MISMATCH")
+    revision, clean = resolve_repository_source(Path(__file__).resolve().parents[2])
+    now = datetime.now(timezone.utc)
+    if not clean or revision != record.source_revision:
+        raise DiagnosticDenied("query counting source is dirty or unapproved", code="SOURCE_MISMATCH")
+    if binding.runner_sid != record.runner_identity or socket.gethostname() != record.authorized_host:
+        raise DiagnosticDenied("query counting host or runner mismatch")
+    if not _timestamp(record.valid_from) <= now < _timestamp(record.expires_at):
+        raise DiagnosticDenied("query counting authorization expired", code="AUTHORIZATION_EXPIRED")
+    artifact.matches_record_input(record, approved, e4, revision)
+    facts = DiagnosticExecutionFacts(revision, clean, record.pm_approval_reference,
+        record.spec_lead_identity, binding.runner_sid, record.authorized_host,
+        record.credential_profile_identity, now)
+    return _PreparedCounting(record, facts, contents, body)
+
+
 def run_counting_observation(*, live_opt_in=False):
+    return _run_counting_observation(COUNTING_OPERATION, live_opt_in=live_opt_in)
+
+
+def run_query_counting_observation(*, live_opt_in=False):
+    """Independent diagnostic, not an embedding invocation or implicit grant."""
+    return _run_counting_observation(QUERY_COUNTING_OPERATION, live_opt_in=live_opt_in)
+
+
+def _run_counting_observation(operation, *, live_opt_in=False):
     """Fixed host authority only. Tests replace internal I/O with sealed mocks."""
     from types import MappingProxyType
     if live_opt_in is not True:
@@ -1740,10 +1797,12 @@ def run_counting_observation(*, live_opt_in=False):
         raise DiagnosticDenied("diagnostic runner conflict", code="RUNNER_CONFLICT")
     try:
         binding, artifact = load_live_binding(), load_live_safety_artifact()
-        prepared = _prepare_counting(binding, artifact)
+        prepare = _prepare_query_counting if operation == QUERY_COUNTING_OPERATION else _prepare_counting
+        prepared = prepare(binding, artifact)
         record = prepared.record
         usage = LiveDiagnosticUsage()
-        request_id = "counting." + COUNTING_BODY
+        request_id = ("s2-query-counting." + QUERY_COUNTING_BODY if operation == QUERY_COUNTING_OPERATION
+                      else "counting." + COUNTING_BODY)
         # No token estimates: usage_reserved=1 means an operation unit, NOT a token.
         usage.reserve(record, request_id, items=1, usage_units=1, cost_micro_units=1)
         try:
@@ -1756,7 +1815,7 @@ def run_counting_observation(*, live_opt_in=False):
             current, safety = load_live_binding(), load_live_safety_artifact()
             if current != binding or safety.fields != artifact.fields:
                 raise DiagnosticDenied("counting authority changed before transport")
-            latest = _prepare_counting(current, safety)
+            latest = prepare(current, safety)
             if latest.body != prepared.body or latest.record != record:
                 raise DiagnosticDenied("counting final safety mismatch")
         outcome, code, guard = _dispatch_counting(prepared, binding, credential, revalidate, request_id)

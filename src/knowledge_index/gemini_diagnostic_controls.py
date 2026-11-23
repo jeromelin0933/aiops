@@ -66,6 +66,43 @@ COUNTING_INPUT = "1f7c73a6895e0c0b9b089e6ab97bbf720cb3b8151615764d9eb96a63f93a2f
 COUNTING_CORPUS = "a104796f2e0982e0b591bfe0255a0338cd8468cc0f3d1a0e52b2045026dd7840"
 COUNTING_BODY = "e8b294325b71c9b6732ecd16a05b6e89d8631be2159dcfac5c6963bae4a701cc"
 COUNTING_URL = "https://generativelanguage.googleapis.com/v1/models/gemini-embedding-2:countTokens"
+QUERY_COUNTING_OPERATION = "S2_QUERY_COUNTING_OBSERVATION_V1"
+QUERY_COUNTING_BUILD = "kbld_cf54c0e3615a003cc2016d891d95cacbb6a3a572b78b6b3ce312429bff4e9923"
+QUERY_COUNTING_TEXT = (
+    'Observed incident event facts (incident-evidence-query-v1): '
+    '{"additional_distinct_event_facts":0,"observed_event_facts":'
+    '[{"event_source":"log_event_detection","event_type":"cross_service_failure",'
+    '"service_name":"api-gateway","severity":"HIGH"}]}'
+)
+QUERY_COUNTING_ENVELOPE = "task: search result | query: " + QUERY_COUNTING_TEXT
+QUERY_COUNTING_INPUT = "4154fba19784cd86d4e66d1c517aea64949619f8f554bc6bbe57ee7013763f6c"
+QUERY_COUNTING_BODY = "c6f53df959cf856ac59ad6f851079a32b691bc2869f81a6ebb87f344bb6ab52f"
+QUERY_SUCCESS_REVIEW_AUTHORITY = "PM 2026-11-22 Query-count Success Fence Review Decision"
+
+
+def is_counting_operation(purpose: str) -> bool:
+    return purpose in (COUNTING_OPERATION, QUERY_COUNTING_OPERATION)
+
+
+def query_counting_binding() -> dict:
+    """Fixed technical scope, not a publication, source proof or live grant."""
+    return dict(mapping="incident-evidence-query-v1", classification="SYNTHETIC_DEMO_ONLY",
+        canonical_query_sha256="57d597b74e020471277deb4fc626906e75e7f862506ea9bdac4bd6df7c435dc5",
+        envelope_sha256="592c472d99ccc7f9f38e4402857a8e2893b08c5210babd9e2b0480ab8644f339",
+        build=QUERY_COUNTING_BUILD, generation=1,
+        collection="spec014-" + QUERY_COUNTING_BUILD.replace("_", "-", 1),
+        embedding_profile="spec014-gemini-embedding-2-embedding-v1", dimension=768,
+        profile_reference="spec014-gemini-embedding-2-profile-v1",
+        capability_identity="spec014-google-gemini-embedding-2-capability-v1",
+        normalization="provider-normalized-conditional-v1")
+
+
+def _counting_body(purpose: str) -> str:
+    if not is_counting_operation(purpose):
+        raise DiagnosticDenied("counting operation is invalid", code="OPERATION_MISMATCH")
+    return QUERY_COUNTING_BODY if purpose == QUERY_COUNTING_OPERATION else COUNTING_BODY
+
+
 SINGLE_PROBE_BASIS = "SINGLE_DOCUMENT_PROBE_V1"
 SINGLE_PROBE_PM_DECISION = "APPROVE WITH MODIFICATION — Direct Embedding Single-Input Probe"
 SINGLE_PROBE_RISK_CAP = 8192
@@ -959,6 +996,109 @@ class Full54BoundedRisk:
 
 
 @dataclass(frozen=True, slots=True)
+class QueryCountingSuccessReview:
+    """One reviewed immutable S2 success row, for ONE target campaign only.
+
+    Loaded from the existing protected campaign publication, never a caller
+    override. This changes blocking classification, not usage, holds or rows.
+    """
+    authority_reference: str
+    disposition: str
+    review_reference: str
+    reviewer_identity: str
+    recorded_at: str
+    expires_at: str
+    origin_campaign_id: str
+    origin_request_id: str
+    origin_source_revision: str
+    origin_authorization_sha256: str
+    row_sha256: str
+    observation_sha256: str
+    response_sha256: str
+    project_identity: str
+    secret_revision: str
+    target_campaign_id: str
+    target_pm_approval_reference: str
+    target_source_revision: str
+    target_credential_profile_identity: str
+    target_account_reference: str
+    query_sha256: str
+    envelope_sha256: str
+    model_identity: str
+    embedding_profile_identity: str
+
+    def matches_record(self, record) -> None:
+        def deny():
+            raise DiagnosticDenied("query success review binding is invalid",
+                                   code="QUERY_SUCCESS_REVIEW_MISMATCH")
+        for name in self.__dataclass_fields__:
+            value = getattr(self, name)
+            if type(value) is not str or not value or value != value.strip() or len(value) > 256:
+                deny()
+        for name in ("origin_authorization_sha256", "row_sha256", "observation_sha256",
+                     "response_sha256", "query_sha256", "envelope_sha256"):
+            if not re.fullmatch(r"[0-9a-f]{64}", getattr(self, name)):
+                deny()
+        if (self.authority_reference != QUERY_SUCCESS_REVIEW_AUTHORITY
+                or self.disposition != "NON_BLOCKING_FOR_THIS_CAMPAIGN_ONLY"
+                or self.reviewer_identity != record.spec_lead_identity
+                or self.target_campaign_id != record.campaign_id
+                or self.origin_campaign_id == record.campaign_id
+                or self.target_pm_approval_reference != record.pm_approval_reference
+                or record.pm_approval_reference in (self.authority_reference, self.review_reference)
+                or self.target_source_revision != record.source_revision
+                or self.origin_source_revision != record.source_revision
+                or self.target_credential_profile_identity != record.credential_profile_identity
+                or record.purpose != "CONTROLLED_PROVIDER_DIAGNOSTIC" or record.input_kind != "query"
+                or record.input_scope_identity != "build:" + QUERY_COUNTING_BUILD
+                or record.input_commitment != QUERY_COUNTING_INPUT
+                or self.model_identity != record.model_identity
+                or self.model_identity != "gemini-embedding-2"
+                or self.embedding_profile_identity != "spec014-gemini-embedding-2-embedding-v1"
+                or self.query_sha256 != query_counting_binding()["canonical_query_sha256"]
+                or self.envelope_sha256 != query_counting_binding()["envelope_sha256"]
+                or not (_timestamp(record.valid_from) <= _timestamp(self.recorded_at)
+                        <= datetime.now(timezone.utc) < _timestamp(self.expires_at)
+                        <= _timestamp(record.expires_at))):
+            deny()
+
+    def matches_row(self, record, row) -> None:
+        self.matches_record(record)
+        fields = ("campaign_id", "request_id", "outcome", "items", "usage_reserved",
+                  "cost_reserved", "usage_observed", "observation_json")
+        try:
+            if (row is None or len(row) != len(fields)
+                    or row[:7] != (self.origin_campaign_id, self.origin_request_id,
+                                   "SUCCESS", 1, 1, 1, "UNKNOWN")
+                    or _p0_commitment(dict(zip(fields, row))) != self.row_sha256
+                    or type(row[7]) is not str
+                    or hashlib.sha256(row[7].encode("utf-8")).hexdigest() != self.observation_sha256):
+                raise ValueError("immutable row mismatch")
+            evidence = _unique_json(row[7].encode("utf-8"))
+            expected = dict(operation=QUERY_COUNTING_OPERATION, campaign_id=self.origin_campaign_id,
+                attempt_id=self.origin_request_id, authorization_sha256=self.origin_authorization_sha256,
+                provider="google", model=self.model_identity, api="v1", sdk="google-genai==2.25.0",
+                source_revision=self.origin_source_revision, input_commitment=QUERY_COUNTING_INPUT,
+                body_sha256=QUERY_COUNTING_BODY, profile_identity=self.target_credential_profile_identity,
+                profile_revision=self.secret_revision, project_identity=self.project_identity,
+                host_identity=record.authorized_host, runner_identity=record.runner_identity,
+                outcome="SUCCESS", code="COUNTING_RESULT_OBTAINED", usage="UNKNOWN",
+                usage_unit=QUERY_COUNTING_OPERATION, provider_limits="UNKNOWN",
+                response_sha256=self.response_sha256, query_binding=query_counting_binding())
+            if (type(evidence) is not dict
+                    or set(evidence) != set(expected) | {"observed_token_count", "reserved_at", "recorded_at"}
+                    or _p0_commitment({k: evidence[k] for k in expected}) != _p0_commitment(expected)
+                    or type(evidence["observed_token_count"]) is not int
+                    or not 0 < evidence["observed_token_count"] <= 2**63 - 1
+                    or not (_timestamp(evidence["reserved_at"]) <= _timestamp(evidence["recorded_at"])
+                            <= _timestamp(self.recorded_at))):
+                raise ValueError("trusted observation mismatch")
+        except (ValueError, TypeError, KeyError, UnicodeError):
+            raise DiagnosticDenied("query success row or evidence changed",
+                                   code="QUERY_SUCCESS_REVIEW_MISMATCH") from None
+
+
+@dataclass(frozen=True, slots=True)
 class DiagnosticAuthorizationRecord:
     campaign_id: str
     pm_approval_reference: str
@@ -998,6 +1138,7 @@ class DiagnosticAuthorizationRecord:
     p0_two_unknown_reviews: tuple[P0UnknownAttemptReview, P0SecondUnknownAttemptReview] | None = None
     p0_full54_history_scope: P0Full54HistoryScope | None = None
     full54_bounded_risk: Full54BoundedRisk | None = None
+    query_count_success_review: QueryCountingSuccessReview | None = None
 
     def __post_init__(self) -> None:
         for field in (
@@ -1013,7 +1154,8 @@ class DiagnosticAuthorizationRecord:
         if self.pm_approval_reference == "PM-RAG-EMBEDDING-MIGRATION-20261022":
             raise DiagnosticDenied("migration approval is not live campaign approval")
         if self.pm_approval_reference in (_P0_UNBLOCK_AUTHORITY, _P0_SCOPE_AUTHORITY,
-                                         _P0_DEMO_GATE_AUTHORITY, _P0_KNOWLEDGE_AUTHORITY, FULL54_RISK_AUTHORITY):
+                                         _P0_DEMO_GATE_AUTHORITY, _P0_KNOWLEDGE_AUTHORITY, FULL54_RISK_AUTHORITY,
+                                         QUERY_SUCCESS_REVIEW_AUTHORITY):
             raise DiagnosticDenied("P0 preparation/unblocking authority is not live campaign approval")
         if any(word in self.credential_profile_identity.lower() for word in (
             "api_key", "secret", "bearer", "token", "authorization", ":", "=",
@@ -1028,11 +1170,13 @@ class DiagnosticAuthorizationRecord:
             "maximum_usage_units", "maximum_cost_micro_units",
         ):
             _positive(getattr(self, field), field)
-        if self.purpose == COUNTING_OPERATION:
-            if (self.input_kind != "document" or self.input_commitment != COUNTING_INPUT
+        if is_counting_operation(self.purpose):
+            query_count = self.purpose == QUERY_COUNTING_OPERATION
+            if (self.input_kind != ("query" if query_count else "document")
+                    or self.input_commitment != (QUERY_COUNTING_INPUT if query_count else COUNTING_INPUT)
                     or self.maximum_invocations != 1 or self.maximum_items != 1
-                    or self.maximum_usage_units != 1 or self.maximum_item_bytes != 528
-                    or self.maximum_payload_bytes != 591 or self.maximum_item_tokens is not None
+                    or self.maximum_usage_units != 1 or self.maximum_item_bytes != (274 if query_count else 528)
+                    or self.maximum_payload_bytes != (351 if query_count else 591) or self.maximum_item_tokens is not None
                     or self.maximum_aggregate_tokens is not None or self.normalization_tolerance is not None):
                 raise DiagnosticDenied("counting scope or operation bounds mismatch", code="INPUT_MISMATCH")
             for value in (self.project_identity, self.credential_profile_revision):
@@ -1059,11 +1203,11 @@ class DiagnosticAuthorizationRecord:
             raise DiagnosticDenied("single synchronous attempt policy is required")
         if self.provider_identity != "google" or self.model_identity != GEMINI_EMBEDDING2_PROFILE.model:
             raise DiagnosticDenied("diagnostic provider or model is not approved")
-        if self.purpose not in ("CONTROLLED_PROVIDER_DIAGNOSTIC", COUNTING_OPERATION) or self.input_kind not in ("document", "query"):
+        if self.purpose not in ("CONTROLLED_PROVIDER_DIAGNOSTIC", COUNTING_OPERATION, QUERY_COUNTING_OPERATION) or self.input_kind not in ("document", "query"):
             raise DiagnosticDenied("diagnostic purpose or input kind is invalid")
         if self.api_version != "v1" or self.sdk_baseline != "google-genai==2.25.0":
             raise DiagnosticDenied("diagnostic API or SDK baseline is invalid")
-        if self.purpose != COUNTING_OPERATION and (type(self.normalization_tolerance) is not float or not 0 < self.normalization_tolerance < 1):
+        if not is_counting_operation(self.purpose) and (type(self.normalization_tolerance) is not float or not 0 < self.normalization_tolerance < 1):
             raise DiagnosticDenied("normalization tolerance is invalid")
         if _timestamp(self.valid_from) >= _timestamp(self.expires_at):
             raise DiagnosticDenied("authorization validity interval is invalid")
@@ -1093,13 +1237,21 @@ class DiagnosticAuthorizationRecord:
             if type(self.full54_bounded_risk) is not Full54BoundedRisk:
                 raise DiagnosticDenied("Full54 risk must use the protected exact wire")
             self.full54_bounded_risk.matches_record(self)
+        if self.query_count_success_review is not None:
+            if (type(self.query_count_success_review) is not QueryCountingSuccessReview
+                    or any(v is not None for v in (self.p0_unknown_review, self.p0_two_unknown_reviews,
+                                                  self.p0_full54_history_scope, self.full54_bounded_risk))):
+                raise DiagnosticDenied("query success review cannot inherit historical exceptions",
+                                       code="QUERY_SUCCESS_REVIEW_MISMATCH")
+            self.query_count_success_review.matches_record(self)
 
     @classmethod
     def from_json(cls, data: bytes) -> "DiagnosticAuthorizationRecord":
         try:
             value = _unique_json(data)
             optional = {"project_identity", "credential_profile_revision", "p0_unknown_review",
-                        "p0_two_unknown_reviews", "p0_full54_history_scope", "full54_bounded_risk"}
+                        "p0_two_unknown_reviews", "p0_full54_history_scope", "full54_bounded_risk",
+                        "query_count_success_review"}
             if (type(value) is not dict or not set(cls.__dataclass_fields__) - optional <= set(value)
                     or not set(value) <= set(cls.__dataclass_fields__)):
                 raise DiagnosticDenied("authorization record fields are incomplete or extra")
@@ -1128,6 +1280,11 @@ class DiagnosticAuthorizationRecord:
                 if type(risk) is not dict or set(risk) != set(Full54BoundedRisk.__dataclass_fields__):
                     raise DiagnosticDenied("Full54 risk wire is incomplete or extra")
                 value["full54_bounded_risk"] = Full54BoundedRisk(**risk)
+            review = value.get("query_count_success_review")
+            if review is not None:
+                if type(review) is not dict or set(review) != set(QueryCountingSuccessReview.__dataclass_fields__):
+                    raise DiagnosticDenied("query success review fields are incomplete or extra")
+                value["query_count_success_review"] = QueryCountingSuccessReview(**review)
             return cls(**value)
         except (UnicodeError, TypeError, ValueError) as exc:
             if isinstance(exc, DiagnosticDenied):
@@ -1142,7 +1299,8 @@ def authorization_record_digest(record: DiagnosticAuthorizationRecord) -> str:
     fields = asdict(record)
     # Historical embedding grants retain their exact pre-extension digest.
     for name in ("project_identity", "credential_profile_revision", "p0_unknown_review",
-                 "p0_two_unknown_reviews", "p0_full54_history_scope", "full54_bounded_risk"):
+                 "p0_two_unknown_reviews", "p0_full54_history_scope", "full54_bounded_risk",
+                 "query_count_success_review"):
         if fields[name] is None:
             fields.pop(name)
     canonical = json.dumps(fields, sort_keys=True, ensure_ascii=True,
@@ -1243,7 +1401,7 @@ class DiagnosticSdkByteEvidence:
                 or self.kind not in ("document", "query")
                 or (self.kind == "query" and len(self.ordered_identities) != 1)
                 or self.http_method != "POST"
-                or not ((self.request_url == COUNTING_URL and self.kind == "document"
+                or not ((self.request_url == COUNTING_URL and self.kind in ("document", "query")
                          and len(self.ordered_identities) == 1 and self.output_dimensionality is None)
                         or (self.request_url == "https://generativelanguage.googleapis.com/v1/models/"
                             + self.model + ":batchEmbedContents"
@@ -1272,8 +1430,11 @@ class DiagnosticSdkByteEvidence:
                 or self.input_commitment != approved.commitment
                 or self.sdk_body_bytes > record.maximum_payload_bytes):
             raise DiagnosticDenied("SDK byte evidence does not match campaign and approved input")
-        if (self.request_url == COUNTING_URL) != (record.purpose == COUNTING_OPERATION):
+        if (self.request_url == COUNTING_URL) != is_counting_operation(record.purpose):
             raise DiagnosticDenied("SDK evidence operation mismatch", code="OPERATION_MISMATCH")
+        if (record.purpose == COUNTING_OPERATION and self.kind != "document"
+                or record.purpose == QUERY_COUNTING_OPERATION and self.kind != "query"):
+            raise DiagnosticDenied("counting input kind mismatch", code="OPERATION_MISMATCH")
 
 
 # G3-CL01: this table is the closed wire appendix, not an evidence registry.
@@ -1337,6 +1498,12 @@ _COUNTING_SAFETY_SCHEMA["binding"] = dict(_SAFETY_SCHEMA["binding"], request_url
 _COUNTING_FREE_SCHEMA = dict(_FREE_TIER_SCHEMA,
     quota_evidence=dict(rpm=("UNKNOWN",), tpm=("UNKNOWN",), rpd=("UNKNOWN",), source=_SAFETY_SOURCE))
 _COUNTING_SAFETY_SCHEMA["free_tier_evidence"] = _COUNTING_FREE_SCHEMA
+
+# A separate closed appendix; never reinterpret the historical corpus/ordinal.
+_QUERY_COUNTING_SAFETY_SCHEMA = dict(_COUNTING_SAFETY_SCHEMA)
+_QUERY_COUNTING_SAFETY_SCHEMA.pop("complete_corpus_commitment")
+_QUERY_COUNTING_SAFETY_SCHEMA.update(operation=(QUERY_COUNTING_OPERATION,),
+    query_binding={k: (v,) for k, v in query_counting_binding().items()})
 
 # Same host-published safety artifact; UNKNOWN limits are not provider numbers.
 _PROBE_SAFETY_SCHEMA = {k: v for k, v in _SAFETY_SCHEMA.items() if k != "token_evidence"}
@@ -1521,18 +1688,20 @@ class DiagnosticSafetyArtifact:
                 raise DiagnosticDenied("safety JSON numeric constant is invalid")
             value = json.loads(data.decode("utf-8"), object_pairs_hook=_safety_unique,
                                parse_constant=constant)
-            counting = type(value) is dict and value.get("operation") == COUNTING_OPERATION
+            counting = type(value) is dict and is_counting_operation(value.get("operation"))
+            query_counting = counting and value["operation"] == QUERY_COUNTING_OPERATION
+            counting_schema = _QUERY_COUNTING_SAFETY_SCHEMA if query_counting else _COUNTING_SAFETY_SCHEMA
             probe = type(value) is dict and "single_probe" in value
             risk = type(value) is dict and "full54_bounded_risk" in value
             if counting:
-                _validate_safety_wire(value, _COUNTING_SAFETY_SCHEMA)
+                _validate_safety_wire(value, counting_schema)
             # Optional exact-input bound table. Old metadata remains readable,
             # but cannot enable live execution without accepted bound evidence.
             bounds = value.pop("accepted_input_token_bounds", None) if type(value) is dict else None
             free = value.pop("free_tier_evidence", None) if type(value) is dict else None
             plan = value.pop("sequential_batch_plan", None) if type(value) is dict else None
             batch_e4 = value.pop("batch_sdk_evidence", None) if type(value) is dict else None
-            _validate_safety_wire(value, {k: v for k, v in _COUNTING_SAFETY_SCHEMA.items()
+            _validate_safety_wire(value, {k: v for k, v in counting_schema.items()
                                          if k != "free_tier_evidence"} if counting else
                                  _PROBE_SAFETY_SCHEMA if probe else _FULL54_RISK_SCHEMA if risk else _SAFETY_SCHEMA)
             if risk and (probe or counting or bounds is not None or plan is None or batch_e4 is None):
@@ -1634,6 +1803,13 @@ class DiagnosticSafetyArtifact:
                 or value["credential_binding"]["profile_identity"] != record.credential_profile_identity
                 or value["pricing_evidence"]["currency"] != record.cost_currency):
             raise DiagnosticDenied("safety authorization, source, input or profile binding mismatch")
+        review = record.query_count_success_review
+        if review is not None:
+            review.matches_record(record)
+            if (value["credential_binding"]["secret_revision"] != review.secret_revision
+                    or value["pricing_evidence"]["account_reference"] != review.target_account_reference):
+                raise DiagnosticDenied("query success review credential/account mismatch",
+                                       code="QUERY_SUCCESS_REVIEW_MISMATCH")
         ref = value["e4_reference"]
         for key in ("reference", "sdk_body_sha256", "canonical_json_sha256", "sdk_body_bytes"):
             if ref[key] != getattr(e4, key):
@@ -1646,6 +1822,18 @@ class DiagnosticSafetyArtifact:
         if not (_timestamp(record.valid_from) <= start < end <= _timestamp(record.expires_at)
                 and start <= now < end):
             raise DiagnosticDenied("safety or authorization validity is unavailable")
+        if record.purpose == QUERY_COUNTING_OPERATION:
+            if (value.get("operation") != QUERY_COUNTING_OPERATION
+                    or dict(value.get("query_binding", {})) != query_counting_binding()
+                    or value.get("project_identity") != record.project_identity
+                    or value["credential_binding"]["secret_revision"] != record.credential_profile_revision
+                    or approved.kind != "query" or approved.identities != (QUERY_COUNTING_BUILD,)
+                    or approved.envelopes != (QUERY_COUNTING_ENVELOPE,)
+                    or approved.commitment != QUERY_COUNTING_INPUT
+                    or e4.sdk_body_sha256 != QUERY_COUNTING_BODY or e4.sdk_body_bytes != 351):
+                raise DiagnosticDenied("query counting safety identity mismatch", code="INPUT_MISMATCH")
+            self.require_free_tier_permission(record)
+            return
         if record.purpose == COUNTING_OPERATION:
             if (value.get("operation") != COUNTING_OPERATION
                     or value.get("project_identity") != record.project_identity
@@ -1665,7 +1853,7 @@ class DiagnosticSafetyArtifact:
             raise DiagnosticDenied("risk evidence is not strict campaign authority")
         if "single_probe" in value:
             raise DiagnosticDenied("probe evidence is not full embedding authority")
-        if value.get("operation") == COUNTING_OPERATION:
+        if is_counting_operation(value.get("operation")):
             raise DiagnosticDenied("counting evidence cannot authorize embedding", code="OPERATION_MISMATCH")
         count = len(approved.identities)
         limits = value["provider_limits"]
@@ -2308,7 +2496,19 @@ def _blocking_fence_count(db: sqlite3.Connection, record=None) -> int:
     rows may stop blocking ONE separately authorized target campaign.
     """
     count = db.execute("SELECT COUNT(*) FROM attempts WHERE " + _FENCE_PREDICATE).fetchone()[0]
-    if record is None or (record.p0_unknown_review is None and record.p0_two_unknown_reviews is None):
+    if record is None:
+        return count
+    if record.query_count_success_review is not None:
+        record.__post_init__()
+        review = record.query_count_success_review
+        row = db.execute("SELECT campaign_id,request_id,outcome,items,usage_reserved,cost_reserved,"
+                         "usage_observed,observation_json FROM attempts WHERE campaign_id=? AND request_id=?",
+                         (review.origin_campaign_id, review.origin_request_id)).fetchone()
+        review.matches_row(record, row)
+        if count < 1:
+            raise DiagnosticDenied("reviewed raw fence is missing", code="QUERY_SUCCESS_REVIEW_MISMATCH")
+        return count - 1
+    if record.p0_unknown_review is None and record.p0_two_unknown_reviews is None:
         return count
     record.__post_init__()
     reviews = record.p0_two_unknown_reviews or (record.p0_unknown_review,)
@@ -2368,8 +2568,10 @@ def inspect_local_counting_store(*, runner_sid: str, source_revision: str,
             "fresh_check": fresh, "live": "NOT AUTHORIZED",
             "live_authority": "NOT VERIFIED BY BOOTSTRAP"}
     if for_authorized_campaign:
+        query_reviewed = int(record.query_count_success_review is not None)
         result.update(campaign_id=record.campaign_id, blocking_fences=blocking,
-                      reviewed_historical_fences=fences-blocking)
+                      reviewed_historical_fences=fences-blocking-query_reviewed,
+                      reviewed_query_success_fences=query_reviewed)
     return result
 
 
@@ -2417,7 +2619,8 @@ class TemporaryDiagnosticUsage:
             with closing(self._connect()) as db:
                 db.execute("BEGIN IMMEDIATE")
                 self._check_reservation_state(db)
-                if record.purpose == COUNTING_OPERATION:
+                if is_counting_operation(record.purpose):
+                    record.__post_init__()
                     # Existing stores are never automatically migrated.
                     db.execute("SELECT observation_json FROM attempts LIMIT 0")
                     if db.execute("SELECT 1 FROM attempts WHERE campaign_id=? AND request_id=?",
@@ -2442,12 +2645,14 @@ class TemporaryDiagnosticUsage:
                     "VALUES (?,?, 'IN_FLIGHT',?,?,?)",
                     (record.campaign_id, request_id, items, usage_units, cost_micro_units),
                 )
-                if record.purpose == COUNTING_OPERATION:
-                    pending = dict(operation=COUNTING_OPERATION, authorization_sha256=authorization_record_digest(record),
-                        input_commitment=record.input_commitment, body_sha256=COUNTING_BODY,
+                if is_counting_operation(record.purpose):
+                    pending = dict(operation=record.purpose, authorization_sha256=authorization_record_digest(record),
+                        input_commitment=record.input_commitment, body_sha256=_counting_body(record.purpose),
                         reserved_at=datetime.now(timezone.utc).isoformat(),
                         campaign_id=record.campaign_id, attempt_id=request_id, outcome="IN_FLIGHT",
                         code="ATTEMPT_RESERVED", observed_token_count=None, usage="UNKNOWN")
+                    if record.purpose == QUERY_COUNTING_OPERATION:
+                        pending["query_binding"] = query_counting_binding()
                     db.execute("UPDATE attempts SET observation_json=? WHERE campaign_id=? AND request_id=?",
                         (json.dumps(pending, sort_keys=True, separators=(",", ":")), record.campaign_id, request_id))
                 db.commit()
@@ -2457,14 +2662,38 @@ class TemporaryDiagnosticUsage:
             raise DiagnosticDenied("duplicate diagnostic request identity") from exc
         except sqlite3.Error as exc:
             raise DiagnosticDenied("diagnostic usage lock or record is unavailable",
-                code="PERSISTENCE_FAILURE" if record.purpose == COUNTING_OPERATION else "AUTHORIZATION_DENIED") from exc
+                code="PERSISTENCE_FAILURE" if is_counting_operation(record.purpose) else "AUTHORIZATION_DENIED") from exc
+
+    def revalidate_query_success_review(self, record, request_id, *, items, usage_units, cost_micro_units):
+        """Final read-only check; admit only our exact existing reservation.
+
+        Rechecks the protected review and immutable origin row. It neither
+        clears a fence nor ignores any other concurrent/unknown attempt.
+        """
+        if record.query_count_success_review is None:
+            return
+        try:
+            with closing(self._connect(read_only=True)) as db:
+                db.execute("PRAGMA query_only=ON")
+                db.execute("BEGIN")
+                self._check_reservation_state(db)
+                own = db.execute("SELECT outcome,items,usage_reserved,cost_reserved,usage_observed,"
+                                 "observation_json FROM attempts WHERE campaign_id=? AND request_id=?",
+                                 (record.campaign_id, request_id)).fetchone()
+                if (own != ("IN_FLIGHT", items, usage_units, cost_micro_units, "UNKNOWN", None)
+                        or _blocking_fence_count(db, record) != 1):
+                    raise DiagnosticDenied("final query review reservation or fence mismatch",
+                                           code="QUERY_SUCCESS_REVIEW_MISMATCH")
+        except (sqlite3.Error, OSError):
+            raise DiagnosticDenied("final query review ledger is unavailable",
+                                   code="QUERY_SUCCESS_REVIEW_MISMATCH") from None
 
     def finish(self, record: DiagnosticAuthorizationRecord, request_id: str, outcome: str) -> None:
         # No caller observation override. Missing/failed responses stay UNKNOWN.
         self._finish(record, request_id, outcome, "UNKNOWN")
 
     def _finish_provider_usage(self, record, request_id, outcome, receipt, request_sha256):
-        if record.purpose == COUNTING_OPERATION:
+        if is_counting_operation(record.purpose):
             raise DiagnosticDenied("counting is not embedding usage", code="OPERATION_MISMATCH")
         if type(receipt) is not _ProviderUsageReceipt or outcome != "SUCCESS":
             raise DiagnosticDenied("trusted successful provider usage is unavailable")
@@ -2479,7 +2708,7 @@ class TemporaryDiagnosticUsage:
         Ambiguous persistence raises and retains all reservations/fences.
         """
         from .gemini_diagnostic import _DiagnosticLiveTransport
-        if (record.purpose != COUNTING_OPERATION
+        if (not is_counting_operation(record.purpose)
                 or outcome not in ("SUCCESS", "FAILED", "TIMEOUT", "UNKNOWN")
                 or (outcome == "SUCCESS") != (code == "COUNTING_RESULT_OBTAINED")
                 or code not in _COUNTING_OUTCOMES):
@@ -2490,12 +2719,12 @@ class TemporaryDiagnosticUsage:
                     or boundary._entered is not True
                     or boundary._response_validated is not True
                     or boundary._prepared.record != record or boundary._attempt_id != request_id
-                    or boundary._evidence.sdk_body_sha256 != COUNTING_BODY):
+                    or boundary._evidence.sdk_body_sha256 != _counting_body(record.purpose)):
                 raise DiagnosticDenied("trusted counting boundary is unavailable")
             count, response_sha = boundary._counting_tokens, boundary._counting_response_sha256
             if type(count) is not int or not 0 <= count <= 2**63 - 1 or not response_sha:
                 raise DiagnosticDenied("counting result is invalid")
-        evidence = dict(operation=COUNTING_OPERATION, campaign_id=record.campaign_id,
+        evidence = dict(operation=record.purpose, campaign_id=record.campaign_id,
             attempt_id=request_id, authorization_sha256=authorization_record_digest(record),
             provider=record.provider_identity, model=record.model_identity, api=record.api_version,
             sdk=record.sdk_baseline, source_revision=record.source_revision,
@@ -2508,6 +2737,12 @@ class TemporaryDiagnosticUsage:
             usage="UNKNOWN", usage_unit="COUNTING_OPERATION", provider_limits="UNKNOWN",
             response_sha256=response_sha, recorded_at=datetime.now(timezone.utc).isoformat())
         wire = json.dumps(evidence, sort_keys=True, separators=(",", ":"))
+        if record.purpose == QUERY_COUNTING_OPERATION:
+            for field in ("corpus_commitment", "chunk_identity", "global_ordinal"):
+                evidence.pop(field)
+            evidence.update(query_binding=query_counting_binding(), body_sha256=QUERY_COUNTING_BODY,
+                            usage_unit=QUERY_COUNTING_OPERATION)
+            wire = json.dumps(evidence, sort_keys=True, separators=(",", ":"))
         db = None
         try:
             db = self._connect()
@@ -2516,11 +2751,14 @@ class TemporaryDiagnosticUsage:
             pending = db.execute("SELECT observation_json FROM attempts WHERE campaign_id=? AND request_id=?",
                                  (record.campaign_id, request_id)).fetchone()
             pending = _unique_json(pending[0].encode()) if pending and pending[0] else None
-            if (type(pending) is not dict or pending.get("operation") != COUNTING_OPERATION
+            if (type(pending) is not dict or pending.get("operation") != record.purpose
                     or pending.get("authorization_sha256") != authorization_record_digest(record)
                     or pending.get("input_commitment") != record.input_commitment
-                    or pending.get("body_sha256") != COUNTING_BODY):
+                    or pending.get("body_sha256") != _counting_body(record.purpose)):
                 raise DiagnosticDenied("counting reservation binding mismatch")
+            if (record.purpose == QUERY_COUNTING_OPERATION
+                    and pending.get("query_binding") != query_counting_binding()):
+                raise DiagnosticDenied("query counting reservation scope mismatch")
             evidence["reserved_at"] = pending["reserved_at"]
             wire = json.dumps(evidence, sort_keys=True, separators=(",", ":"))
             changed = db.execute("UPDATE attempts SET outcome=?,observation_json=? "
@@ -2551,7 +2789,7 @@ class TemporaryDiagnosticUsage:
         Keep exact excess evidence with UNKNOWN using the existing columns. A
         reservation is never reduced, even with known zero or failed completion.
         """
-        if record.purpose == COUNTING_OPERATION:
+        if is_counting_operation(record.purpose):
             raise DiagnosticDenied("counting requires operation-specific completion", code="OPERATION_MISMATCH")
         if outcome not in ("SUCCESS", "FAILED", "TIMEOUT", "UNKNOWN"):
             raise DiagnosticDenied("diagnostic outcome is invalid")

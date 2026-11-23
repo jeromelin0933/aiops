@@ -142,7 +142,13 @@ def test_new_counting_fields_required_only_for_counting(counting,field):
     original.pop("project_identity")
     original.pop("credential_profile_revision")
     assert controls.DiagnosticAuthorizationRecord.from_json(json.dumps(original).encode())==legacy
+    # These later optional extensions were absent in the historical wire too.
+    # Explicitly reconstruct that wire; do not change the production digest or
+    # infer the expected hash by calling the implementation under test.
+    for name in ("p0_unknown_review", "p0_two_unknown_reviews", "p0_full54_history_scope", "full54_bounded_risk", "query_count_success_review"):
+        assert original.pop(name) is None
     assert controls.authorization_record_digest(legacy)==sha256(json.dumps(original,sort_keys=True,ensure_ascii=True,separators=(",", ":")).encode()).hexdigest()
+    assert controls.authorization_record_digest(legacy)=="9d238e27fed57646305a4946d8a02adbfa980b2d74bbd5afb17ac1c00fffd8ad"
 
 
 @pytest.mark.parametrize("field,value", [("model_identity","other"),("api_version","v1beta"),
