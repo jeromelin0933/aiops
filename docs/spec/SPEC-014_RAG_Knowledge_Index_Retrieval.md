@@ -1600,3 +1600,41 @@ Plan新增`admission_basis=FULL54_DEMO_RISK_CAP_V1`；無此Basis或無完整風
 每批須完整Response／Count／Mapping／Order／768D／Finite／Nonzero／norm0.01、可信Usage、Budget與持久化確認才繼續。429、Timeout、UNKNOWN、Invalid／Partial Response、Usage缺失或不可信、已知本地Usage Guard超限、Persistence Ambiguity、Source／Input／Authority變更、Duplicate或額外UNKNOWN／TIMEOUT／IN_FLIGHT立即STOP；既有歷史例外不涵蓋任何新Attempt。只有全54及global order／mapping通過才向既有Build交付Vectors，不發布部分STAGED Build、不自動Activate、不重啟續跑或另開Campaign自動重送。
 
 Formal／Production及Query不得選用本Basis；其Strict Gate不變。此契約、Source Offline PASS及Human Checkpoint均不構成Live、Demo Activation、Calibration、AC-014-X或SPEC-017 PASS。2026-11-03 12:00 UTC+08:00仍無可授權固定路徑時停止追加工程，交PM決定方案C；本輪不實作BM25。
+
+## 24.11 December Demo Reusable Fence Admission — Bounded Offline Amendment
+
+**Authority／狀態。** PM 2026-11-25 MODIFIED APPROVAL — DEMO-FIRST BOUNDED IMPLEMENTATION；SPEC Lead 已接受 Phase A Protected Review Readback，僅授權限定 Offline Implementation／Tests。本節實作契約為 `demo-december-fence-admission-v1@1`，待交付審查、Independent Audit 與 Human Source Checkpoint；不是 Stage 1／Stage 2 Live Grant，不發布任何新 Review、Safety、E4 或 Provider Approval。原 §24.2 Historical Reviews、§24.9.3／§24.10 Full54 Scope 與所有舊 Grant 行為保持，不將舊 Full54 Target 轉移至新 Campaign。
+
+### 24.11.1 Evidence 與有限適用範圍
+
+Phase A 由 Human 完成固定 Host／Source／Protected Path／ACL／File Identity 與既有 Review Validator 核對。兩份 Historical Reviews 原 Target 為 `spec014-full54-demo-20261102-01`，PM Reference 為 `PM-SPEC014-FULL54-DEMO-LIVE-20261102-01`；Protected Campaign SHA-256 為 `63bb27eb6a6789720c9fcb3be0f02d588a24760a2a9b3f066879b99f80072fe6`。此為已接受的歷史 Evidence Anchor，不證明當前 Live Eligibility。兩列 Row SHA 分別為 `59a710e59e43df7f7412e8a94eb2fee941c8ee11ae3ceb59fbcf2c3dbcd1ea55`、`3fa85e092ba49fe8ff48043bab0ee36658f3c5e0f10e899522e52dc3318e91ca`；原 UNKNOWN Outcome／Usage、NULL Observation、各 8192 Usage／1 micro-USD Hold 及 Evidence Limitation 不變。
+
+新政策只接受固定 S2 `incident-evidence-query-v1` 的 Query／Envelope／Build，Gemini Embedding 2／v1／google-genai==2.25.0／768D Profile。Query SHA `57d597b74e020471277deb4fc626906e75e7f862506ea9bdac4bd6df7c435dc5`、Envelope SHA `592c472d99ccc7f9f38e4402857a8e2893b08c5210babd9e2b0480ab8644f339`、Input Commitment `4154fba19784cd86d4e66d1c517aea64949619f8f554bc6bbe57ee7013763f6c` 不變。僅可用於一筆 `S2_QUERY_COUNTING_OBSERVATION_V1`，或一筆 `CONTROLLED_PROVIDER_DIAGNOSTIC` Query Embedding；每個 Target Campaign maximum_invocations=1、maximum_items=1，禁止 Document／其他 Query／其他模型／Full54／Generation 使用。原 Token／Payload／Safety Admission 不因本節變更。
+
+### 24.11.2 同一 Protected Authorization 的可選 Composite Wire
+
+新增 `december_demo_fence_review`，缺省 None；不得與頂層 `p0_unknown_review`、`p0_two_unknown_reviews`、`p0_full54_history_scope`、`full54_bounded_risk`、`query_count_success_review` 同時使用。Strict Schema 不接受未知欄位、Wildcard、空白／不完整 Metadata。
+
+Composite 包含 policy_identity、policy_approval_reference、review_reference、reviewer_identity、recorded_at、expires_at；historical_publication_sha256 與有序的兩份 historical_reviews；target_campaign_id、target_pm_approval_reference、target_source_revision、target_input_commitment、target_host_identity、target_runner_identity；credential_profile_identity、credential_profile_revision、project_identity、account_reference；query_sha256、envelope_sha256、model_identity、embedding_profile_identity；以及可選 counting_success_review。上述完整 Metadata 納入既有 Authorization Digest，透過既有 E4／Safety Authorization SHA 轉遞綁定。None 欄位省略，舊 Canonical Digest 不變；不新增 Ledger Schema、Migration、Store 或 Authority。
+
+歷史兩份 Review 原 Reference／Reviewer／Recorded At／Row SHA／Evidence SHA／Full54 Target 完整保留。抽取的 Historical Evidence Validator 只驗證原證據，不授予新 Scope；原 Legacy Target Validator 的 Purpose／Scope Gate 繼續適用。新 Target 由 Composite 自身的正式 Human Review 及獨立 PM Live Grant 綁定，不建立假的 Legacy Record 來通過舊 Validator。
+
+Target Reviewer 須與 Grant SPEC Lead 一致；Target Campaign／PM Reference／Source／Input／Host／Runner／Credential Profile／Revision／Project 全部精確一致。Embedding 僅在使用本 Composite 時可明示相同 Project／Revision；正式 Legacy Default 不改變。Safety credential revision／pricing account reference 必須與 Composite 一致；Project 與 Account Reference 各自綁定，不假設二者字串相同。Policy Approval Reference、Target Review Reference 與獨立 Live Grant 不得互相冒充。
+
+Review 必須於 Target Grant 有效期間內真實記錄：Grant.valid_from ≤ recorded_at ≤ now < expires_at ≤ Grant.expires_at。政策實作只接受 recorded_at 不早於 2026-11-25 00:00 UTC+08:00，且 expires_at 不晚於 2026-12-18 00:00 UTC+08:00。此為最晚可用範圍，不是實際核准的 Review／Grant 有效期限；每次仍須由 Authority 發布更精確期限。
+
+### 24.11.3 精確 Row 集合分類與 Final Guard
+
+原 `_FENCE_PREDICATE` 不變。Raw Set 為當前所有符合 Predicate 的 `(campaign_id, request_id)`；Reviewed Set 只含兩筆精確 Historical Rows，及可選且通過既有 `QueryCountingSuccessReview` 的單筆真正 Counting SUCCESS Row。所有被審查 Row 必須實際存在、仍符合 Raw Predicate、Commitment 完全一致；拒絕重複 Identity／缺失／變更，不使用盲目扣數或負數歸零。Remaining = Raw − Reviewed。
+
+Read-only Preflight 與原 `BEGIN IMMEDIATE` Reservation 使用相同分類；Reservation 前 Remaining 必須為空，再依原 Campaign Budget／Duplicate Guard 保留 Own Attempt。Transport 前重新載入 Protected Binding／Safety／Source，於同一唯讀 Ledger Transaction 重新驗證 Review／Origin Rows；Remaining 只可為當次精確 Own Reservation。Own Outcome／Usage／Items／Hold／Pending Observation 均須符合 Operation，不能泛稱所有 IN_FLIGHT 都可忽略。Counting Reservation 的 Pending Observation 亦綁定 Authorization Digest、Query／Body／Attempt／Timestamp。新 UNKNOWN／TIMEOUT／IN_FLIGHT、FAILED／SUCCESS 但 Usage UNKNOWN、超額 Usage、未審查或變更 Row 一律維持阻擋。
+
+不修改原 Row／Outcome／Usage、Reservation／Cost Hold、歷史 Attempts／Budget；不 Refund、Reset、Repair、Reconcile 或更換 Store。Counting countTokens 不是 Embedding Actual Usage；SUCCESS Counting 仍保存 usage_observed=UNKNOWN。政策、Implementation Authority、布林 Opt-in 或 Token Observation 都不代替獨立 Live Grant。
+
+### 24.11.4 Stage 1／Stage 2／Repeatable Demo
+
+Stage 1 只審查兩筆 Historical Rows，不可附加 Query-count Success Review 來授權 Counting。Stage 1 完成後必須停止。Stage 2 需另行審查可信 Token Result／Conservative Bound／Freshness，取得獨立 Target Grant，並在 Grant 有效期間建立 Target-specific Composite／Success Review；成功 Row、Response／Observation Commitment、原始 Source／Query／Profile／Project／Credential 等繼續依既有 Success Validator 驗證。Origin Source 必須與 Target Source 相同，不因 Source 更新自動放寬。
+
+後續新 Try 優先重用仍合法有效的 Token Proof；每個新 Campaign／Target Review／E4／Safety／Live Grant 必須重新精確綁定，不能重用已消耗的 One-call Grant。正常 Embedding SUCCESS 如具可信且不超額的 Usage Receipt，不必形成新 Raw Fence；Usage 不明、Timeout、超額或持久化不確定仍 STOP。本節不豁免假設性的 Future Failure，也不因相同 Query 自動 Resume／Retry／Resubmit。
+
+Diagnostic Ledger Admission 不授予 C Retrieval／Resolution／Snapshot Writes、Chroma Operational Persistence、D Generation／Usage／Result Writes、RCA Attempt／Artifact／Current Publication 或 SOP Outbound。Real RAG／Gemini 的 Credential／Quota／Billing／Outbound／Source／Host Gate 獨立維持，Offline PASS 不等於 Real Provider PASS。

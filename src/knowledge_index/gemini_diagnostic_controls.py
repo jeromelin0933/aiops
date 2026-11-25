@@ -118,7 +118,7 @@ def is_single_document_probe(record) -> bool:
 
 _COUNTING_OUTCOMES = frozenset(("COUNTING_RESULT_OBTAINED", "CREDENTIAL_UNAVAILABLE",
     "CREDENTIAL_INVALID", "CREDENTIAL_PROFILE_MISMATCH", "AUTHORIZATION_DENIED", "SOURCE_MISMATCH",
-    "INPUT_MISMATCH", "PAYLOAD_MISMATCH", "RUNNER_CONFLICT", "INVALID_PROVIDER_RESPONSE",
+    "INPUT_MISMATCH", "PAYLOAD_MISMATCH", "RUNNER_CONFLICT", "DECEMBER_REVIEW_MISMATCH", "INVALID_PROVIDER_RESPONSE",
     "RATE_LIMIT_QUOTA", "TRANSPORT_TIMEOUT", "TRANSPORT_FAILURE", "UNSUPPORTED_OPERATION",
     "UNSUPPORTED_MODEL", "OPERATION_MISMATCH", "PERSISTENCE_FAILURE", "AUTHORIZATION_EXPIRED", "UNKNOWN"))
 
@@ -876,8 +876,33 @@ class P0UnknownAttemptReview:
         self._matches_history(record, _P0_HISTORY_ROW, _P0_HISTORY_ROW_SHA256,
                               _P0_HISTORY_EVIDENCE_SHA256, _P0_HUMAN_REVIEW_REFERENCE)
 
+    def validate_historical_evidence(self) -> None:
+        """Validate the immutable historical evidence, NOT a new target grant."""
+        second = type(self) is P0SecondUnknownAttemptReview
+        if type(self) not in (P0UnknownAttemptReview, P0SecondUnknownAttemptReview):
+            raise DiagnosticDenied("historical review type is invalid", code="HISTORICAL_REVIEW_MISMATCH")
+        row = _P0_SECOND_HISTORY_ROW if second else _P0_HISTORY_ROW
+        row_sha = _P0_SECOND_HISTORY_ROW_SHA256 if second else _P0_HISTORY_ROW_SHA256
+        evidence_sha = _P0_SECOND_HISTORY_EVIDENCE_SHA256 if second else _P0_HISTORY_EVIDENCE_SHA256
+        reference = _P0_SECOND_HUMAN_REVIEW_REFERENCE if second else _P0_HUMAN_REVIEW_REFERENCE
+        if (any(type(getattr(self, name)) is not str or not getattr(self, name)
+                or getattr(self, name) != getattr(self, name).strip()
+                or len(getattr(self, name)) > 256 for name in self.__dataclass_fields__)
+                or not reference or self.authority_reference != _P0_UNBLOCK_AUTHORITY
+                or self.review_reference != reference
+                or self.historical_campaign_id != row["campaign_id"]
+                or self.historical_request_id != row["request_id"]
+                or self.historical_row_sha256 != row_sha
+                or self.historical_evidence_sha256 != evidence_sha
+                or not (_timestamp("2026-10-30T00:00:00+08:00")
+                        <= _timestamp(self.recorded_at) <= datetime.now(timezone.utc))
+                or (second and (self.reviewer_identity != _P0_SECOND_REVIEWER
+                                or self.recorded_at != _P0_SECOND_RECORDED_AT))):
+            raise DiagnosticDenied("historical review evidence mismatch", code="HISTORICAL_REVIEW_MISMATCH")
+
     def _matches_history(self, record, row, row_sha256, evidence_sha256, review_reference,
                          *, reviewer_identity=None) -> None:
+        self.validate_historical_evidence()
         if not review_reference:
             raise DiagnosticDenied("historical Human Review acceptance is pending",
                                    code="HISTORICAL_REVIEW_MISMATCH")
@@ -1098,6 +1123,114 @@ class QueryCountingSuccessReview:
                                    code="QUERY_SUCCESS_REVIEW_MISMATCH") from None
 
 
+DECEMBER_FENCE_POLICY = "demo-december-fence-admission-v1@1"
+_DECEMBER_IMPLEMENTATION_AUTHORITY = "PM MODIFIED APPROVAL — DEMO-FIRST BOUNDED IMPLEMENTATION"
+_DECEMBER_HISTORICAL_PUBLICATION = "63bb27eb6a6789720c9fcb3be0f02d588a24760a2a9b3f066879b99f80072fe6"
+_DECEMBER_D1_REVIEWER = "AIOps SPEC Lead"
+_DECEMBER_D1_RECORDED_AT = "2026-10-30T16:38:47.616824+00:00"
+
+
+@dataclass(frozen=True, slots=True)
+class DecemberDemoFenceReview:
+    """Finite December policy; protected per-target review, never a live grant.
+
+    Historical reviews retain their original Full54 target. The separately
+    reviewed target below is NOT a reinterpretation of either old live grant.
+    """
+    policy_identity: str
+    policy_approval_reference: str
+    review_reference: str
+    reviewer_identity: str
+    recorded_at: str
+    expires_at: str
+    historical_publication_sha256: str
+    historical_reviews: tuple[P0UnknownAttemptReview, P0SecondUnknownAttemptReview]
+    target_campaign_id: str
+    target_pm_approval_reference: str
+    target_source_revision: str
+    target_input_commitment: str
+    target_host_identity: str
+    target_runner_identity: str
+    credential_profile_identity: str
+    credential_profile_revision: str
+    project_identity: str
+    account_reference: str
+    query_sha256: str
+    envelope_sha256: str
+    model_identity: str
+    embedding_profile_identity: str
+    counting_success_review: QueryCountingSuccessReview | None = None
+
+    def matches_record(self, record) -> None:
+        def deny():
+            raise DiagnosticDenied("December target review mismatch", code="DECEMBER_REVIEW_MISMATCH")
+        for name in self.__dataclass_fields__:
+            if name in ("historical_reviews", "counting_success_review"):
+                continue
+            value = getattr(self, name)
+            if type(value) is not str or not value or value != value.strip() or len(value) > 256:
+                deny()
+        if any(word in self.policy_approval_reference.upper() or word in self.review_reference.upper()
+               for word in ("PENDING", "PROPOSED", "HUMAN_REQUIRED")):
+            deny()
+        binding = query_counting_binding()
+        if (self.policy_identity != DECEMBER_FENCE_POLICY
+                or self.policy_approval_reference in (record.pm_approval_reference, self.review_reference,
+                                                       DECEMBER_FENCE_POLICY)
+                or record.pm_approval_reference in (self.review_reference, _DECEMBER_IMPLEMENTATION_AUTHORITY)
+                or self.reviewer_identity != record.spec_lead_identity
+                or self.target_campaign_id != record.campaign_id
+                or self.target_pm_approval_reference != record.pm_approval_reference
+                or self.target_source_revision != record.source_revision
+                or self.target_input_commitment != record.input_commitment
+                or self.target_host_identity != record.authorized_host
+                or self.target_runner_identity != record.runner_identity
+                or self.credential_profile_identity != record.credential_profile_identity
+                or not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", self.credential_profile_revision)
+                or not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", self.project_identity)
+                or record.project_identity != self.project_identity
+                or record.credential_profile_revision != self.credential_profile_revision
+                or self.query_sha256 != binding["canonical_query_sha256"]
+                or self.envelope_sha256 != binding["envelope_sha256"]
+                or self.model_identity != record.model_identity or self.model_identity != "gemini-embedding-2"
+                or self.embedding_profile_identity != "spec014-gemini-embedding-2-embedding-v1"
+                or record.input_kind != "query" or record.input_commitment != QUERY_COUNTING_INPUT
+                or record.input_scope_identity != "build:" + QUERY_COUNTING_BUILD
+                or record.purpose not in (QUERY_COUNTING_OPERATION, "CONTROLLED_PROVIDER_DIAGNOSTIC")
+                or record.maximum_invocations != 1 or record.maximum_items != 1
+                or not (_timestamp(record.valid_from) <= _timestamp(self.recorded_at)
+                        <= datetime.now(timezone.utc) < _timestamp(self.expires_at)
+                        <= min(_timestamp(record.expires_at), _timestamp("2026-12-18T00:00:00+08:00")))
+                or _timestamp(self.recorded_at) < _timestamp("2026-11-25T00:00:00+08:00")
+                or self.historical_publication_sha256 != _DECEMBER_HISTORICAL_PUBLICATION
+                or type(self.historical_reviews) is not tuple or len(self.historical_reviews) != 2
+                or type(self.historical_reviews[0]) is not P0UnknownAttemptReview
+                or type(self.historical_reviews[1]) is not P0SecondUnknownAttemptReview):
+            deny()
+        for index, review in enumerate(self.historical_reviews):
+            review.validate_historical_evidence()
+            reviewer, recorded_at = ((_DECEMBER_D1_REVIEWER, _DECEMBER_D1_RECORDED_AT)
+                                     if index == 0 else (_P0_SECOND_REVIEWER, _P0_SECOND_RECORDED_AT))
+            if (review.target_campaign_id != "spec014-full54-demo-20261102-01"
+                    or review.target_pm_approval_reference != "PM-SPEC014-FULL54-DEMO-LIVE-20261102-01"
+                    or review.reviewer_identity != reviewer or review.recorded_at != recorded_at
+                    or record.campaign_id == review.historical_campaign_id
+                    or record.campaign_id == review.target_campaign_id
+                    or record.pm_approval_reference == review.target_pm_approval_reference
+                    or _timestamp(review.recorded_at) > _timestamp(self.recorded_at)):
+                deny()
+        if self.counting_success_review is not None:
+            if type(self.counting_success_review) is not QueryCountingSuccessReview:
+                deny()
+            self.counting_success_review.matches_record(record)
+            success = self.counting_success_review
+            if (success.project_identity != self.project_identity
+                    or success.secret_revision != self.credential_profile_revision
+                    or success.target_account_reference != self.account_reference
+                    or _timestamp(success.expires_at) > _timestamp(self.expires_at)):
+                deny()
+
+
 @dataclass(frozen=True, slots=True)
 class DiagnosticAuthorizationRecord:
     campaign_id: str
@@ -1139,6 +1272,7 @@ class DiagnosticAuthorizationRecord:
     p0_full54_history_scope: P0Full54HistoryScope | None = None
     full54_bounded_risk: Full54BoundedRisk | None = None
     query_count_success_review: QueryCountingSuccessReview | None = None
+    december_demo_fence_review: DecemberDemoFenceReview | None = None
 
     def __post_init__(self) -> None:
         for field in (
@@ -1155,7 +1289,8 @@ class DiagnosticAuthorizationRecord:
             raise DiagnosticDenied("migration approval is not live campaign approval")
         if self.pm_approval_reference in (_P0_UNBLOCK_AUTHORITY, _P0_SCOPE_AUTHORITY,
                                          _P0_DEMO_GATE_AUTHORITY, _P0_KNOWLEDGE_AUTHORITY, FULL54_RISK_AUTHORITY,
-                                         QUERY_SUCCESS_REVIEW_AUTHORITY):
+                                         QUERY_SUCCESS_REVIEW_AUTHORITY, DECEMBER_FENCE_POLICY,
+                                         _DECEMBER_IMPLEMENTATION_AUTHORITY):
             raise DiagnosticDenied("P0 preparation/unblocking authority is not live campaign approval")
         if any(word in self.credential_profile_identity.lower() for word in (
             "api_key", "secret", "bearer", "token", "authorization", ":", "=",
@@ -1193,7 +1328,7 @@ class DiagnosticAuthorizationRecord:
                 for value in (self.project_identity, self.credential_profile_revision):
                     if type(value) is not str or not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", value):
                         raise DiagnosticDenied("probe project or profile revision is invalid", code="CREDENTIAL_PROFILE_MISMATCH")
-            elif self.full54_bounded_risk is None and (self.project_identity is not None or self.credential_profile_revision is not None):
+            elif self.full54_bounded_risk is None and self.december_demo_fence_review is None and (self.project_identity is not None or self.credential_profile_revision is not None):
                 raise DiagnosticDenied("counting-only authorization fields are not embedding authority")
             _positive(self.maximum_item_tokens, "maximum_item_tokens")
             _positive(self.maximum_aggregate_tokens, "maximum_aggregate_tokens")
@@ -1244,6 +1379,12 @@ class DiagnosticAuthorizationRecord:
                 raise DiagnosticDenied("query success review cannot inherit historical exceptions",
                                        code="QUERY_SUCCESS_REVIEW_MISMATCH")
             self.query_count_success_review.matches_record(self)
+        if self.december_demo_fence_review is not None:
+            if (type(self.december_demo_fence_review) is not DecemberDemoFenceReview
+                    or any(v is not None for v in (self.p0_unknown_review, self.p0_two_unknown_reviews,
+                           self.p0_full54_history_scope, self.full54_bounded_risk, self.query_count_success_review))):
+                raise DiagnosticDenied("December review cannot mix legacy exceptions", code="DECEMBER_REVIEW_MISMATCH")
+            self.december_demo_fence_review.matches_record(self)
 
     @classmethod
     def from_json(cls, data: bytes) -> "DiagnosticAuthorizationRecord":
@@ -1251,7 +1392,7 @@ class DiagnosticAuthorizationRecord:
             value = _unique_json(data)
             optional = {"project_identity", "credential_profile_revision", "p0_unknown_review",
                         "p0_two_unknown_reviews", "p0_full54_history_scope", "full54_bounded_risk",
-                        "query_count_success_review"}
+                        "query_count_success_review", "december_demo_fence_review"}
             if (type(value) is not dict or not set(cls.__dataclass_fields__) - optional <= set(value)
                     or not set(value) <= set(cls.__dataclass_fields__)):
                 raise DiagnosticDenied("authorization record fields are incomplete or extra")
@@ -1285,6 +1426,24 @@ class DiagnosticAuthorizationRecord:
                 if type(review) is not dict or set(review) != set(QueryCountingSuccessReview.__dataclass_fields__):
                     raise DiagnosticDenied("query success review fields are incomplete or extra")
                 value["query_count_success_review"] = QueryCountingSuccessReview(**review)
+            composite = value.get("december_demo_fence_review")
+            if composite is not None:
+                if type(composite) is not dict or set(composite) != set(DecemberDemoFenceReview.__dataclass_fields__):
+                    raise DiagnosticDenied("December review fields are incomplete or extra")
+                history = composite["historical_reviews"]
+                if (type(history) is not list or len(history) != 2
+                        or any(type(r) is not dict or set(r) != set(P0UnknownAttemptReview.__dataclass_fields__)
+                               for r in history)):
+                    raise DiagnosticDenied("December historical review wire is invalid")
+                success = composite["counting_success_review"]
+                if success is not None:
+                    if type(success) is not dict or set(success) != set(QueryCountingSuccessReview.__dataclass_fields__):
+                        raise DiagnosticDenied("December success review wire is invalid")
+                    success = QueryCountingSuccessReview(**success)
+                value["december_demo_fence_review"] = DecemberDemoFenceReview(**{
+                    **composite, "historical_reviews": (P0UnknownAttemptReview(**history[0]),
+                                                        P0SecondUnknownAttemptReview(**history[1])),
+                    "counting_success_review": success})
             return cls(**value)
         except (UnicodeError, TypeError, ValueError) as exc:
             if isinstance(exc, DiagnosticDenied):
@@ -1300,7 +1459,7 @@ def authorization_record_digest(record: DiagnosticAuthorizationRecord) -> str:
     # Historical embedding grants retain their exact pre-extension digest.
     for name in ("project_identity", "credential_profile_revision", "p0_unknown_review",
                  "p0_two_unknown_reviews", "p0_full54_history_scope", "full54_bounded_risk",
-                 "query_count_success_review"):
+                 "query_count_success_review", "december_demo_fence_review"):
         if fields[name] is None:
             fields.pop(name)
     canonical = json.dumps(fields, sort_keys=True, ensure_ascii=True,
@@ -1804,6 +1963,13 @@ class DiagnosticSafetyArtifact:
                 or value["pricing_evidence"]["currency"] != record.cost_currency):
             raise DiagnosticDenied("safety authorization, source, input or profile binding mismatch")
         review = record.query_count_success_review
+        composite = record.december_demo_fence_review
+        if composite is not None:
+            composite.matches_record(record)
+            if (value["credential_binding"]["secret_revision"] != composite.credential_profile_revision
+                    or value["pricing_evidence"]["account_reference"] != composite.account_reference):
+                raise DiagnosticDenied("December credential/project/account mismatch", code="DECEMBER_REVIEW_MISMATCH")
+            review = composite.counting_success_review
         if review is not None:
             review.matches_record(record)
             if (value["credential_binding"]["secret_revision"] != review.secret_revision
@@ -2489,6 +2655,32 @@ _FENCE_PREDICATE = ("outcome IN ('IN_FLIGHT','UNKNOWN','TIMEOUT') OR usage_obser
                     "OR (usage_observed!='UNKNOWN' AND CAST(usage_observed AS INTEGER)>usage_reserved)")
 
 
+def _december_reviewed_rows(db, record) -> set[tuple[str, str]]:
+    """Verify exact origin rows in the caller's existing ledger transaction."""
+    record.__post_init__()
+    composite = record.december_demo_fence_review
+    fields = ("campaign_id", "request_id", "outcome", "items", "usage_reserved",
+              "cost_reserved", "usage_observed", "observation_json")
+    verified = set()
+    for review in composite.historical_reviews:
+        key = (review.historical_campaign_id, review.historical_request_id)
+        row = db.execute("SELECT " + ",".join(fields) +
+                         " FROM attempts WHERE campaign_id=? AND request_id=?", key).fetchone()
+        if key in verified or row is None or _p0_commitment(dict(zip(fields, row))) != review.historical_row_sha256:
+            raise DiagnosticDenied("December historical row changed", code="DECEMBER_REVIEW_MISMATCH")
+        verified.add(key)
+    success = composite.counting_success_review
+    if success is not None:
+        key = (success.origin_campaign_id, success.origin_request_id)
+        row = db.execute("SELECT " + ",".join(fields) +
+                         " FROM attempts WHERE campaign_id=? AND request_id=?", key).fetchone()
+        if key in verified:
+            raise DiagnosticDenied("duplicate December origin row", code="DECEMBER_REVIEW_MISMATCH")
+        success.matches_row(record, row)
+        verified.add(key)
+    return verified
+
+
 def _blocking_fence_count(db: sqlite3.Connection, record=None) -> int:
     """Read-only classification shared by preflight and atomic reservation.
 
@@ -2498,6 +2690,12 @@ def _blocking_fence_count(db: sqlite3.Connection, record=None) -> int:
     count = db.execute("SELECT COUNT(*) FROM attempts WHERE " + _FENCE_PREDICATE).fetchone()[0]
     if record is None:
         return count
+    if record.december_demo_fence_review is not None:
+        raw = set(db.execute("SELECT campaign_id,request_id FROM attempts WHERE " + _FENCE_PREDICATE))
+        reviewed = _december_reviewed_rows(db, record)
+        if not reviewed <= raw:
+            raise DiagnosticDenied("December reviewed raw fence missing", code="DECEMBER_REVIEW_MISMATCH")
+        return len(raw - reviewed)
     if record.query_count_success_review is not None:
         record.__post_init__()
         review = record.query_count_success_review
@@ -2568,7 +2766,9 @@ def inspect_local_counting_store(*, runner_sid: str, source_revision: str,
             "fresh_check": fresh, "live": "NOT AUTHORIZED",
             "live_authority": "NOT VERIFIED BY BOOTSTRAP"}
     if for_authorized_campaign:
-        query_reviewed = int(record.query_count_success_review is not None)
+        query_reviewed = int(record.query_count_success_review is not None or
+                             (record.december_demo_fence_review is not None
+                              and record.december_demo_fence_review.counting_success_review is not None))
         result.update(campaign_id=record.campaign_id, blocking_fences=blocking,
                       reviewed_historical_fences=fences-blocking-query_reviewed,
                       reviewed_query_success_fences=query_reviewed)
@@ -2663,6 +2863,38 @@ class TemporaryDiagnosticUsage:
         except sqlite3.Error as exc:
             raise DiagnosticDenied("diagnostic usage lock or record is unavailable",
                 code="PERSISTENCE_FAILURE" if is_counting_operation(record.purpose) else "AUTHORIZATION_DENIED") from exc
+
+    def revalidate_december_review(self, record, request_id, *, items, usage_units, cost_micro_units):
+        """Only our exact reservation may remain blocking immediately before send."""
+        if record.december_demo_fence_review is None:
+            return
+        try:
+            with closing(self._connect(read_only=True)) as db:
+                db.execute("PRAGMA query_only=ON")
+                db.execute("BEGIN")
+                self._check_reservation_state(db)
+                own = db.execute("SELECT outcome,items,usage_reserved,cost_reserved,usage_observed,"
+                                 "observation_json FROM attempts WHERE campaign_id=? AND request_id=?",
+                                 (record.campaign_id, request_id)).fetchone()
+                if (own is None or own[:5] != ("IN_FLIGHT", items, usage_units, cost_micro_units, "UNKNOWN")
+                        or _blocking_fence_count(db, record) != 1):
+                    raise DiagnosticDenied("December final reservation/fence mismatch", code="DECEMBER_REVIEW_MISMATCH")
+                if record.purpose == QUERY_COUNTING_OPERATION:
+                    pending = _unique_json(own[5].encode("utf-8")) if type(own[5]) is str else {}
+                    expected = dict(operation=record.purpose, authorization_sha256=authorization_record_digest(record),
+                        input_commitment=record.input_commitment, body_sha256=QUERY_COUNTING_BODY,
+                        campaign_id=record.campaign_id, attempt_id=request_id, outcome="IN_FLIGHT",
+                        code="ATTEMPT_RESERVED", observed_token_count=None, usage="UNKNOWN",
+                        query_binding=query_counting_binding())
+                    if (set(pending) != set(expected) | {"reserved_at"}
+                            or any(pending[k] != v for k, v in expected.items())
+                            or not (_timestamp(record.valid_from) <= _timestamp(pending["reserved_at"])
+                                    <= datetime.now(timezone.utc) < _timestamp(record.expires_at))):
+                        raise DiagnosticDenied("December counting reservation changed", code="DECEMBER_REVIEW_MISMATCH")
+                elif own[5] is not None:
+                    raise DiagnosticDenied("December embedding reservation changed", code="DECEMBER_REVIEW_MISMATCH")
+        except (sqlite3.Error, OSError, ValueError, TypeError, KeyError):
+            raise DiagnosticDenied("December final ledger evidence unavailable", code="DECEMBER_REVIEW_MISMATCH") from None
 
     def revalidate_query_success_review(self, record, request_id, *, items, usage_units, cost_micro_units):
         """Final read-only check; admit only our exact existing reservation.

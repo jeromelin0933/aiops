@@ -1568,6 +1568,10 @@ def _run_live(
             usage.revalidate_query_success_review(record, request_id,
                 items=len(refreshed.identities), usage_units=refreshed.usage_units,
                 cost_micro_units=refreshed.cost_micro_units)
+        if record.december_demo_fence_review is not None:
+            usage.revalidate_december_review(record, request_id,
+                items=len(refreshed.identities), usage_units=refreshed.usage_units,
+                cost_micro_units=refreshed.cost_micro_units)
 
     receipts = []
     observation = _dispatch_live(refreshed, approved, binding.sdk_byte_evidence, credential, revalidate,
@@ -1818,6 +1822,9 @@ def _run_counting_observation(operation, *, live_opt_in=False):
             latest = prepare(current, safety)
             if latest.body != prepared.body or latest.record != record:
                 raise DiagnosticDenied("counting final safety mismatch")
+            if record.december_demo_fence_review is not None:
+                usage.revalidate_december_review(record, request_id,
+                    items=1, usage_units=1, cost_micro_units=1)
         outcome, code, guard = _dispatch_counting(prepared, binding, credential, revalidate, request_id)
         evidence = usage._finish_counting(record, request_id, outcome, code, guard)
         return CountingObservation(outcome, code, evidence["observed_token_count"],

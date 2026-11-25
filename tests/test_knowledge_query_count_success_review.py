@@ -157,7 +157,7 @@ def test_wire_roundtrip_digest_binds_review_and_legacy_omits_absent(reviewed):
     assert c.DiagnosticAuthorizationRecord.from_json(json.dumps(wire).encode())==f['target']
     legacy=replace(f['target'],query_count_success_review=None)
     old=asdict(legacy)
-    for name in ('project_identity','credential_profile_revision','p0_unknown_review','p0_two_unknown_reviews','p0_full54_history_scope','full54_bounded_risk','query_count_success_review'):
+    for name in ('project_identity','credential_profile_revision','p0_unknown_review','p0_two_unknown_reviews','p0_full54_history_scope','full54_bounded_risk','query_count_success_review','december_demo_fence_review'):
         if old[name] is None:old.pop(name)
     assert c.authorization_record_digest(legacy)==sha256(json.dumps(old,sort_keys=True,ensure_ascii=True,separators=(',',':')).encode()).hexdigest()
     assert c.authorization_record_digest(f['target'])!=c.authorization_record_digest(legacy)
