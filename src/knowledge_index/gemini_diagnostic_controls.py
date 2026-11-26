@@ -1688,6 +1688,10 @@ _DEMO_COUNTING_SAFETY_SCHEMA["binding"] = dict(_QUERY_COUNTING_SAFETY_SCHEMA["bi
     bounds_basis=(DEMO_COUNTING_BOUNDS,), cost_basis=(DEMO_COUNTING_COST,))
 
 DEMO_QUERY_SAFETY_REVISION = "demo-december-single-query-safety-v1"
+DEMO_QUERY_RISK_REVISION = "demo-december-fixed-query-resource-risk-v1"
+DEMO_QUERY_RISK_BASIS = "DEMO_FIXED_QUERY_RESOURCE_RISK_V1"
+DEMO_QUERY_RISK_COST = "DEMO_QUERY_RESOURCE_OPERATION_HOLD_V1"
+DEMO_QUERY_RISK_UNITS = 8192  # local resource-risk ceiling, NOT a token count/proof
 DEMO_QUERY_BOUNDS = "DEMO_QUERY_FIXED_TOKEN_BOUND_V1"
 DEMO_QUERY_COST = "DEMO_QUERY_FREE_TIER_OPERATION_HOLD_V1"
 DECEMBER_EXECUTION_SCOPE = "demo-december-protected-execution-v1@1"
@@ -1763,7 +1767,8 @@ class DecemberDemoExecutionScope:
                 or self.mode not in ("REAL_PROVIDER", "OFFLINE_FIXTURE")
                 or record.purpose != "CONTROLLED_PROVIDER_DIAGNOSTIC" or record.input_kind != "query"
                 or record.december_demo_fence_review is None
-                or record.december_demo_fence_review.counting_success_review is None
+                or (record.december_demo_fence_review.counting_success_review is None
+                    and record.bounds_basis != DEMO_QUERY_RISK_BASIS)
                 or self.diagnostic_authorization_sha256 != authorization_record_digest(record)
                 or self.repository_revision != record.source_revision
                 or self.account_reference != safety["pricing_evidence"]["account_reference"]
@@ -1803,6 +1808,31 @@ _DEMO_QUERY_SAFETY_SCHEMA = dict(_DEMO_COUNTING_SAFETY_SCHEMA,
 _DEMO_QUERY_SAFETY_SCHEMA["binding"] = dict(_DEMO_COUNTING_SAFETY_SCHEMA["binding"],
     campaign_id="S256", request_url=(_SAFETY_URL,),
     bounds_basis=(DEMO_QUERY_BOUNDS,), cost_basis=(DEMO_QUERY_COST,))
+
+_DEMO_QUERY_RISK_SCHEMA = {k: v for k, v in _DEMO_COUNTING_SAFETY_SCHEMA.items()}
+_DEMO_QUERY_RISK_SCHEMA.update(
+    artifact_revision=(DEMO_QUERY_RISK_REVISION,), operation=("CONTROLLED_PROVIDER_DIAGNOSTIC",),
+    resource_risk=dict(method=(DEMO_QUERY_RISK_BASIS,),
+        units=(DEMO_QUERY_RISK_UNITS,), token_count=("UNKNOWN",), provider_token_limits=("UNKNOWN",),
+        maximum_input_bytes=(274,), maximum_request_bytes=(8192,), maximum_requests=(1,)))
+_DEMO_QUERY_RISK_SCHEMA["binding"] = dict(_DEMO_QUERY_SAFETY_SCHEMA["binding"],
+    bounds_basis=(DEMO_QUERY_RISK_BASIS,), cost_basis=(DEMO_QUERY_RISK_COST,))
+
+
+def _validate_demo_query_risk(value):
+    _validate_safety_wire(value, _DEMO_QUERY_RISK_SCHEMA)
+    start, end = (_safety_time(value["validity"][k]) for k in ("not_before", "expires_at"))
+    ref = value["e4_reference"]
+    profile = value["credential_binding"]["profile_identity"]
+    if (not start <= datetime.now(timezone.utc) < end
+            or end > datetime(2026,12,18,tzinfo=timezone(timedelta(hours=8)))
+            or _safety_time(value["publication"]["published_at"]) > start
+            or _safety_time(value["free_tier_evidence"]["human_account_confirmation"]["confirmed_at"]) > start
+            or not _safety_time(ref["valid_from"]) <= start < end <= _safety_time(ref["valid_until"])
+            or value["lifecycle_state"] != "ACTIVE"
+            or any(word in profile.lower() for word in (
+                "api_key", "secret", "bearer", "token", "authorization", ":", "="))):
+        raise DiagnosticDenied("bounded query publication/window/credential mismatch")
 
 
 def _validate_demo_query_safety(value: dict) -> None:
@@ -2034,6 +2064,14 @@ class DiagnosticSafetyArtifact:
                 raise DiagnosticDenied("safety JSON numeric constant is invalid")
             value = json.loads(data.decode("utf-8"), object_pairs_hook=_safety_unique,
                                parse_constant=constant)
+            if type(value) is dict and value.get("artifact_revision") == DEMO_QUERY_RISK_REVISION:
+                execution = value.pop("december_demo_execution", None)
+                if execution is not None:
+                    DecemberDemoExecutionScope.from_mapping(execution)
+                _validate_demo_query_risk(value)
+                if execution is not None:
+                    value["december_demo_execution"] = execution
+                return cls(_safety_freeze(value))
             if type(value) is dict and value.get("artifact_revision") == DEMO_COUNTING_SAFETY_REVISION:
                 _validate_demo_counting_safety(value)
                 return cls(_safety_freeze(value))
@@ -2186,6 +2224,28 @@ class DiagnosticSafetyArtifact:
         if not (_timestamp(record.valid_from) <= start < end <= _timestamp(record.expires_at)
                 and start <= now < end):
             raise DiagnosticDenied("safety or authorization validity is unavailable")
+        if value["artifact_revision"] == DEMO_QUERY_RISK_REVISION:
+            if (record.purpose != "CONTROLLED_PROVIDER_DIAGNOSTIC"
+                    or record.bounds_basis != DEMO_QUERY_RISK_BASIS
+                    or record.cost_basis != DEMO_QUERY_RISK_COST
+                    or approved.kind != "query" or approved.identities != (QUERY_COUNTING_BUILD,)
+                    or approved.envelopes != (QUERY_COUNTING_ENVELOPE,)
+                    or record.maximum_items != 1 or record.maximum_invocations != 1
+                    or record.maximum_item_bytes != 274
+                    or not 0 < record.maximum_payload_bytes <= 8192
+                    or record.maximum_item_tokens != DEMO_QUERY_RISK_UNITS
+                    or record.maximum_aggregate_tokens != DEMO_QUERY_RISK_UNITS
+                    or record.maximum_usage_units != DEMO_QUERY_RISK_UNITS
+                    or value["project_identity"] != record.project_identity
+                    or dict(value["query_binding"]) != query_counting_binding()
+                    or record.december_demo_fence_review is None
+                    or record.december_demo_fence_review.counting_success_review is not None
+                    or value["credential_binding"]["secret_revision"] != record.credential_profile_revision):
+                raise DiagnosticDenied("bounded query identity/resource-risk mismatch")
+            self.require_free_tier_permission(record)
+            if "december_demo_execution" in value:
+                self.demo_execution_scope(record)
+            return
         if value["artifact_revision"] == DEMO_QUERY_SAFETY_REVISION:
             composite = record.december_demo_fence_review
             review = composite.counting_success_review if composite is not None else None
@@ -2273,7 +2333,7 @@ class DiagnosticSafetyArtifact:
     def demo_execution_scope(self, record):
         value = self._validated_fields()
         raw = value.get("december_demo_execution")
-        if raw is None or value["artifact_revision"] != DEMO_QUERY_SAFETY_REVISION:
+        if raw is None or value["artifact_revision"] not in (DEMO_QUERY_SAFETY_REVISION, DEMO_QUERY_RISK_REVISION):
             raise DiagnosticDenied("a separate protected December execution scope is required")
         # Convert the immutable JSON tree back to its strict wire representation.
         def thaw(v):

@@ -44,6 +44,7 @@ from .gemini_diagnostic_controls import (
     is_single_document_probe, SINGLE_PROBE_RISK_CAP,
     FULL54_RISK_BASIS,
     DEMO_QUERY_SAFETY_REVISION, DEMO_QUERY_BOUNDS,
+    DEMO_QUERY_RISK_REVISION, DEMO_QUERY_RISK_BASIS, DEMO_QUERY_RISK_UNITS,
 )
 from .google_embedding_adapter import (
     GEMINI_MODEL, GeminiEmbedding2Verification, GoogleEmbeddingAdapter,
@@ -154,9 +155,11 @@ def evaluate_diagnostic_safety(
     risk = record.full54_bounded_risk is not None and not allow_synthetic
     demo = (not allow_synthetic and record.bounds_basis == DEMO_QUERY_BOUNDS
             and basis.reference == DEMO_QUERY_SAFETY_REVISION)
+    query_risk = (not allow_synthetic and record.bounds_basis == DEMO_QUERY_RISK_BASIS
+                  and basis.reference == DEMO_QUERY_RISK_REVISION)
     if risk:
         record.__post_init__()
-    if basis.status != ("SYNTHETIC_OFFLINE_ONLY" if allow_synthetic else "BOUNDED_RISK" if risk else "VERIFIED"):
+    if basis.status != ("SYNTHETIC_OFFLINE_ONLY" if allow_synthetic else "BOUNDED_RISK" if risk or query_risk else "VERIFIED"):
         raise DiagnosticDenied("diagnostic safety evidence is not live applicable")
     if not allow_synthetic and proof.evidence_identity == "SYNTHETIC_OFFLINE_ONLY":
         raise DiagnosticDenied("synthetic token counter cannot establish live safety")
@@ -169,7 +172,7 @@ def evaluate_diagnostic_safety(
         or basis.sdk != record.sdk_baseline or basis.api != record.api_version
         or basis.kind != kind or basis.input_commitment != record.input_commitment
         or basis.bounds_basis != record.bounds_basis or basis.cost_basis != record.cost_basis
-        or basis.token_method != (FULL54_RISK_BASIS if risk else "PM_ACCEPTED_MODEL_LIMIT_RISK_CAP" if probe else
+        or basis.token_method != (DEMO_QUERY_RISK_BASIS if query_risk else FULL54_RISK_BASIS if risk else "PM_ACCEPTED_MODEL_LIMIT_RISK_CAP" if probe else
                                   "SYNTHETIC_BYTES_NOT_TOKENS" if allow_synthetic
                                   else "MODEL_COMPATIBLE_UPPER_BOUND")
         or type(basis.valid_until) is not datetime
@@ -189,7 +192,7 @@ def evaluate_diagnostic_safety(
             raise DiagnosticDenied("risk caps cannot be represented as verified provider limits")
         item_limit, item_token_limit, aggregate_limit = 9, 8192, 73728
         payload_limit = record.maximum_payload_bytes
-    elif demo:
+    elif demo or query_risk:
         if (kind != "query" or identities != (QUERY_COUNTING_BUILD,)
                 or texts != (QUERY_COUNTING_ENVELOPE,)
                 or any(v is not None for v in (basis.provider_item_limit,
@@ -220,7 +223,7 @@ def evaluate_diagnostic_safety(
         payload_limit = _checked_positive(basis.provider_payload_byte_limit,
                                           "provider payload limit")
     if basis.price_tier == "FREE_TIER_TEXT_V1":
-        valid_rate = (basis.price_micro_units_per_million_tokens is None if demo else
+        valid_rate = (basis.price_micro_units_per_million_tokens is None if demo or query_risk else
                       type(basis.price_micro_units_per_million_tokens) is int
                       and basis.price_micro_units_per_million_tokens == 0)
         if not valid_rate or basis.free_tier_permission_reference != record.pm_approval_reference:
@@ -240,7 +243,7 @@ def evaluate_diagnostic_safety(
         item_bytes = tuple(len(text.encode("utf-8")) for text in texts)
         # Compatibility DTO fields named *_tokens carry explicitly labeled
         # local admission units ONLY for this protected risk basis.
-        item_tokens = (8192,) * len(texts) if risk else tuple(proof.count_tokens(text) for text in texts)
+        item_tokens = (8192,) * len(texts) if risk or query_risk else tuple(proof.count_tokens(text) for text in texts)
         if probe and item_tokens != (SINGLE_PROBE_RISK_CAP,):
             raise ValueError("probe admission risk cap mismatch")
         payload = _serialized(contents, config)
@@ -290,7 +293,7 @@ def evaluate_diagnostic_safety(
     return DiagnosticSafetyDecision(
         digest, len(texts), item_bytes, item_tokens,
         aggregate, bounded_payload_bytes, conservative_cost, basis.status,
-        FULL54_RISK_BASIS if risk else "PM_ACCEPTED_MODEL_LIMIT_RISK_CAP" if probe else
+        DEMO_QUERY_RISK_BASIS if query_risk else FULL54_RISK_BASIS if risk else "PM_ACCEPTED_MODEL_LIMIT_RISK_CAP" if probe else
         "DEMO_FIXED_QUERY_TOKEN_BOUND_CAMPAIGN_LIMITS_V1" if demo else
         "SYNTHETIC_OFFLINE_ONLY" if allow_synthetic else "MODEL_COMPATIBLE_UPPER_BOUND",
     )
@@ -395,7 +398,8 @@ def _validate_sdk_evidence_binding(
     if not isinstance(evidence, DiagnosticSdkByteEvidence):
         raise DiagnosticDenied("SDK byte evidence is missing")
     if not offline_harness:
-        if (prepared.safety_decision.evidence_status != ("BOUNDED_RISK" if prepared.record.full54_bounded_risk else "VERIFIED")
+        if (prepared.safety_decision.evidence_status != ("BOUNDED_RISK" if prepared.record.full54_bounded_risk
+                or prepared.record.bounds_basis == DEMO_QUERY_RISK_BASIS else "VERIFIED")
                 or evidence.status != "HOST_CONTROLLED_E4_ONLY"):
             raise DiagnosticDenied("trusted live SDK byte evidence source is not provisioned")
     if evidence.status not in ("SYNTHETIC_OFFLINE_ONLY", "HOST_CONTROLLED_E4_ONLY"):
@@ -920,6 +924,26 @@ def _safety_from_artifact(record, texts, artifact):
             None, None, None, None, "FREE_TIER_TEXT_V1", "USD", 0,
             datetime.fromisoformat(value["validity"]["expires_at"].replace("Z", "+00:00")), permission)
         return proof, basis, SINGLE_PROBE_RISK_CAP, 1
+    if value["artifact_revision"] == DEMO_QUERY_RISK_REVISION:
+        if record.bounds_basis != DEMO_QUERY_RISK_BASIS or texts != (QUERY_COUNTING_ENVELOPE,):
+            raise DiagnosticDenied("bounded query cannot admit another input")
+        permission = artifact.require_free_tier_permission(record)
+        # Compatibility DTO: this callback supplies named local RISK UNITS,
+        # never a measured/estimated token count or provider-limit assertion.
+        proof = GeminiEmbedding2Verification(count_tokens=lambda _: DEMO_QUERY_RISK_UNITS,
+            serialize_payload=_serialized, max_item_tokens=DEMO_QUERY_RISK_UNITS,
+            max_aggregate_tokens=DEMO_QUERY_RISK_UNITS, max_provider_items=1,
+            max_item_bytes=274, max_payload_bytes=min(8192,record.maximum_payload_bytes),
+            normalization_tolerance=record.normalization_tolerance,
+            evidence_identity=DEMO_QUERY_RISK_REVISION)
+        basis = DiagnosticSafetyBasis("BOUNDED_RISK", DEMO_QUERY_RISK_REVISION, record.campaign_id,
+            record.source_revision, record.input_scope_identity, _authorization_record_digest(record),
+            record.provider_identity, record.model_identity, record.sdk_baseline, record.api_version,
+            "query", record.input_commitment, value["e4_reference"]["canonical_json_sha256"],
+            record.bounds_basis, record.cost_basis, DEMO_QUERY_RISK_BASIS,
+            None, None, None, None, "FREE_TIER_TEXT_V1", "USD", None,
+            datetime.fromisoformat(value["validity"]["expires_at"].replace("Z", "+00:00")),permission)
+        return proof,basis,DEMO_QUERY_RISK_UNITS,1
     bounds = artifact.require_accepted_evidence()
     free_permission = artifact.require_free_tier_permission(record)
     digests = tuple(sha256(text.encode("utf-8")).hexdigest() for text in texts)
@@ -1510,7 +1534,7 @@ def _run_live(
         raise DiagnosticDenied("counting cannot dispatch embedding", code="OPERATION_MISMATCH")
     if not isinstance(request, (ProviderEmbeddingRequest, QueryEmbeddingRequest)):
         raise DiagnosticDenied("authorized diagnostic input is not available")
-    if record.bounds_basis == DEMO_QUERY_BOUNDS and (
+    if record.bounds_basis in (DEMO_QUERY_BOUNDS, DEMO_QUERY_RISK_BASIS) and (
         not isinstance(request, QueryEmbeddingRequest)
         or request.query.text != QUERY_COUNTING_TEXT or request.query.filters
         or request.frozen_build_identity != QUERY_COUNTING_BUILD
@@ -1577,7 +1601,7 @@ def _run_live(
     artifact.matches_record_input(record, approved, binding.sdk_byte_evidence, prepared.facts.source_revision)
     if is_single_document_probe(record):
         artifact.require_single_probe(record, approved, binding.sdk_byte_evidence)
-    else:
+    elif artifact.fields.get("artifact_revision") != DEMO_QUERY_RISK_REVISION:
         artifact.require_accepted_evidence()
     usage = LiveDiagnosticUsage()
     refreshed = prepare()
@@ -1622,9 +1646,10 @@ def _run_live(
     observation = _dispatch_live(refreshed, approved, binding.sdk_byte_evidence, credential, revalidate,
         _attempt_id=request_id, _usage_sink=receipts, _vectors=_query_vectors)
     observation = _record_live_observation(usage, refreshed, request_id, observation, receipts, binding.sdk_byte_evidence)
-    if artifact.fields.get("artifact_revision") == DEMO_QUERY_SAFETY_REVISION:
+    if artifact.fields.get("artifact_revision") in (DEMO_QUERY_SAFETY_REVISION, DEMO_QUERY_RISK_REVISION):
         observation = replace(observation,
-            admission_usage_basis="DEMO_FIXED_QUERY_TOKEN_BOUND_CAMPAIGN_LIMITS_V1",
+            admission_usage_basis=(DEMO_QUERY_RISK_BASIS if record.bounds_basis == DEMO_QUERY_RISK_BASIS
+                                   else "DEMO_FIXED_QUERY_TOKEN_BOUND_CAMPAIGN_LIMITS_V1"),
             billing_status="INTERNAL_HOLD_NOT_PROVIDER_PRICE_OR_COST_CAP")
     if is_single_document_probe(record):
         observation = replace(observation,

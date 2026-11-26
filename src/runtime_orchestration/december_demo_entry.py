@@ -118,7 +118,9 @@ class AdmittedDecemberExecution:
             before_query=phase in ("INCIDENT_EVIDENCE", "KNOWLEDGE_OPEN",
                                   "BEFORE_RETRIEVAL", "BEFORE_QUERY")
                          or phase in ("OPEN", "WORKSPACE") and not self.workspace.exists(),
-            required_usage_units=sum(safety.require_accepted_evidence().values()))
+            required_usage_units=(controls.DEMO_QUERY_RISK_UNITS
+                if safety.fields["artifact_revision"] == controls.DEMO_QUERY_RISK_REVISION
+                else sum(safety.require_accepted_evidence().values())))
 
     def generation_config(self):
         from llm_generation.config import load_generation_config
