@@ -1130,6 +1130,92 @@ _DECEMBER_D1_REVIEWER = "AIOps SPEC Lead"
 _DECEMBER_D1_RECORDED_AT = "2026-10-30T16:38:47.616824+00:00"
 
 
+_DECEMBER_STAGE1_CAMPAIGN = "dec17-s2-query-count-stage1-20261125-01"
+_DECEMBER_STAGE1_ATTEMPT = "s2-query-counting." + QUERY_COUNTING_BODY
+_DECEMBER_STAGE1_SOURCE = "bb99ae92c6805b7322de19089ae05e967b026cc7"
+_DECEMBER_STAGE1_ROW_SHA = "41240e39b7349d6afee2764f8f86f1856da541b7b63112fdde58485051169b83"
+_DECEMBER_STAGE1_OBSERVATION_SHA = "6775aec6a40693f5e10ff11f6cdfaa9222e3305f594098590bcb819cc07d2a58"
+
+
+@dataclass(frozen=True, slots=True)
+class DecemberStage1UnknownReview:
+    """One exact immutable UNKNOWN origin, not success, refund or token proof.
+
+    Target credential/project/account/input/Host bindings are also committed by
+    its enclosing Composite and the existing protected Authorization/E4/Safety.
+    Constructing this DTO does not publish a Human review or grant authority.
+    """
+    review_reference: str
+    reviewer_identity: str
+    recorded_at: str
+    expires_at: str
+    disposition: str
+    origin_campaign_id: str
+    origin_request_id: str
+    origin_source_revision: str
+    row_sha256: str
+    observation_sha256: str
+    target_campaign_id: str
+    target_pm_approval_reference: str
+    target_source_revision: str
+
+    def matches_record(self, record) -> None:
+        def deny():
+            raise DiagnosticDenied("December Stage1 UNKNOWN review mismatch", code="DECEMBER_REVIEW_MISMATCH")
+        for name in self.__dataclass_fields__:
+            v = getattr(self, name)
+            if type(v) is not str or not v or v != v.strip() or len(v) > 256:
+                deny()
+        if (self.disposition != "NON_BLOCKING_FOR_THIS_CAMPAIGN_ONLY"
+                or self.origin_campaign_id != _DECEMBER_STAGE1_CAMPAIGN
+                or self.origin_request_id != _DECEMBER_STAGE1_ATTEMPT
+                or self.origin_source_revision != _DECEMBER_STAGE1_SOURCE
+                or self.row_sha256 != _DECEMBER_STAGE1_ROW_SHA
+                or self.observation_sha256 != _DECEMBER_STAGE1_OBSERVATION_SHA
+                or self.target_campaign_id != record.campaign_id
+                or record.campaign_id == self.origin_campaign_id
+                or self.target_pm_approval_reference != record.pm_approval_reference
+                or record.pm_approval_reference == "PM-PRD004-20261125-STAGE1-01"
+                or self.review_reference == record.pm_approval_reference
+                or any(w in self.review_reference.upper() for w in ("PENDING", "PROPOSED", "HUMAN_REQUIRED"))
+                or self.target_source_revision != record.source_revision
+                or self.reviewer_identity != record.spec_lead_identity
+                or record.purpose != "CONTROLLED_PROVIDER_DIAGNOSTIC" or record.input_kind != "query"
+                or record.bounds_basis != DEMO_QUERY_RISK_BASIS or record.cost_basis != DEMO_QUERY_RISK_COST
+                or record.input_commitment != QUERY_COUNTING_INPUT
+                or record.input_scope_identity != "build:" + QUERY_COUNTING_BUILD
+                or not (_timestamp(record.valid_from) <= _timestamp(self.recorded_at)
+                        <= datetime.now(timezone.utc) < _timestamp(self.expires_at)
+                        <= _timestamp(record.expires_at))):
+            deny()
+
+    def matches_row(self, record, row) -> None:
+        self.matches_record(record)
+        fields = ("campaign_id", "request_id", "outcome", "items", "usage_reserved",
+                  "cost_reserved", "usage_observed", "observation_json")
+        try:
+            if (row is None or len(row) != 8
+                    or row[:7] != (self.origin_campaign_id, self.origin_request_id, "UNKNOWN", 1, 1, 1, "UNKNOWN")
+                    or _p0_commitment(dict(zip(fields, row))) != self.row_sha256
+                    or type(row[7]) is not str
+                    or hashlib.sha256(row[7].encode("utf-8")).hexdigest() != self.observation_sha256):
+                raise ValueError("origin changed")
+            v = _unique_json(row[7].encode("utf-8"))
+            expected = dict(operation=QUERY_COUNTING_OPERATION, campaign_id=self.origin_campaign_id,
+                attempt_id=self.origin_request_id, source_revision=self.origin_source_revision,
+                outcome="UNKNOWN", code="TRANSPORT_FAILURE", usage="UNKNOWN",
+                observed_token_count=None, response_sha256=None, provider="google", model="gemini-embedding-2",
+                api="v1", sdk="google-genai==2.25.0", body_sha256=QUERY_COUNTING_BODY,
+                profile_identity=record.credential_profile_identity, profile_revision=record.credential_profile_revision,
+                project_identity=record.project_identity, host_identity=record.authorized_host,
+                runner_identity=record.runner_identity, query_binding=query_counting_binding())
+            if (type(v) is not dict or any(k not in v or v[k] != value for k, value in expected.items())
+                    or _timestamp(v["recorded_at"]) > _timestamp(self.recorded_at)):
+                raise ValueError("origin observation changed")
+        except (KeyError, TypeError, ValueError, DiagnosticDenied):
+            raise DiagnosticDenied("December Stage1 UNKNOWN origin changed", code="DECEMBER_REVIEW_MISMATCH") from None
+
+
 @dataclass(frozen=True, slots=True)
 class DecemberDemoFenceReview:
     """Finite December policy; protected per-target review, never a live grant.
@@ -1160,12 +1246,13 @@ class DecemberDemoFenceReview:
     model_identity: str
     embedding_profile_identity: str
     counting_success_review: QueryCountingSuccessReview | None = None
+    stage1_unknown_review: DecemberStage1UnknownReview | None = None
 
     def matches_record(self, record) -> None:
         def deny():
             raise DiagnosticDenied("December target review mismatch", code="DECEMBER_REVIEW_MISMATCH")
         for name in self.__dataclass_fields__:
-            if name in ("historical_reviews", "counting_success_review"):
+            if name in ("historical_reviews", "counting_success_review", "stage1_unknown_review"):
                 continue
             value = getattr(self, name)
             if type(value) is not str or not value or value != value.strip() or len(value) > 256:
@@ -1222,12 +1309,22 @@ class DecemberDemoFenceReview:
         if self.counting_success_review is not None:
             if type(self.counting_success_review) is not QueryCountingSuccessReview:
                 deny()
+
             self.counting_success_review.matches_record(record)
             success = self.counting_success_review
             if (success.project_identity != self.project_identity
                     or success.secret_revision != self.credential_profile_revision
                     or success.target_account_reference != self.account_reference
                     or _timestamp(success.expires_at) > _timestamp(self.expires_at)):
+                deny()
+
+        if self.stage1_unknown_review is not None:
+            if (type(self.stage1_unknown_review) is not DecemberStage1UnknownReview
+                    or self.counting_success_review is not None
+                    or self.stage1_unknown_review.review_reference == self.policy_approval_reference):
+                deny()
+            self.stage1_unknown_review.matches_record(record)
+            if _timestamp(self.stage1_unknown_review.expires_at) > _timestamp(self.expires_at):
                 deny()
 
 
@@ -1428,7 +1525,9 @@ class DiagnosticAuthorizationRecord:
                 value["query_count_success_review"] = QueryCountingSuccessReview(**review)
             composite = value.get("december_demo_fence_review")
             if composite is not None:
-                if type(composite) is not dict or set(composite) != set(DecemberDemoFenceReview.__dataclass_fields__):
+                fields = set(DecemberDemoFenceReview.__dataclass_fields__)
+                if (type(composite) is not dict
+                        or not fields - {"stage1_unknown_review"} <= set(composite) <= fields):
                     raise DiagnosticDenied("December review fields are incomplete or extra")
                 history = composite["historical_reviews"]
                 if (type(history) is not list or len(history) != 2
@@ -1440,10 +1539,15 @@ class DiagnosticAuthorizationRecord:
                     if type(success) is not dict or set(success) != set(QueryCountingSuccessReview.__dataclass_fields__):
                         raise DiagnosticDenied("December success review wire is invalid")
                     success = QueryCountingSuccessReview(**success)
+                unknown = composite.get("stage1_unknown_review")
+                if unknown is not None:
+                    if type(unknown) is not dict or set(unknown) != set(DecemberStage1UnknownReview.__dataclass_fields__):
+                        raise DiagnosticDenied("December Stage1 UNKNOWN review wire is invalid")
+                    unknown = DecemberStage1UnknownReview(**unknown)
                 value["december_demo_fence_review"] = DecemberDemoFenceReview(**{
                     **composite, "historical_reviews": (P0UnknownAttemptReview(**history[0]),
                                                         P0SecondUnknownAttemptReview(**history[1])),
-                    "counting_success_review": success})
+                    "counting_success_review": success, "stage1_unknown_review": unknown})
             return cls(**value)
         except (UnicodeError, TypeError, ValueError) as exc:
             if isinstance(exc, DiagnosticDenied):
@@ -1462,6 +1566,9 @@ def authorization_record_digest(record: DiagnosticAuthorizationRecord) -> str:
                  "query_count_success_review", "december_demo_fence_review"):
         if fields[name] is None:
             fields.pop(name)
+    composite = fields.get("december_demo_fence_review")
+    if composite is not None and composite["stage1_unknown_review"] is None:
+        composite.pop("stage1_unknown_review")  # exact old Composite canonical bytes
     canonical = json.dumps(fields, sort_keys=True, ensure_ascii=True,
                            separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(canonical).hexdigest()
@@ -2974,6 +3081,15 @@ def _december_reviewed_rows(db, record) -> set[tuple[str, str]]:
         if key in verified:
             raise DiagnosticDenied("duplicate December origin row", code="DECEMBER_REVIEW_MISMATCH")
         success.matches_row(record, row)
+        verified.add(key)
+    unknown = composite.stage1_unknown_review
+    if unknown is not None:
+        key = (unknown.origin_campaign_id, unknown.origin_request_id)
+        row = db.execute("SELECT " + ",".join(fields) +
+                         " FROM attempts WHERE campaign_id=? AND request_id=?", key).fetchone()
+        if key in verified:
+            raise DiagnosticDenied("duplicate December origin row", code="DECEMBER_REVIEW_MISMATCH")
+        unknown.matches_row(record, row)
         verified.add(key)
     return verified
 
