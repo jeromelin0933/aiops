@@ -14,7 +14,7 @@ from contextlib import closing, contextmanager
 import stat
 import uuid
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -1664,6 +1664,193 @@ _QUERY_COUNTING_SAFETY_SCHEMA.pop("complete_corpus_commitment")
 _QUERY_COUNTING_SAFETY_SCHEMA.update(operation=(QUERY_COUNTING_OPERATION,),
     query_binding={k: (v,) for k, v in query_counting_binding().items()})
 
+# December Stage 1 only. This is an alternative evidence shape, not a token
+# proof, provider price guarantee, publication or permission to send a request.
+DEMO_COUNTING_SAFETY_REVISION = "demo-december-stage1-counting-safety-v1"
+DEMO_COUNTING_BOUNDS = "DEMO_STAGE1_FIXED_QUERY_V1"
+DEMO_COUNTING_COST = "DEMO_STAGE1_FREE_TIER_OPERATION_HOLD_V1"
+_DEMO_COUNTING_SAFETY_SCHEMA = {
+    k: v for k, v in _QUERY_COUNTING_SAFETY_SCHEMA.items()
+    if k not in ("pricing_evidence", "provider_limits", "free_tier_evidence")
+}
+_DEMO_COUNTING_SAFETY_SCHEMA.update(
+    artifact_revision=(DEMO_COUNTING_SAFETY_REVISION,),
+    project_identity=("gen-lang-client-0149178738",),
+    pricing_evidence=dict(account_reference="S256", price_tier=("FREE_TIER_TEXT_V1",), currency=("USD",)),
+    free_tier_evidence=dict(
+        human_account_confirmation=dict(reference="S256", confirmed_by="S256", confirmed_at="UTCSEC",
+            billing_status=("FREE_TIER_NO_LINKED_PAID_BILLING",)),
+        data_use_permission=dict(pm_approval_reference="S256", authority_identity="S256")),
+)
+_DEMO_COUNTING_SAFETY_SCHEMA["binding"] = dict(_QUERY_COUNTING_SAFETY_SCHEMA["binding"],
+    campaign_id=("dec17-s2-query-count-stage1-20261125-01",), kind=("query",),
+    input_scope_identity=("build:" + QUERY_COUNTING_BUILD,), input_commitment=(QUERY_COUNTING_INPUT,),
+    bounds_basis=(DEMO_COUNTING_BOUNDS,), cost_basis=(DEMO_COUNTING_COST,))
+
+DEMO_QUERY_SAFETY_REVISION = "demo-december-single-query-safety-v1"
+DEMO_QUERY_BOUNDS = "DEMO_QUERY_FIXED_TOKEN_BOUND_V1"
+DEMO_QUERY_COST = "DEMO_QUERY_FREE_TIER_OPERATION_HOLD_V1"
+DECEMBER_EXECUTION_SCOPE = "demo-december-protected-execution-v1@1"
+DECEMBER_EXTERNAL_ROOT = Path(r"C:\Users\vincent\AppData\Local\Temp\aiops-s2-cd-integration-20261120-yfgzsinh")
+DECEMBER_EXTERNAL_NAMES = frozenset({"demo.py", "offline_ports.py", "test_offline_integration.py",
+    "generation-demo.json", "knowledge-demo.CANDIDATE.NOT_APPROVED.yaml"})
+DECEMBER_OPERATION_SCOPES = tuple(sorted(("INCIDENT_EVIDENCE_FIXTURE", "C_RETRIEVAL_SNAPSHOT",
+    "D_COUNT_GENERATE_VALIDATE", "A_E_DEMO_PUBLICATION", "CHROMA_OPERATIONAL_PERSISTENCE")))
+
+
+@dataclass(frozen=True, slots=True)
+class ExternalDemoCommitment:
+    path: str
+    version: str
+    sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class DecemberDemoExecutionScope:
+    """Separate PM execution/acceptance scope inside the EXISTING safety authority.
+
+    The diagnostic record still grants only its one embedding. No field here
+    changes a domain's lifecycle, ledger, reservation or publication authority.
+    A caller-created DTO is not a protected publication.
+    """
+    scope_identity: str
+    decision: str
+    mode: str
+    grant_reference: str
+    issuer_identity: str
+    valid_from: str
+    expires_at: str
+    diagnostic_authorization_sha256: str
+    repository_revision: str
+    account_reference: str
+    acceptance_reference: str
+    accepted_by: str
+    accepted_at: str
+    acceptance_expires_at: str
+    run_id: str
+    generation_model: str
+    generation_profile: str
+    generation_profile_version: str
+    generation_api: str
+    physical_call_allocation: tuple[int, int, int]
+    operation_scopes: tuple[str, ...]
+    external_files: tuple[ExternalDemoCommitment, ...]
+
+    @classmethod
+    def from_mapping(cls, raw):
+        if type(raw) is not dict or set(raw) != set(cls.__dataclass_fields__):
+            raise DiagnosticDenied("December execution scope fields mismatch")
+        files = raw["external_files"]
+        if (type(files) is not list or len(files) != len(DECEMBER_EXTERNAL_NAMES)
+                or any(type(v) is not dict or set(v) != set(ExternalDemoCommitment.__dataclass_fields__)
+                       for v in files)
+                or type(raw["operation_scopes"]) is not list
+                or type(raw["physical_call_allocation"]) is not list):
+            raise DiagnosticDenied("December external acceptance wire mismatch")
+        return cls(**{**raw, "external_files": tuple(ExternalDemoCommitment(**v) for v in files),
+            "operation_scopes": tuple(raw["operation_scopes"]),
+            "physical_call_allocation": tuple(raw["physical_call_allocation"])})
+
+    def matches_record(self, record, safety) -> None:
+        for name in self.__dataclass_fields__:
+            if name not in ("external_files", "physical_call_allocation", "operation_scopes"):
+                v = getattr(self, name)
+                if type(v) is not str or not v or v != v.strip() or len(v) > 256:
+                    raise DiagnosticDenied("December execution metadata is invalid")
+        now = datetime.now(timezone.utc)
+        if (self.scope_identity != DECEMBER_EXECUTION_SCOPE
+                or self.decision != "APPROVE_DECEMBER_DEMO_EXECUTION"
+                or self.mode not in ("REAL_PROVIDER", "OFFLINE_FIXTURE")
+                or record.purpose != "CONTROLLED_PROVIDER_DIAGNOSTIC" or record.input_kind != "query"
+                or record.december_demo_fence_review is None
+                or record.december_demo_fence_review.counting_success_review is None
+                or self.diagnostic_authorization_sha256 != authorization_record_digest(record)
+                or self.repository_revision != record.source_revision
+                or self.account_reference != safety["pricing_evidence"]["account_reference"]
+                or self.accepted_by != record.spec_lead_identity
+                or self.generation_model != "gemini-3.5-flash-lite"
+                or self.generation_profile != "demo-google-gemini35-flash-lite-generation-profile-v1"
+                or self.generation_profile_version != "1" or self.generation_api != "v1beta"
+                or self.operation_scopes != DECEMBER_OPERATION_SCOPES
+                or self.physical_call_allocation != (1, 1, 1)
+                or any(type(v) is not int for v in self.physical_call_allocation)
+                or not re.fullmatch(r"dec17-[a-z0-9-]{1,56}", self.run_id)
+                or not (_timestamp(record.valid_from) <= _timestamp(self.valid_from) <= now
+                        < _timestamp(self.expires_at) <= _timestamp(record.expires_at))
+                or not (_timestamp(self.accepted_at) <= now < _timestamp(self.acceptance_expires_at))
+                or _timestamp(self.acceptance_expires_at) < _timestamp(self.expires_at)
+                or _timestamp(self.expires_at) > _safety_time(safety["validity"]["expires_at"])
+                or _timestamp(self.expires_at) > datetime(2026, 12, 18, tzinfo=timezone(timedelta(hours=8)))):
+            raise DiagnosticDenied("December execution grant, acceptance or allocation mismatch")
+        if (self.grant_reference in ("PM-PRD004-20261125-STAGE1-01", DECEMBER_FENCE_POLICY,
+                                    QUERY_SUCCESS_REVIEW_AUTHORITY, _DECEMBER_IMPLEMENTATION_AUTHORITY)
+                or any(word in (self.grant_reference + self.acceptance_reference).upper()
+                       for word in ("PENDING", "PROPOSED", "NOT_AUTHORIZED"))
+                or self.mode == "REAL_PROVIDER" and any(word in self.grant_reference.upper()
+                                                       for word in ("OFFLINE", "SYNTHETIC", "FIXTURE"))):
+            raise DiagnosticDenied("preparation/fixture metadata is not a PM Live Grant")
+        expected = {str(DECEMBER_EXTERNAL_ROOT / name) for name in DECEMBER_EXTERNAL_NAMES}
+        if (len(self.external_files) != len(expected)
+                or {v.path for v in self.external_files} != expected
+                or any(type(v) is not ExternalDemoCommitment or v.version != "1"
+                       or not re.fullmatch(r"[0-9a-f]{64}", v.sha256) for v in self.external_files)):
+            raise DiagnosticDenied("December external source/config acceptance mismatch")
+
+
+_DEMO_QUERY_SAFETY_SCHEMA = dict(_DEMO_COUNTING_SAFETY_SCHEMA,
+    artifact_revision=(DEMO_QUERY_SAFETY_REVISION,), operation=("CONTROLLED_PROVIDER_DIAGNOSTIC",),
+    token_evidence=_SAFETY_SCHEMA["token_evidence"])
+_DEMO_QUERY_SAFETY_SCHEMA["binding"] = dict(_DEMO_COUNTING_SAFETY_SCHEMA["binding"],
+    campaign_id="S256", request_url=(_SAFETY_URL,),
+    bounds_basis=(DEMO_QUERY_BOUNDS,), cost_basis=(DEMO_QUERY_COST,))
+
+
+def _validate_demo_query_safety(value: dict) -> None:
+    # Dynamic digest keys are validated separately, without weakening the closed
+    # schema or permitting an extra document, future query or inferred counter.
+    wire = dict(value)
+    bounds = wire.pop("accepted_input_token_bounds", None)
+    _validate_safety_wire(wire, _DEMO_QUERY_SAFETY_SCHEMA)
+    digest = hashlib.sha256(QUERY_COUNTING_ENVELOPE.encode("utf-8")).hexdigest()
+    if (type(bounds) is not dict or set(bounds) != {digest}
+            or type(bounds[digest]) is not int or not 0 < bounds[digest] <= 8192):
+        raise DiagnosticDenied("December query requires an exact accepted token bound")
+    start, end = (_safety_time(value["validity"][k]) for k in ("not_before", "expires_at"))
+    ref = value["e4_reference"]
+    source = value["token_evidence"]["source"]
+    confirmation = value["free_tier_evidence"]["human_account_confirmation"]
+    profile = value["credential_binding"]["profile_identity"]
+    if (not start <= datetime.now(timezone.utc) < end
+            or end > datetime(2026, 12, 18, tzinfo=timezone(timedelta(hours=8)))
+            or _safety_time(value["publication"]["published_at"]) > start
+            or _safety_time(confirmation["confirmed_at"]) > start
+            or not _safety_time(ref["valid_from"]) <= start < end <= _safety_time(ref["valid_until"])
+            or not _safety_time(source["effective_from"]) <= start < end <= _safety_time(source["expires_at"])
+            or value["lifecycle_state"] != "ACTIVE"
+            or any(word in profile.lower() for word in (
+                "api_key", "secret", "bearer", "token", "authorization", ":", "="))):
+        raise DiagnosticDenied("December query safety validity, credential or proof mismatch")
+
+
+def _validate_demo_counting_safety(value: dict) -> None:
+    """Validate the narrow shape; existing admission/E4/ledger guards still run."""
+    _validate_safety_wire(value, _DEMO_COUNTING_SAFETY_SCHEMA)
+    start = _safety_time(value["validity"]["not_before"])
+    end = _safety_time(value["validity"]["expires_at"])
+    confirmation = value["free_tier_evidence"]["human_account_confirmation"]
+    ref = value["e4_reference"]
+    profile = value["credential_binding"]["profile_identity"]
+    if (not start <= datetime.now(timezone.utc) < end
+            or end > datetime(2026, 12, 18, tzinfo=timezone(timedelta(hours=8)))
+            or _safety_time(value["publication"]["published_at"]) > start
+            or _safety_time(confirmation["confirmed_at"]) > start
+            or not _safety_time(ref["valid_from"]) <= start < end <= _safety_time(ref["valid_until"])
+            or value["lifecycle_state"] != "ACTIVE"
+            or ref["sdk_body_sha256"] != QUERY_COUNTING_BODY or ref["sdk_body_bytes"] != 351
+            or any(word in profile.lower() for word in (
+                "api_key", "secret", "bearer", "token", "authorization", ":", "="))):
+        raise DiagnosticDenied("December counting safety validity, credential or E4 mismatch")
+
 # Same host-published safety artifact; UNKNOWN limits are not provider numbers.
 _PROBE_SAFETY_SCHEMA = {k: v for k, v in _SAFETY_SCHEMA.items() if k != "token_evidence"}
 _PROBE_SAFETY_SCHEMA["provider_limits"] = dict(
@@ -1847,6 +2034,17 @@ class DiagnosticSafetyArtifact:
                 raise DiagnosticDenied("safety JSON numeric constant is invalid")
             value = json.loads(data.decode("utf-8"), object_pairs_hook=_safety_unique,
                                parse_constant=constant)
+            if type(value) is dict and value.get("artifact_revision") == DEMO_COUNTING_SAFETY_REVISION:
+                _validate_demo_counting_safety(value)
+                return cls(_safety_freeze(value))
+            if type(value) is dict and value.get("artifact_revision") == DEMO_QUERY_SAFETY_REVISION:
+                execution = value.pop("december_demo_execution", None)
+                if execution is not None:
+                    DecemberDemoExecutionScope.from_mapping(execution)
+                _validate_demo_query_safety(value)
+                if execution is not None:
+                    value["december_demo_execution"] = execution
+                return cls(_safety_freeze(value))
             counting = type(value) is dict and is_counting_operation(value.get("operation"))
             query_counting = counting and value["operation"] == QUERY_COUNTING_OPERATION
             counting_schema = _QUERY_COUNTING_SAFETY_SCHEMA if query_counting else _COUNTING_SAFETY_SCHEMA
@@ -1988,6 +2186,32 @@ class DiagnosticSafetyArtifact:
         if not (_timestamp(record.valid_from) <= start < end <= _timestamp(record.expires_at)
                 and start <= now < end):
             raise DiagnosticDenied("safety or authorization validity is unavailable")
+        if value["artifact_revision"] == DEMO_QUERY_SAFETY_REVISION:
+            composite = record.december_demo_fence_review
+            review = composite.counting_success_review if composite is not None else None
+            if (record.purpose != "CONTROLLED_PROVIDER_DIAGNOSTIC"
+                    or approved.kind != "query" or approved.identities != (QUERY_COUNTING_BUILD,)
+                    or approved.envelopes != (QUERY_COUNTING_ENVELOPE,)
+                    or value["project_identity"] != record.project_identity
+                    or value["credential_binding"]["secret_revision"] != record.credential_profile_revision
+                    or record.maximum_items != 1 or record.maximum_invocations != 1
+                    or record.maximum_item_bytes != 274
+                    or not 0 < record.maximum_payload_bytes <= 8192
+                    or any(type(n) is not int or not 0 < n <= 8192 for n in (
+                        record.maximum_item_tokens, record.maximum_aggregate_tokens))
+                    or review is None):
+                raise DiagnosticDenied("December query purpose, limits or count-first review mismatch")
+            self.require_accepted_evidence()
+            # The existing protected upper-bound approval remains a separate
+            # Human decision; Success Review itself does not grant token safety.
+            # Tie its original evidence bytes to the exact reviewed observation,
+            # whose unchanged content is checked again by atomic/final guards.
+            if value["token_evidence"]["source"]["content_sha256"] != review.observation_sha256:
+                raise DiagnosticDenied("December token proof does not bind the reviewed observation")
+            self.require_free_tier_permission(record)
+            if "december_demo_execution" in value:
+                self.demo_execution_scope(record)
+            return
         if record.purpose == QUERY_COUNTING_OPERATION:
             if (value.get("operation") != QUERY_COUNTING_OPERATION
                     or dict(value.get("query_binding", {})) != query_counting_binding()
@@ -2045,6 +2269,19 @@ class DiagnosticSafetyArtifact:
             return type(self).from_json(data).fields
         except (ValueError, TypeError, RecursionError, OverflowError):
             raise DiagnosticDenied("safety artifact is invalid") from None
+
+    def demo_execution_scope(self, record):
+        value = self._validated_fields()
+        raw = value.get("december_demo_execution")
+        if raw is None or value["artifact_revision"] != DEMO_QUERY_SAFETY_REVISION:
+            raise DiagnosticDenied("a separate protected December execution scope is required")
+        # Convert the immutable JSON tree back to its strict wire representation.
+        def thaw(v):
+            if type(v) in (dict, MappingProxyType): return {k: thaw(x) for k, x in v.items()}
+            return [thaw(x) for x in v] if type(v) is tuple else v
+        scope = DecemberDemoExecutionScope.from_mapping(thaw(raw))
+        scope.matches_record(record, value)
+        return scope
 
     def batch_plan(self) -> DiagnosticBatchPlan:
         value = self._validated_fields()
@@ -3159,6 +3396,29 @@ class LiveDiagnosticUsage(TemporaryDiagnosticUsage):
         except (OSError, sqlite3.Error) as exc:
             guard.__exit__(None, None, None)
             raise DiagnosticDenied("formal usage database is unavailable") from exc
+
+
+def inspect_december_execution_ledger(record, *, before_query: bool, required_usage_units: int) -> None:
+    """Read-only parent-scope check; never a reservation or a fence exemption.
+
+    Query dispatch still uses its original atomic reservation and final guard.
+    Later pipeline phases must not require a second embedding reservation.
+    """
+    usage = LiveDiagnosticUsage()
+    with closing(usage._connect(read_only=True)) as db:
+        db.execute("PRAGMA query_only=ON")
+        db.execute("BEGIN")
+        usage._check_reservation_state(db)
+        if _blocking_fence_count(db, record):
+            raise DiagnosticDenied("unreviewed/UNKNOWN December execution fence")
+        if before_query:
+            count, units, cost = db.execute(
+                "SELECT COUNT(*),COALESCE(SUM(usage_reserved),0),COALESCE(SUM(cost_reserved),0) "
+                "FROM attempts WHERE campaign_id=?", (record.campaign_id,)).fetchone()
+            if (type(required_usage_units) is not int or required_usage_units < 1
+                    or count or units + required_usage_units > record.maximum_usage_units
+                    or cost + 1 > record.maximum_cost_micro_units):
+                raise DiagnosticDenied("embedding allocation already consumed or unavailable")
 
 
 def reserve_eligible_attempt(

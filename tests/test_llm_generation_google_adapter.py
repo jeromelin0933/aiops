@@ -327,6 +327,32 @@ def test_gemini35_unknown_response_routing_fails_closed(model):
     assert rejected.value.request_sent and len(models.generate_calls) == 1
 
 
+@pytest.mark.parametrize("model,allowed", [
+    (None, True), (GEMINI35_MODEL, True), ("gemini-2.5-flash", False),
+    ("", False), (123, False),
+])
+def test_gemini35_count_response_identity_is_optional_but_conflicts_reject(model, allowed):
+    models = Mock35Models()
+    original = models.count_tokens
+    def count_tokens(**kwargs):
+        response = original(**kwargs)
+        if model is not None:
+            response.model_version = model
+        return response
+    models.count_tokens = count_tokens
+    provider = provider35(models)
+    if allowed:
+        assert provider.input_token_upper_bound("synthetic public facts", 30) > 0
+    else:
+        with pytest.raises(ProviderInvocationError) as failure:
+            provider.input_token_upper_bound("synthetic public facts", 30)
+        assert failure.value.kind is ProviderFailureKind.CAPABILITY
+        assert failure.value.request_sent
+    assert len(models.count_calls) == provider.token_preflight_calls == 1
+    assert models.count_calls[0]["model"] == GEMINI35_MODEL
+    assert provider.generation_calls == 0 and models.generate_calls == []
+
+
 @pytest.mark.parametrize("finish", [None, "MAX_TOKENS", "SAFETY", "OTHER"])
 def test_gemini35_incomplete_output_rejected(finish):
     with pytest.raises(ProviderInvocationError) as rejected:
@@ -419,7 +445,7 @@ def test_gemini35_real_pinned_sdk_mock_transport(monkeypatch, failure_stage):
         assert http_options.api_version == "v1beta"
         assert http_options.timeout == 30_000 and http_options.retry_options.attempts == 1
         assert debug_config.client_mode is None
-        http_options.client_args = {"transport": httpx.MockTransport(transport), "trust_env": False}
+        http_options.client_args = {**(http_options.client_args or {}), "transport": httpx.MockTransport(transport), "trust_env": False}
         http_options.async_client_args = {"transport": httpx.MockTransport(transport), "trust_env": False}
         client = real_client(api_key=api_key, http_options=http_options, debug_config=debug_config)
         created.append(client)
@@ -451,6 +477,54 @@ def test_gemini35_real_pinned_sdk_mock_transport(monkeypatch, failure_stage):
     finally:
         for client in created:
             client.close()
+
+
+@pytest.mark.parametrize("body,expected", [
+    ('{"totalTokens":10}', None),
+    ('{"totalTokens":10,"modelVersion":"gemini-3.5-flash-lite"}', None),
+    ('{"totalTokens":10,"modelVersion":"EXPLICIT-CONFLICT"}', ProviderFailureKind.CAPABILITY),
+    ('{"totalTokens":10,"model_version":"gemini-3.5-flash-lite"}', None),
+    ('{"totalTokens":10,"model_version":"EXPLICIT-CONFLICT"}', ProviderFailureKind.CAPABILITY),
+    ('{"totalTokens":10,"modelVersion":null}', None),
+    ('{"totalTokens":10,"modelVersion":7}', ProviderFailureKind.CAPABILITY),
+    ('{"totalTokens":10,"modelVersion":"gemini-3.5-flash-lite","model_version":"OTHER"}', ProviderFailureKind.CAPABILITY),
+    ('{"totalTokens":10,"modelVersion":"OTHER","modelVersion":"gemini-3.5-flash-lite"}', ProviderFailureKind.MALFORMED),
+    ('not JSON', ProviderFailureKind.MALFORMED),
+])
+def test_gemini35_factory_observes_count_identity_before_real_sdk_conversion(monkeypatch, capsys, body, expected):
+    import httpx
+    from google import genai
+    real_client = genai.Client
+    calls, clients = [], []
+    def transport(request):
+        calls.append(request)
+        return httpx.Response(200, content=body.encode(), headers={"content-type":"application/json"})
+    def factory(*, api_key, http_options, debug_config):
+        assert http_options.api_version == "v1beta" and http_options.timeout == 30000
+        assert http_options.retry_options.attempts == 1
+        assert len(http_options.client_args["event_hooks"]["response"]) == 1
+        http_options.client_args.update(transport=httpx.MockTransport(transport), trust_env=False)
+        client = real_client(api_key=api_key,http_options=http_options,debug_config=debug_config)
+        clients.append(client)
+        return client
+    monkeypatch.setenv("GEMINI_API_KEY", "synthetic-offline-only")
+    monkeypatch.setattr(genai,"Client",factory)
+    provider = GoogleGenerationAdapter(capability35(),profile_version="1")
+    try:
+        if expected is None:
+            assert provider.input_token_upper_bound("synthetic approved facts",30) == 10
+        else:
+            with pytest.raises(ProviderInvocationError) as rejected:
+                provider.input_token_upper_bound("synthetic approved facts",30)
+            assert rejected.value.kind is expected and rejected.value.request_sent
+        assert len(calls) == provider.token_preflight_calls == 1 and provider.generation_calls == 0
+        assert calls[0].method == "POST"
+        assert calls[0].url.path == "/v1beta/models/gemini-3.5-flash-lite:countTokens"
+        assert set(calls[0].extensions["timeout"].values()) == {30.0}
+        assert json.loads(calls[0].content) == {"contents":[{"parts":[{"text":"synthetic approved facts"}],"role":"user"}]}
+        assert capsys.readouterr() == ("", "")
+    finally:
+        for client in clients: client.close()
 
 
 def test_gemini35_generation_service_preserves_grounding_and_replay(case, tmp_path):

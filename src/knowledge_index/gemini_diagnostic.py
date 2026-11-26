@@ -43,6 +43,7 @@ from .gemini_diagnostic_controls import (
     _timestamp,
     is_single_document_probe, SINGLE_PROBE_RISK_CAP,
     FULL54_RISK_BASIS,
+    DEMO_QUERY_SAFETY_REVISION, DEMO_QUERY_BOUNDS,
 )
 from .google_embedding_adapter import (
     GEMINI_MODEL, GeminiEmbedding2Verification, GoogleEmbeddingAdapter,
@@ -151,6 +152,8 @@ def evaluate_diagnostic_safety(
         raise DiagnosticDenied("diagnostic safety evidence is missing")
     probe = is_single_document_probe(record) and not allow_synthetic
     risk = record.full54_bounded_risk is not None and not allow_synthetic
+    demo = (not allow_synthetic and record.bounds_basis == DEMO_QUERY_BOUNDS
+            and basis.reference == DEMO_QUERY_SAFETY_REVISION)
     if risk:
         record.__post_init__()
     if basis.status != ("SYNTHETIC_OFFLINE_ONLY" if allow_synthetic else "BOUNDED_RISK" if risk else "VERIFIED"):
@@ -186,6 +189,17 @@ def evaluate_diagnostic_safety(
             raise DiagnosticDenied("risk caps cannot be represented as verified provider limits")
         item_limit, item_token_limit, aggregate_limit = 9, 8192, 73728
         payload_limit = record.maximum_payload_bytes
+    elif demo:
+        if (kind != "query" or identities != (QUERY_COUNTING_BUILD,)
+                or texts != (QUERY_COUNTING_ENVELOPE,)
+                or any(v is not None for v in (basis.provider_item_limit,
+                    basis.provider_item_token_limit, basis.provider_aggregate_token_limit,
+                    basis.provider_payload_byte_limit))):
+            raise DiagnosticDenied("December campaign bounds are not provider limits")
+        item_limit = 1
+        item_token_limit = min(8192, record.maximum_item_tokens)
+        aggregate_limit = min(8192, record.maximum_aggregate_tokens)
+        payload_limit = min(8192, record.maximum_payload_bytes)
     elif probe:
         record.__post_init__()
         # These are LOCAL admission caps under PM's bounded-risk exception,
@@ -206,10 +220,13 @@ def evaluate_diagnostic_safety(
         payload_limit = _checked_positive(basis.provider_payload_byte_limit,
                                           "provider payload limit")
     if basis.price_tier == "FREE_TIER_TEXT_V1":
-        if (type(basis.price_micro_units_per_million_tokens) is not int
-                or basis.price_micro_units_per_million_tokens != 0
-                or basis.free_tier_permission_reference != record.pm_approval_reference):
+        valid_rate = (basis.price_micro_units_per_million_tokens is None if demo else
+                      type(basis.price_micro_units_per_million_tokens) is int
+                      and basis.price_micro_units_per_million_tokens == 0)
+        if not valid_rate or basis.free_tier_permission_reference != record.pm_approval_reference:
             raise DiagnosticDenied("Free Tier rate or controlled data-use permission is invalid")
+        # For the Demo alternative zero is arithmetic for the INTERNAL hold,
+        # not a financial assertion about an absent provider price/usage field.
         rate = 0
     else:
         rate = _checked_positive(basis.price_micro_units_per_million_tokens,
@@ -274,6 +291,7 @@ def evaluate_diagnostic_safety(
         digest, len(texts), item_bytes, item_tokens,
         aggregate, bounded_payload_bytes, conservative_cost, basis.status,
         FULL54_RISK_BASIS if risk else "PM_ACCEPTED_MODEL_LIMIT_RISK_CAP" if probe else
+        "DEMO_FIXED_QUERY_TOKEN_BOUND_CAMPAIGN_LIMITS_V1" if demo else
         "SYNTHETIC_OFFLINE_ONLY" if allow_synthetic else "MODEL_COMPATIBLE_UPPER_BOUND",
     )
 
@@ -907,6 +925,27 @@ def _safety_from_artifact(record, texts, artifact):
     digests = tuple(sha256(text.encode("utf-8")).hexdigest() for text in texts)
     if set(bounds) != set(digests):
         raise DiagnosticDenied("accepted token bounds do not cover exact enveloped inputs")
+    if value["artifact_revision"] == DEMO_QUERY_SAFETY_REVISION:
+        if record.bounds_basis != DEMO_QUERY_BOUNDS or texts != (QUERY_COUNTING_ENVELOPE,):
+            raise DiagnosticDenied("December query safety cannot admit another operation or input")
+        total = bounds[digests[0]]
+        proof = GeminiEmbedding2Verification(
+            count_tokens=lambda text: bounds[sha256(text.encode("utf-8")).hexdigest()],
+            serialize_payload=_serialized, max_item_tokens=min(8192, record.maximum_item_tokens),
+            max_aggregate_tokens=min(8192, record.maximum_aggregate_tokens), max_provider_items=1,
+            max_item_bytes=record.maximum_item_bytes,
+            max_payload_bytes=min(8192, record.maximum_payload_bytes),
+            normalization_tolerance=record.normalization_tolerance,
+            evidence_identity=value["artifact_revision"])
+        basis = DiagnosticSafetyBasis("VERIFIED", value["artifact_revision"], record.campaign_id,
+            record.source_revision, record.input_scope_identity, _authorization_record_digest(record),
+            record.provider_identity, record.model_identity, record.sdk_baseline, record.api_version,
+            "query", record.input_commitment, value["e4_reference"]["canonical_json_sha256"],
+            record.bounds_basis, record.cost_basis, "MODEL_COMPATIBLE_UPPER_BOUND",
+            None, None, None, None, "FREE_TIER_TEXT_V1", "USD", None,
+            datetime.fromisoformat(value["validity"]["expires_at"].replace("Z", "+00:00")),
+            free_permission)
+        return proof, basis, total, 1
     limits, pricing = value["provider_limits"], value["pricing_evidence"]
     total = sum(bounds[digest] for digest in digests)
     # Preserve positive, non-refundable attempt reservations in the existing
@@ -1471,6 +1510,12 @@ def _run_live(
         raise DiagnosticDenied("counting cannot dispatch embedding", code="OPERATION_MISMATCH")
     if not isinstance(request, (ProviderEmbeddingRequest, QueryEmbeddingRequest)):
         raise DiagnosticDenied("authorized diagnostic input is not available")
+    if record.bounds_basis == DEMO_QUERY_BOUNDS and (
+        not isinstance(request, QueryEmbeddingRequest)
+        or request.query.text != QUERY_COUNTING_TEXT or request.query.filters
+        or request.frozen_build_identity != QUERY_COUNTING_BUILD
+    ):
+        raise DiagnosticDenied("December query or empty-filter binding mismatch", code="INPUT_MISMATCH")
     if _query_vectors is not None and (not isinstance(request, QueryEmbeddingRequest)
                                       or _build_vectors is not None):
         raise DiagnosticDenied("query result projection requires one typed query", code="INPUT_MISMATCH")
@@ -1577,6 +1622,10 @@ def _run_live(
     observation = _dispatch_live(refreshed, approved, binding.sdk_byte_evidence, credential, revalidate,
         _attempt_id=request_id, _usage_sink=receipts, _vectors=_query_vectors)
     observation = _record_live_observation(usage, refreshed, request_id, observation, receipts, binding.sdk_byte_evidence)
+    if artifact.fields.get("artifact_revision") == DEMO_QUERY_SAFETY_REVISION:
+        observation = replace(observation,
+            admission_usage_basis="DEMO_FIXED_QUERY_TOKEN_BOUND_CAMPAIGN_LIMITS_V1",
+            billing_status="INTERNAL_HOLD_NOT_PROVIDER_PRICE_OR_COST_CAP")
     if is_single_document_probe(record):
         observation = replace(observation,
             category="PROBE_OBSERVATION_ONLY" if observation.outcome == "SUCCESS" else observation.category,

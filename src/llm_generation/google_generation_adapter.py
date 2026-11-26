@@ -41,6 +41,37 @@ def create_google_generation_client(
         }
         if api_version is not None:
             options["api_version"] = api_version
+            # Pinned SDK CountTokensResponse discards modelVersion. Observe it
+            # through the supported HTTPX response hook BEFORE SDK conversion.
+            # No body/prompt/credential is retained, logged, or attached to D.
+            def observe_count_identity(response):
+                if (response.request.method != "POST"
+                        or response.request.url.path !=
+                            "/v1beta/models/" + GEMINI35_MODEL + ":countTokens"
+                        or not response.is_success):
+                    return
+                try:
+                    import json
+                    def unique_fields(pairs):
+                        value = {}
+                        for key, item in pairs:
+                            if key in value:
+                                raise ValueError("ambiguous Counting response")
+                            value[key] = item
+                        return value
+                    value = json.loads(response.read(), object_pairs_hook=unique_fields)
+                    if type(value) is not dict:
+                        raise ValueError("invalid Counting response")
+                except (ValueError, TypeError):
+                    raise ProviderInvocationError(ProviderFailureKind.MALFORMED,
+                                                  request_sent=True) from None
+                for key in ("modelVersion", "model_version"):
+                    identity = value.get(key)
+                    if identity is not None and (type(identity) is not str
+                                                  or identity != GEMINI35_MODEL):
+                        raise ProviderInvocationError(ProviderFailureKind.CAPABILITY,
+                                                      request_sent=True) from None
+            options["client_args"] = {"event_hooks": {"response": [observe_count_identity]}}
         return genai.Client(
             api_key=api_key,
             debug_config=genai_client.DebugConfig(
@@ -132,8 +163,22 @@ class GoogleGenerationAdapter:
         self.token_preflight_calls += 1
         try:
             response = client.models.count_tokens(model=self.capability.model, contents=prompt)
+        except ProviderInvocationError:
+            # Preserve the hook's sanitized, sent-attempt model-conflict result.
+            raise
         except Exception as exc:
             raise ProviderInvocationError(_provider_kind(exc), request_sent=True) from None
+        # Counting need not expose identity. When it does, never accept an
+        # explicit conflict (and never infer a match from a missing field).
+        if self._gemini35:
+            try:
+                model = getattr(response, "model_version", None)
+            except Exception:
+                raise ProviderInvocationError(ProviderFailureKind.CAPABILITY,
+                                              request_sent=True) from None
+            if model is not None and (type(model) is not str or model != self.capability.model):
+                raise ProviderInvocationError(ProviderFailureKind.CAPABILITY,
+                                              request_sent=True)
         count = getattr(response, "total_tokens", None)
         if type(count) is not int or count < 1:
             raise ProviderInvocationError(ProviderFailureKind.MALFORMED,
