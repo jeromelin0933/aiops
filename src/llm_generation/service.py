@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from enum import Enum
+from hashlib import sha256
 import json
 from typing import Protocol
 
@@ -17,15 +18,15 @@ from rca_persistence.contracts import AdmittedRetryDisposition as RetrySafety, A
 from .config import GenerationConfig, GenerationConfigError, load_generation_config
 from .contracts import (
     FailureClass, GenerationFailure, GenerationInput, InvocationMetadata,
-    LocalReadStatus, ValidatedGenerationResult, safe_text,
+    LocalReadStatus, ValidatedGenerationResult, safe_text, ParserFailureEvidence,
 )
 from .identity import semantic_commitment
 from .ports import AttemptPublicReader, EvidencePublicReader, KnowledgePublicReader
-from .schema import StructuredOutputError, _FORBIDDEN_CONTEXT, parse_structured_output
+from .schema import StructuredOutputError, _FORBIDDEN_CONTEXT, parse_structured_output, structured_failure_code
 from .sqlite_store import CandidateDStore
 from .validation import (
     DegradedAuthorizationFact, GenerationValidationError,
-    derive_causal_support_proof, validate_generation_result,
+    derive_causal_support_proof, validate_generation_result, evidence_fact_commitment, observed_fact_text,
 )
 
 
@@ -197,6 +198,23 @@ def canonical_knowledge_projection(
     return rendered
 
 
+def _grounding_reference_catalog(source: GenerationInput) -> list[dict]:
+    """Bounded derivation of facts already in the admitted public projection."""
+    evidence = json.loads(source.evidence_projection)
+    facts = [(f"/event_projections/{i}", fact)
+             for i, fact in enumerate(evidence["event_projections"][:8])]
+    normalized = evidence["semantic_evidence"].get("normalized_evidence", {})
+    for name, records in sorted(normalized.items()):
+        for i, fact in enumerate(records[:8]):
+            if len(facts) >= 8:
+                break
+            facts.append((f"/semantic_evidence/normalized_evidence/{name}/{i}", fact))
+    return [dict(reference_id=f"e{i+1}", evidence_snapshot_id=source.evidence_snapshot_id,
+        reference_schema_version="1", canonical_path=path,
+        canonical_fact_commitment=evidence_fact_commitment(fact),
+        observed_fact_text=observed_fact_text(fact)) for i, (path, fact) in enumerate(facts)]
+
+
 def render_prompt(source: GenerationInput, config: GenerationConfig) -> str:
     """Use only versioned template and exact admitted projection values."""
     if source.pin != config.pin:
@@ -211,6 +229,9 @@ def render_prompt(source: GenerationInput, config: GenerationConfig) -> str:
         "template": config.prompt_template,
         "evidence": source.evidence_projection,
         "knowledge": source.knowledge_projection,
+        **({"grounding_reference_catalog": _grounding_reference_catalog(source)}
+           if source.pin.profile.identity == "demo-google-gemini35-flash-lite-generation-profile-v1"
+           and source.pin.profile.version == "2" else {}),
     }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     if len(prompt.encode("utf-8")) > min(config.bounds.maximum_request_bytes, config.bounds.maximum_input_bytes):
         raise ValueError("rendered prompt exceeds request/input bound")
@@ -322,10 +343,10 @@ class GenerationService:
 
     def _failure(self, source: GenerationInput, kind: FailureClass,
                  safety: RetrySafety, detail: str, calls: int = 0,
-                 preflight_calls: int = 0) -> ExecutionReceipt:
+                 preflight_calls: int = 0, *, parser_evidence: ParserFailureEvidence | None = None) -> ExecutionReceipt:
         failure = GenerationFailure(
             source.try_identity, source.operation_id, kind, safety, detail,
-            subject_input_commitment(source), _same_try_safety_fact(kind, safety),
+            subject_input_commitment(source), _same_try_safety_fact(kind, safety), parser_evidence,
         )
         committed = self.store.commit_failure(failure)
         if committed.status is LocalReadStatus.FOUND:
@@ -597,7 +618,21 @@ class GenerationService:
                     else FailureClass.RESULT_SCHEMA if "schema" in message or "incompatible" in message
                     else FailureClass.STRUCTURED_PARSE)
             safety = RetrySafety.RETRYABLE if kind is FailureClass.STRUCTURED_PARSE else RetrySafety.NON_RETRYABLE
-            return self._failure(source, kind, safety, "structured result rejected", 1, 1)
+            raw = response.structured_output
+            if isinstance(raw, str):
+                response_bytes = raw.encode("utf-8")
+            elif isinstance(raw, bytes):
+                response_bytes = raw
+            else:
+                try:
+                    response_bytes = json.dumps(raw, sort_keys=True, ensure_ascii=False,
+                                                separators=(",", ":")).encode("utf-8")
+                except (TypeError, ValueError):
+                    response_bytes = None  # no invented commitment for a non-wire fake object
+            evidence = ParserFailureEvidence(structured_failure_code(exc),
+                sha256(response_bytes).hexdigest() if response_bytes is not None else None, metadata)
+            return self._failure(source, kind, safety, "structured result rejected", 1, 1,
+                                 parser_evidence=evidence)
         try:
             proofs = tuple(
                 derive_causal_support_proof(content, config, self.evidence, claim.claim_id)

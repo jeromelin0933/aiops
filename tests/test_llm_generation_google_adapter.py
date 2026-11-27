@@ -283,7 +283,7 @@ def test_gemini35_exact_admission(changes):
         GoogleGenerationAdapter(replace(capability35(), **changes), profile_version="1")
 
 
-@pytest.mark.parametrize("version", [None, "2", 1, True])
+@pytest.mark.parametrize("version", [None, "3", 1, True])
 def test_gemini35_requires_exact_profile_version(version):
     with pytest.raises(ValueError):
         GoogleGenerationAdapter(capability35(), profile_version=version)

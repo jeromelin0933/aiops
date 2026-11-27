@@ -21,7 +21,9 @@ def _plain(value: object) -> object:
     if isinstance(value, Enum):
         return value.value
     if is_dataclass(value) and not isinstance(value, type):
-        return {field.name: _plain(getattr(value, field.name)) for field in fields(value)}
+        return {field.name: _plain(getattr(value, field.name)) for field in fields(value)
+                if not (type(value).__name__ == "GenerationFailure"
+                        and field.name == "parser_evidence" and value.parser_evidence is None)}
     if isinstance(value, tuple):
         return [_plain(item) for item in value]
     if isinstance(value, (str, bool, int)) or value is None:

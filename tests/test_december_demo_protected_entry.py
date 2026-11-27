@@ -49,7 +49,7 @@ def admitted(query_counting, monkeypatch):
         accepted_at=(now-timedelta(minutes=1)).isoformat(), acceptance_expires_at='2026-12-17T15:59:00+00:00',
         run_id='dec17-fixture-'+uuid.uuid4().hex[:12], generation_model='gemini-3.5-flash-lite',
         generation_profile='demo-google-gemini35-flash-lite-generation-profile-v1',
-        generation_profile_version='1', generation_api='v1beta', physical_call_allocation=[1,1,1],
+        generation_profile_version='2', generation_api='v1beta', physical_call_allocation=[1,1,1],
         operation_scopes=list(c.DECEMBER_OPERATION_SCOPES), external_files=[
             dict(path=str(c.DECEMBER_EXTERNAL_ROOT/name),version='1',
                  sha256=sha256((c.DECEMBER_EXTERNAL_ROOT/name).read_bytes()).hexdigest())
@@ -84,7 +84,7 @@ def test_complete_protected_offline_scope_native_publication_and_same_try_replay
     ('decision','PREPARATION_ONLY'), ('expires_at','2000-01-01T00:00:00+00:00'),
     ('repository_revision','f'*40), ('diagnostic_authorization_sha256','f'*64),
     ('account_reference','wrong'), ('generation_model','gemini-2.5-flash'),
-    ('generation_profile_version','2'), ('generation_api','v1'),
+    ('generation_profile_version','3'), ('generation_api','v1'),
     ('physical_call_allocation',[0,1,1]), ('operation_scopes',[]),
     ('accepted_at','2099-01-01T00:00:00+00:00'), ('acceptance_reference','PENDING'),
     ('acceptance_expires_at','2000-01-01T00:00:00+00:00'), ('accepted_by','wrong'),

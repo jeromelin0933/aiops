@@ -19,6 +19,7 @@ APPROVED_MODEL = "gemini-2.5-flash"
 GEMINI35_MODEL = "gemini-3.5-flash-lite"
 GEMINI35_PROFILE = "demo-google-gemini35-flash-lite-generation-profile-v1"
 GEMINI35_PROFILE_VERSION = "1"
+GEMINI35_STRUCTURED_PROFILE_VERSION = "2"
 GEMINI35_SDK = "2.25.0"
 
 
@@ -123,7 +124,7 @@ class GoogleGenerationAdapter:
         self._gemini35 = capability.model == GEMINI35_MODEL
         if self._gemini35:
             if (capability.profile_id != GEMINI35_PROFILE
-                    or profile_version != GEMINI35_PROFILE_VERSION
+                    or profile_version not in (GEMINI35_PROFILE_VERSION, GEMINI35_STRUCTURED_PROFILE_VERSION)
                     or capability.schema_id != "spec015-rca-result-v1"
                     or capability.schema_version != "1"):
                 raise ValueError("exact Gemini 3.5 profile/version/schema required")
@@ -136,6 +137,7 @@ class GoogleGenerationAdapter:
         elif capability.profile_id == GEMINI35_PROFILE:
             raise ValueError("Gemini 3.5 profile cannot select a legacy model")
         self.capability = capability
+        self._structured_v1 = self._gemini35 and profile_version == GEMINI35_STRUCTURED_PROFILE_VERSION
         self._client = client
         self._timeout_seconds: int | None = None
         self.token_preflight_calls = 0
@@ -208,6 +210,9 @@ class GoogleGenerationAdapter:
                 "automatic_function_calling": {"disable": True},
                 "tools": [],
             })
+            if self._structured_v1:
+                from .schema import result_json_schema_v1
+                config["response_json_schema"] = result_json_schema_v1()
         else:
             config["candidate_count"] = 1
         self.generation_calls += 1

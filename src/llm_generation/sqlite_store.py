@@ -22,7 +22,7 @@ from .contracts import (
     FailureClass, GenerationFailure, GenerationInput, GenerationPin, Guidance,
     Hypothesis, InvocationMetadata, KnowledgeReference, LocalReadStatus,
     RecoveryFact, ResultContent, ValidatedGenerationResult, ValidationFact,
-    VersionedIdentity,
+    VersionedIdentity, ParserFailureEvidence,
 )
 from .identity import semantic_commitment
 from .config import load_generation_config, GenerationConfigError
@@ -32,7 +32,7 @@ TYPES = {cls.__name__: cls for cls in (
     CausalAssertion, CausalSupportProof, Claim, EvidenceReference,
     GenerationFailure, GenerationInput, GenerationPin, Guidance, Hypothesis,
     InvocationMetadata, KnowledgeReference, LogicalTryIdentity, ResultContent,
-    ValidationFact, VersionedIdentity,
+    ValidationFact, VersionedIdentity, ParserFailureEvidence,
 )}
 ENUMS = {cls.__name__: cls for cls in (
     AdmittedRetryDisposition, CausalRelation, ClaimCategory,
@@ -53,6 +53,8 @@ def encode(value: object) -> object:
     if is_dataclass(value) and not isinstance(value, type):
         return {"type": type(value).__name__, "fields": {
             field.name: encode(getattr(value, field.name)) for field in fields(value)
+            if not (isinstance(value, GenerationFailure) and field.name == "parser_evidence"
+                    and value.parser_evidence is None)
         }}
     if isinstance(value, tuple):
         return {"tuple": [encode(item) for item in value]}
@@ -70,6 +72,8 @@ def decode(value: object) -> object:
         if set(value) == {"type", "fields"} and value["type"] in TYPES:
             cls = TYPES[value["type"]]
             raw = value["fields"]
+            if cls is GenerationFailure and isinstance(raw, dict) and "parser_evidence" not in raw:
+                raw = {**raw, "parser_evidence": None}  # unchanged historical payload/digest
             if not isinstance(raw, dict) or set(raw) != {field.name for field in fields(cls)}:
                 raise ValueError("durable field set invalid")
             return cls(**{key: decode(item) for key, item in raw.items()})

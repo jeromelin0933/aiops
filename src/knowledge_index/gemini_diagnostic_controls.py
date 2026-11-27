@@ -1882,7 +1882,7 @@ class DecemberDemoExecutionScope:
                 or self.accepted_by != record.spec_lead_identity
                 or self.generation_model != "gemini-3.5-flash-lite"
                 or self.generation_profile != "demo-google-gemini35-flash-lite-generation-profile-v1"
-                or self.generation_profile_version != "1" or self.generation_api != "v1beta"
+                or self.generation_profile_version not in ("1", "2") or self.generation_api != "v1beta"
                 or self.operation_scopes != DECEMBER_OPERATION_SCOPES
                 or self.physical_call_allocation != (1, 1, 1)
                 or any(type(v) is not int for v in self.physical_call_allocation)
@@ -1904,7 +1904,7 @@ class DecemberDemoExecutionScope:
         expected = {str(DECEMBER_EXTERNAL_ROOT / name) for name in DECEMBER_EXTERNAL_NAMES}
         if (len(self.external_files) != len(expected)
                 or {v.path for v in self.external_files} != expected
-                or any(type(v) is not ExternalDemoCommitment or v.version != "1"
+                or any(type(v) is not ExternalDemoCommitment or v.version not in ("1", "2")
                        or not re.fullmatch(r"[0-9a-f]{64}", v.sha256) for v in self.external_files)):
             raise DiagnosticDenied("December external source/config acceptance mismatch")
 

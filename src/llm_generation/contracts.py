@@ -327,6 +327,24 @@ class InvocationMetadata:
 
 
 @dataclass(frozen=True, slots=True)
+class ParserFailureEvidence:
+    """Sanitized facts only, after provider metadata passed validation."""
+    code: str
+    response_sha256: str | None
+    usage: InvocationMetadata
+
+    def __post_init__(self) -> None:
+        if self.code not in {"JSON_SYNTAX", "DUPLICATE_FIELDS", "OBJECT_FIELDS",
+                             "UNSUPPORTED_SCALAR", "FORBIDDEN_CONTEXT", "SCHEMA_MISMATCH",
+                             "BOUNDS", "CONTRACT_VALUE"}:
+            raise ValueError("closed parser failure code required")
+        if self.response_sha256 is not None and (not isinstance(self.response_sha256, str) or not _HASH.fullmatch(self.response_sha256)):
+            raise ValueError("response commitment invalid")
+        if not isinstance(self.usage, InvocationMetadata):
+            raise TypeError("validated invocation metadata required")
+
+
+@dataclass(frozen=True, slots=True)
 class GenerationFailure:
     try_identity: LogicalTryIdentity
     operation_id: str
@@ -335,8 +353,11 @@ class GenerationFailure:
     safe_detail: str
     subject_input_commitment: str | None = None
     same_try_eligible: bool = False
+    parser_evidence: ParserFailureEvidence | None = None
 
     def __post_init__(self) -> None:
+        if self.parser_evidence is not None and not isinstance(self.parser_evidence, ParserFailureEvidence):
+            raise TypeError("typed sanitized parser evidence required")
         if not isinstance(self.try_identity, LogicalTryIdentity):
             raise TypeError("canonical Try identity required")
         safe_text(self.operation_id, "operation_id", 160, identifier=True)

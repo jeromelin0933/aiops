@@ -21,6 +21,71 @@ class StructuredOutputError(ValueError):
     """Malformed, unknown, unsafe or incompatible result structure."""
 
 
+def result_json_schema_v1() -> dict[str, Any]:
+    """Complete v1 wire shape; semantic/byte/grounding checks remain native.
+
+    Use only JSON Schema keywords supported by the pinned SDK's
+    response_json_schema. Do not replace the Strict Parser with this schema.
+    """
+    def text():
+        return {"type": "string"}
+
+    def enum(kind):
+        return {"type": "string", "enum": [item.value for item in kind]}
+
+    def array(item, maximum=64, minimum=0):
+        return {"type": "array", "items": item, "minItems": minimum, "maxItems": maximum}
+
+    def obj(properties):
+        return {"type": "object", "properties": properties,
+                "required": list(properties), "additionalProperties": False}
+
+    def ids():
+        return array(text())
+
+    evidence = obj({field.name: text() for field in fields(EvidenceReference)})
+    knowledge = obj({field.name: text() for field in fields(KnowledgeReference)})
+    claim = obj(dict(claim_id=text(), category=enum(ClaimCategory), text=text(),
+        supporting_evidence_ids=ids(), contradicting_evidence_ids=ids(),
+        knowledge_reference_ids=ids(), evidential_support={
+            "anyOf": [enum(EvidentialSupport), {"type": "null"}]}))
+    hypothesis = obj(dict(rank={"type": "integer", "minimum": 1}, statement=text(),
+        evidential_support=enum(EvidentialSupport), supporting_evidence_ids=array(text(), minimum=1),
+        contradicting_evidence_ids=ids(), knowledge_reference_ids=ids(),
+        reasoning_summary=text(), claim_ids=array(text(), minimum=1)))
+    guidance = obj(dict(description=text(), source=enum(GuidanceSource),
+        knowledge_reference_ids=ids(), claim_ids=array(text(), minimum=1)))
+    return obj(dict(
+        schema_identity={"type": "string", "enum": ["spec015-rca-result-v1"]},
+        schema_version={"type": "string", "enum": ["1"]},
+        contract_version={"type": "string", "enum": ["1"]},
+        summary=text(), summary_claim_ids=ids(), severity_assessment=text(), severity_claim_ids=ids(),
+        diagnostic_conclusion=enum(DiagnosticConclusion), hypotheses=array(hypothesis, minimum=1),
+        remediation=array(guidance), prevention=array(guidance), limitations=array(text()),
+        evidence_completeness=enum(EvidenceCompleteness), knowledge_gap={"type": "boolean"},
+        evidence_references=array(evidence), knowledge_references=array(knowledge), claims=array(claim)))
+
+
+def structured_failure_code(exc: StructuredOutputError) -> str:
+    """Closed local reason codes; never persist exception/provider text."""
+    if isinstance(exc.__cause__, json.JSONDecodeError):
+        return "JSON_SYNTAX"
+    message = str(exc)
+    if message == "structured output has duplicate fields":
+        return "DUPLICATE_FIELDS"
+    if message.endswith("has missing or unsupported fields"):
+        return "OBJECT_FIELDS"
+    if message in ("non-finite scalar", "structured output contains an unsupported scalar"):
+        return "UNSUPPORTED_SCALAR"
+    if "forbidden evaluation context" in message:
+        return "FORBIDDEN_CONTEXT"
+    if "schema" in message:
+        return "SCHEMA_MISMATCH"
+    if "bound" in message or "exceeds" in message:
+        return "BOUNDS"
+    return "CONTRACT_VALUE"
+
+
 _FORBIDDEN_CONTEXT = re.compile(
     r"(?i)(scenario[_ -]?id|\bS[1-6]\b|generator[_ -]?expected|validator[_ -]?expected|base64\s*:)"
 )

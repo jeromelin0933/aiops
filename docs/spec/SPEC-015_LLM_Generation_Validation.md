@@ -1133,3 +1133,51 @@ Keep SPEC-015 schema/grounding, Evidence and Knowledge reference validation, cau
 Per fresh Try: at most one generation countTokens and one generateContent physical request, each with one attempt/30 seconds, no hidden retry/fallback/model substitution. Input <=16,384 tokens; output INCLUDING thinking <=4,096; total <=20,480; proposed payload byte ceiling 65,536 bytes is a separate resource bound, not a token estimate. Existing GenerationService input counting/admission remains; reducing this to one physical request would require a separate source/contract change. Save trusted provider usage metadata and unknown fields truthfully; a post-run cost estimate is labelled ESTIMATED with its basis, not actual billing or authority to release an UNKNOWN hold. Unknown/over-bound usage keeps existing failure/fence semantics; this draft does not weaken them.
 
 The accepted Free Tier/no linked paid Billing evidence may be referenced once per bounded campaign instead of recreating enterprise financial provenance for each Try. No exact fee assertion or internal ledger hold is called an external guarantee. Changed billing/project/model/profile, exhausted quota, timeout, unknown sent outcome, model identity mismatch, schema/grounding rejection or persistence uncertainty stops the real execution. A genuine Live Grant and protected source/credential/outbound binding remain necessary.
+
+## Target03 ? December Structured Generation Profile v2 (2026-11-27)
+
+PM-authorized minimal offline repair for `dec17-rca-demo-20261128-03`,
+`PM-PRD004-20261127-STAGE2-03`. Revised not-before is
+`2026-11-27T22:30:00+08:00`; expiry remains `2026-12-17T23:59:00+08:00`.
+The model remains `gemini-3.5-flash-lite`, SDK `google-genai==2.25.0`, API
+`v1beta`, Thinking `MINIMAL`. No call is authorized by an offline test result.
+
+`demo-google-gemini35-flash-lite-generation-profile-v1@2` explicitly adds the
+complete `spec015-rca-result-v1@1` wire structure through the installed SDK's
+`GenerateContentConfig.response_json_schema` with JSON MIME type. Required
+root/nested fields, closed objects, scalar types and native enum vocabularies
+come from the v1 Parser/DTO contract. Contract version remains `1`; no causal
+v2 fields or provider-supplied usage/validation authority enter this result.
+The existing `@1` profile retains its prior behavior and is not silently upgraded.
+
+The SDK-supported structural schema does not replace native UTF-8 byte bounds,
+secret/evaluation-context exclusion, reference uniqueness, cross-field claims,
+Snapshot lineage, SOP authority, or Grounding validation. All remain mandatory
+and fail closed. Schema-supported shape does not imply a valid or grounded RCA.
+
+Profile `@2` renders a bounded deterministic catalog from at most eight already
+admitted public Event/normalized-evidence facts: exact EvidenceReference fields, the native
+fact commitment and native Observed Fact text. This is a derivation of the same
+approved Evidence, not new observations, oracle facts or SOP outbound permission.
+The config/prompt versions and schema/config commitments must change explicitly.
+
+On structured parsing rejection, the existing GenerationFailure may additionally
+carry typed `ParserFailureEvidence`: a closed local parser code, SHA-256 of the
+returned structured text/bytes (or deterministic JSON for an in-memory object),
+and the already validated InvocationMetadata. No raw response, prompt, arbitrary
+exception text, credential or SOP content is persisted. A non-serializable
+non-wire fake object has no response commitment; no hash is fabricated.
+Optional evidence absent on historical failures preserves their original payload
+and semantic digest. Existing SQLite DDL, failure classification, retry authority
+and provider-attempt limits are unchanged. A retryable failure never grants a call.
+
+A failed Demo report may expose these validated usage scalars without claiming a
+Validated Result. Effective model alignment is obtained from the genuine protected
+execution scope, not a fixed report placeholder. All previous failure records,
+UNKNOWN outcomes, holds, budgets, and prior Run directories remain immutable.
+
+After the final Human Source checkpoint, Source/profile/config/external bytes
+must be accepted and rebound in the applicable protected Target03 authority.
+No old Source grant, old External Acceptance, or old Try allocation transfers by
+changing a JSON string. Target03 permits at most three physical attempts, while
+the overall ten-call ceiling and the five previously consumed calls remain.

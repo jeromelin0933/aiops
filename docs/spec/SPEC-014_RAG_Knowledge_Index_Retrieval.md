@@ -1711,3 +1711,20 @@ The only allowed origin is `dec17-s2-query-count-stage1-20261125-01` / `s2-query
 Disposition is only `NON_BLOCKING_FOR_THIS_CAMPAIGN_ONLY`, for a distinct target Stage 2 bounded-input query grant using `DEMO_FIXED_QUERY_RESOURCE_RISK_V1`. Actual reviewer must match Target SPEC Lead; review time must follow the immutable Observation and fall inside the actual Target Grant window. Expiry is bounded by both Composite and Target Grant. Stage 1 publication approval cannot serve as Target Grant; Policy Approval cannot serve as the new review. Success Review and this UNKNOWN Review cannot be combined.
 
 `_december_reviewed_rows()` checks the unchanged origin identity/Row SHA/Observation SHA and expected observation semantics in its caller's SAME existing ledger transaction, then adds exactly one unique key. Existing preflight, atomic reservation and Final Revalidation reuse that calculation. The raw predicate, SQL schema, history, accounting, budgets, duplicate checks and the two original Historical P0 reviews are unchanged. Missing/tampered/unreviewed/other UNKNOWN, TIMEOUT, IN_FLIGHT or over-budget records remain blocking. No wildcard, reset/refund, usage reclassification or new authority is introduced. Actual Human review and new-source Target Grant/publication/readback remain required before any Live use.
+
+### December Target03 ? exact Generation Profile binding (2026-11-27)
+
+The existing December protected execution scope may explicitly pin Generation
+profile version `2` as defined by the Target03 amendment in SPEC-015, as well as
+legacy version `1`. An accepted scope must pin one exact version; no version is
+inferred or substituted. Query Embedding admission, Ledger DDL, raw/remaining
+fences, reservation, final guard, credential/account binding, Active Generation 1
+and exact UNKNOWN review semantics remain unchanged. The revised Target03 grant
+starts `2026-11-27T22:30:00+08:00` and ends `2026-12-17T23:59:00+08:00`.
+New Source/profile/config/external commitments require Human checkpoint and
+protected target rebinding before dispatch; historical authorities are preserved.
+
+Target03 ExternalDemoCommitment may explicitly use version `2` for the changed
+Demo source/config files; version `1` remains accepted for historical unchanged
+files. Every exact path/version/SHA tuple remains protected by new Human
+acceptance and the exact target scope. This adds no wildcard file authority.
