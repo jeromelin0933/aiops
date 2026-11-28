@@ -345,6 +345,44 @@ class ParserFailureEvidence:
 
 
 @dataclass(frozen=True, slots=True)
+class ProviderBoundaryEvidence:
+    """Closed scalar observations, never an exception/message/body container."""
+    operation: str
+    stage: str
+    http_status: int | None
+    google_status: str | None
+    exception_class: str
+    response_model_identity: str
+    response_received: str
+    http_delivery: str
+
+    def __post_init__(self) -> None:
+        if self.operation not in {"COUNT_TOKENS", "GENERATE_CONTENT"}:
+            raise ValueError("closed provider operation required")
+        if self.stage not in {"REQUEST_VALIDATION", "CLIENT_INITIALIZATION", "SDK_CALL", "RESPONSE_VALIDATION"}:
+            raise ValueError("closed boundary stage required")
+        if self.http_status is not None and (type(self.http_status) is not int or not 100 <= self.http_status <= 599):
+            raise ValueError("observed HTTP status invalid")
+        if self.google_status not in {None, "OK", "CANCELLED", "UNKNOWN", "INVALID_ARGUMENT", "DEADLINE_EXCEEDED",
+            "NOT_FOUND", "ALREADY_EXISTS", "PERMISSION_DENIED", "RESOURCE_EXHAUSTED", "FAILED_PRECONDITION",
+            "ABORTED", "OUT_OF_RANGE", "UNIMPLEMENTED", "INTERNAL", "UNAVAILABLE", "DATA_LOSS", "UNAUTHENTICATED"}:
+            raise ValueError("closed Google status required")
+        if self.exception_class not in {"NONE", "SDK_CLIENT_ERROR", "SDK_SERVER_ERROR", "SDK_API_ERROR",
+            "SDK_VALIDATION_ERROR", "VALUE_ERROR", "TIMEOUT", "TRANSPORT_ERROR", "UNKNOWN_ERROR"}:
+            raise ValueError("closed exception classification required")
+        if self.response_model_identity not in {"MISSING", "UNKNOWN", "MISMATCH", "MATCHED"}:
+            raise ValueError("closed response model observation required")
+        if self.response_received not in {"YES", "NO", "UNKNOWN"} or self.http_delivery not in {
+            "CONFIRMED_RESPONSE", "NOT_DISPATCHED", "UNKNOWN"}:
+            raise ValueError("closed response/delivery observation required")
+        if ((self.http_status is not None or self.http_delivery == "CONFIRMED_RESPONSE")
+                and (self.response_received != "YES" or self.http_delivery != "CONFIRMED_RESPONSE")):
+            raise ValueError("HTTP observation contradicts response evidence")
+        if self.http_delivery == "NOT_DISPATCHED" and self.response_received != "NO":
+            raise ValueError("pre-dispatch evidence contradicts response")
+
+
+@dataclass(frozen=True, slots=True)
 class GenerationFailure:
     try_identity: LogicalTryIdentity
     operation_id: str
@@ -354,8 +392,11 @@ class GenerationFailure:
     subject_input_commitment: str | None = None
     same_try_eligible: bool = False
     parser_evidence: ParserFailureEvidence | None = None
+    boundary_evidence: ProviderBoundaryEvidence | None = None
 
     def __post_init__(self) -> None:
+        if self.boundary_evidence is not None and not isinstance(self.boundary_evidence, ProviderBoundaryEvidence):
+            raise TypeError("typed sanitized boundary evidence required")
         if self.parser_evidence is not None and not isinstance(self.parser_evidence, ParserFailureEvidence):
             raise TypeError("typed sanitized parser evidence required")
         if not isinstance(self.try_identity, LogicalTryIdentity):

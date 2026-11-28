@@ -1181,3 +1181,24 @@ must be accepted and rebound in the applicable protected Target03 authority.
 No old Source grant, old External Acceptance, or old Try allocation transfers by
 changing a JSON string. Target03 permits at most three physical attempts, while
 the overall ten-call ceiling and the five previously consumed calls remain.
+
+## Bounded December Debugging: Optional Provider Boundary Evidence (2026-11-28)
+
+The PM-approved offline diagnostic amendment permits an optional, closed
+`ProviderBoundaryEvidence` on the existing GenerationFailure. It records only
+COUNT_TOKENS/GENERATE_CONTENT, request validation/client initialization/SDK call/
+response validation stage, reliably observed numeric HTTP status, allowlisted
+standard Google status and exception classification, model observation
+(MISSING/UNKNOWN/MISMATCH/MATCHED), response receipt and delivery classification.
+An SDK-call counter or an exception type alone is not proof of HTTP delivery.
+Absent transport evidence remains UNKNOWN; a typed SDK HTTP response may prove
+receipt without supplying a numeric HTTP status. Never infer status from an
+exception message or fabricate success status 200.
+
+Do not persist arbitrary exception text, raw request/response, headers, prompt,
+credential or SOP content. Historical failures without this optional field keep
+their original encoding and semantic digest. Existing failure class, retry
+disposition, same-Try eligibility, ledger DDL, reservation, final guards, schema,
+grounding and provider allocation remain unchanged. No historical failure is
+rewritten, and new diagnostics do not retroactively establish Target03's cause.
+This amendment authorizes neither a Live call nor a new Target's protected grant.

@@ -18,7 +18,7 @@ from rca_persistence.contracts import AdmittedRetryDisposition as RetrySafety, A
 from .config import GenerationConfig, GenerationConfigError, load_generation_config
 from .contracts import (
     FailureClass, GenerationFailure, GenerationInput, InvocationMetadata,
-    LocalReadStatus, ValidatedGenerationResult, safe_text, ParserFailureEvidence,
+    LocalReadStatus, ValidatedGenerationResult, safe_text, ParserFailureEvidence, ProviderBoundaryEvidence,
 )
 from .identity import semantic_commitment
 from .ports import AttemptPublicReader, EvidencePublicReader, KnowledgePublicReader
@@ -44,12 +44,16 @@ class ProviderFailureKind(str, Enum):
 class ProviderInvocationError(Exception):
     """Adapter-owned typed failure. Exception text is never persisted."""
 
-    def __init__(self, kind: ProviderFailureKind, *, request_sent: bool = False):
+    def __init__(self, kind: ProviderFailureKind, *, request_sent: bool = False,
+                 boundary_evidence: ProviderBoundaryEvidence | None = None):
         if not isinstance(kind, ProviderFailureKind):
             raise TypeError("closed provider failure kind required")
         super().__init__(kind.value)
         self.kind = kind
         self.request_sent = request_sent
+        if boundary_evidence is not None and not isinstance(boundary_evidence, ProviderBoundaryEvidence):
+            raise TypeError("typed boundary evidence required")
+        self.boundary_evidence = boundary_evidence
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +73,7 @@ class ProviderRequest:
 class ProviderResponse:
     structured_output: str | bytes | dict[str, object]
     metadata: InvocationMetadata
+    boundary_evidence: ProviderBoundaryEvidence | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -343,10 +348,11 @@ class GenerationService:
 
     def _failure(self, source: GenerationInput, kind: FailureClass,
                  safety: RetrySafety, detail: str, calls: int = 0,
-                 preflight_calls: int = 0, *, parser_evidence: ParserFailureEvidence | None = None) -> ExecutionReceipt:
+                 preflight_calls: int = 0, *, parser_evidence: ParserFailureEvidence | None = None,
+                 boundary_evidence: ProviderBoundaryEvidence | None = None) -> ExecutionReceipt:
         failure = GenerationFailure(
             source.try_identity, source.operation_id, kind, safety, detail,
-            subject_input_commitment(source), _same_try_safety_fact(kind, safety), parser_evidence,
+            subject_input_commitment(source), _same_try_safety_fact(kind, safety), parser_evidence, boundary_evidence,
         )
         committed = self.store.commit_failure(failure)
         if committed.status is LocalReadStatus.FOUND:
@@ -555,7 +561,7 @@ class GenerationService:
                       else RetrySafety.RETRYABLE)
             return self._failure(source, kind, safety,
                                  "token preflight provider boundary failed",
-                                 preflight_calls=int(exc.request_sent))
+                                 preflight_calls=int(exc.request_sent), boundary_evidence=exc.boundary_evidence)
         except Exception:
             return self._failure(source, FailureClass.PROVIDER_UNAVAILABLE,
                                  RetrySafety.RETRYABLE,
@@ -584,7 +590,7 @@ class GenerationService:
             }
                       else RetrySafety.RETRYABLE)
             return self._failure(source, kind, safety, "provider boundary failed",
-                                 int(exc.request_sent), 1)
+                                 int(exc.request_sent), 1, boundary_evidence=exc.boundary_evidence)
         except Exception:
             return self._failure(source, FailureClass.PROVIDER_UNAVAILABLE,
                                  RetrySafety.RETRYABLE, "provider boundary unavailable", 1, 1)
@@ -632,7 +638,7 @@ class GenerationService:
             evidence = ParserFailureEvidence(structured_failure_code(exc),
                 sha256(response_bytes).hexdigest() if response_bytes is not None else None, metadata)
             return self._failure(source, kind, safety, "structured result rejected", 1, 1,
-                                 parser_evidence=evidence)
+                                 parser_evidence=evidence, boundary_evidence=response.boundary_evidence)
         try:
             proofs = tuple(
                 derive_causal_support_proof(content, config, self.evidence, claim.claim_id)

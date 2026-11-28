@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from importlib.metadata import PackageNotFoundError, version
 from time import monotonic
 from typing import Any
 
-from .contracts import InvocationMetadata
+from .contracts import InvocationMetadata, ProviderBoundaryEvidence
 from .service import (
     ProviderCapability, ProviderFailureKind, ProviderInvocationError,
     ProviderRequest, ProviderResponse,
@@ -21,6 +22,59 @@ GEMINI35_PROFILE = "demo-google-gemini35-flash-lite-generation-profile-v1"
 GEMINI35_PROFILE_VERSION = "1"
 GEMINI35_STRUCTURED_PROFILE_VERSION = "2"
 GEMINI35_SDK = "2.25.0"
+
+
+def _attribute(value: Any, name: str) -> Any:
+    try:
+        return getattr(value, name, None)
+    except Exception:
+        return None
+
+
+def _model_observation(response: Any, expected: str) -> str:
+    if response is None:
+        return "UNKNOWN"
+    try:
+        value = getattr(response, "model_version", None)
+    except Exception:
+        return "UNKNOWN"
+    if value is None:
+        return "MISSING"
+    if type(value) is not str or not value.strip():
+        return "UNKNOWN"
+    return "MATCHED" if value == expected else "MISMATCH"
+
+
+def _boundary(operation: str, stage: str, *, exc: Exception | None = None,
+              response: Any = None, model: str = "UNKNOWN") -> ProviderBoundaryEvidence:
+    """Observe fixed scalar facts only. A sent-counter is not delivery proof."""
+    import httpx
+    from google.genai import errors, types
+    from pydantic import ValidationError
+    classification = "NONE"
+    if exc is not None:
+        classification = next((label for kind, label in (
+            (errors.ClientError, "SDK_CLIENT_ERROR"), (errors.ServerError, "SDK_SERVER_ERROR"),
+            (errors.APIError, "SDK_API_ERROR"), (ValidationError, "SDK_VALIDATION_ERROR"),
+            ((httpx.TimeoutException, TimeoutError), "TIMEOUT"),
+            (httpx.TransportError, "TRANSPORT_ERROR"), (ValueError, "VALUE_ERROR"),
+        ) if isinstance(exc, kind)), "UNKNOWN_ERROR")
+    transport_response = response if isinstance(response, httpx.Response) else _attribute(exc, "response")
+    status = transport_response.status_code if isinstance(transport_response, httpx.Response) else None
+    if type(status) is not int or not 100 <= status <= 599:
+        status = None
+    google_status = _attribute(exc, "status") if isinstance(exc, errors.APIError) else None
+    if type(google_status) is not str or google_status not in {"OK", "CANCELLED", "UNKNOWN", "INVALID_ARGUMENT", "DEADLINE_EXCEEDED",
+        "NOT_FOUND", "ALREADY_EXISTS", "PERMISSION_DENIED", "RESOURCE_EXHAUSTED", "FAILED_PRECONDITION",
+        "ABORTED", "OUT_OF_RANGE", "UNIMPLEMENTED", "INTERNAL", "UNAVAILABLE", "DATA_LOSS", "UNAUTHENTICATED"}:
+        google_status = None
+    sdk_http = _attribute(response, "sdk_http_response")
+    confirmed = status is not None or isinstance(sdk_http, types.HttpResponse)
+    local = stage in ("REQUEST_VALIDATION", "CLIENT_INITIALIZATION")
+    received = "YES" if confirmed or response is not None else ("NO" if local else "UNKNOWN")
+    delivery = "CONFIRMED_RESPONSE" if confirmed else ("NOT_DISPATCHED" if local else "UNKNOWN")
+    return ProviderBoundaryEvidence(operation, stage, status, google_status, classification,
+                                    model, received, delivery)
 
 
 def create_google_generation_client(
@@ -65,13 +119,16 @@ def create_google_generation_client(
                         raise ValueError("invalid Counting response")
                 except (ValueError, TypeError):
                     raise ProviderInvocationError(ProviderFailureKind.MALFORMED,
-                                                  request_sent=True) from None
+                        request_sent=True, boundary_evidence=_boundary("COUNT_TOKENS", "RESPONSE_VALIDATION",
+                            response=response)) from None
                 for key in ("modelVersion", "model_version"):
                     identity = value.get(key)
                     if identity is not None and (type(identity) is not str
                                                   or identity != GEMINI35_MODEL):
                         raise ProviderInvocationError(ProviderFailureKind.CAPABILITY,
-                                                      request_sent=True) from None
+                            request_sent=True, boundary_evidence=_boundary("COUNT_TOKENS", "RESPONSE_VALIDATION",
+                                response=response, model="MISMATCH" if type(identity) is str and identity.strip()
+                                else "UNKNOWN")) from None
             options["client_args"] = {"event_hooks": {"response": [observe_count_identity]}}
         return genai.Client(
             api_key=api_key,
@@ -82,8 +139,9 @@ def create_google_generation_client(
             ),
             http_options=types.HttpOptions(**options),
         )
-    except Exception:
-        raise ProviderInvocationError(ProviderFailureKind.UNAVAILABLE) from None
+    except Exception as exc:
+        raise ProviderInvocationError(ProviderFailureKind.UNAVAILABLE,
+            boundary_evidence=_boundary("GENERATE_CONTENT", "CLIENT_INITIALIZATION", exc=exc)) from None
 
 
 def _provider_kind(exc: Exception) -> ProviderFailureKind:
@@ -161,7 +219,16 @@ class GoogleGenerationAdapter:
         return self._client
 
     def input_token_upper_bound(self, prompt: str, timeout_seconds: int) -> int | None:
-        client = self._client_for(timeout_seconds)
+        try:
+            client = self._client_for(timeout_seconds)
+        except ProviderInvocationError as exc:
+            # Relabel the operation without discarding already sanitized facts.
+            evidence = (replace(exc.boundary_evidence, operation="COUNT_TOKENS")
+                        if exc.boundary_evidence is not None else
+                        ProviderBoundaryEvidence("COUNT_TOKENS", "CLIENT_INITIALIZATION",
+                            None, None, "UNKNOWN_ERROR", "UNKNOWN", "UNKNOWN", "UNKNOWN"))
+            raise ProviderInvocationError(exc.kind, request_sent=exc.request_sent,
+                boundary_evidence=evidence) from None
         self.token_preflight_calls += 1
         try:
             response = client.models.count_tokens(model=self.capability.model, contents=prompt)
@@ -169,7 +236,8 @@ class GoogleGenerationAdapter:
             # Preserve the hook's sanitized, sent-attempt model-conflict result.
             raise
         except Exception as exc:
-            raise ProviderInvocationError(_provider_kind(exc), request_sent=True) from None
+            raise ProviderInvocationError(_provider_kind(exc), request_sent=True,
+                boundary_evidence=_boundary("COUNT_TOKENS", "SDK_CALL", exc=exc)) from None
         # Counting need not expose identity. When it does, never accept an
         # explicit conflict (and never infer a match from a missing field).
         if self._gemini35:
@@ -177,14 +245,17 @@ class GoogleGenerationAdapter:
                 model = getattr(response, "model_version", None)
             except Exception:
                 raise ProviderInvocationError(ProviderFailureKind.CAPABILITY,
-                                              request_sent=True) from None
+                    request_sent=True, boundary_evidence=_boundary("COUNT_TOKENS", "RESPONSE_VALIDATION",
+                        response=response)) from None
             if model is not None and (type(model) is not str or model != self.capability.model):
                 raise ProviderInvocationError(ProviderFailureKind.CAPABILITY,
-                                              request_sent=True)
+                    request_sent=True, boundary_evidence=_boundary("COUNT_TOKENS", "RESPONSE_VALIDATION",
+                        response=response, model=_model_observation(response, self.capability.model)))
         count = getattr(response, "total_tokens", None)
         if type(count) is not int or count < 1:
             raise ProviderInvocationError(ProviderFailureKind.MALFORMED,
-                                          request_sent=True)
+                request_sent=True, boundary_evidence=_boundary("COUNT_TOKENS", "RESPONSE_VALIDATION",
+                    response=response, model=_model_observation(response, self.capability.model)))
         return count
 
     def invoke_once(self, request: ProviderRequest) -> ProviderResponse:
@@ -198,8 +269,13 @@ class GoogleGenerationAdapter:
             or request.maximum_output_tokens < 1
             or type(request.maximum_output_bytes) is not int
             or request.maximum_output_bytes < 1):
-            raise ProviderInvocationError(ProviderFailureKind.CAPABILITY)
-        client = self._client_for(request.timeout_seconds)
+            raise ProviderInvocationError(ProviderFailureKind.CAPABILITY,
+                boundary_evidence=_boundary("GENERATE_CONTENT", "REQUEST_VALIDATION"))
+        try:
+            client = self._client_for(request.timeout_seconds)
+        except ProviderInvocationError as exc:
+            raise ProviderInvocationError(exc.kind, request_sent=exc.request_sent,
+                boundary_evidence=exc.boundary_evidence or _boundary("GENERATE_CONTENT", "CLIENT_INITIALIZATION")) from None
         config = {
             "max_output_tokens": request.maximum_output_tokens,
             "response_mime_type": "application/json",
@@ -224,7 +300,8 @@ class GoogleGenerationAdapter:
                 config=config,
             )
         except Exception as exc:
-            raise ProviderInvocationError(_provider_kind(exc), request_sent=True) from None
+            raise ProviderInvocationError(_provider_kind(exc), request_sent=True,
+                boundary_evidence=_boundary("GENERATE_CONTENT", "SDK_CALL", exc=exc)) from None
         duration_ms = min(600_000, max(0, int((monotonic() - started) * 1000)))
         if self._gemini35:
             try:
@@ -238,10 +315,14 @@ class GoogleGenerationAdapter:
             # No prefix/alias inference: an unknown revision requires review.
             if type(model) is not str or model != GEMINI35_MODEL:
                 raise ProviderInvocationError(ProviderFailureKind.CAPABILITY,
-                                              request_sent=True)
+                    request_sent=True, boundary_evidence=_boundary("GENERATE_CONTENT", "RESPONSE_VALIDATION",
+                        response=response, model=_model_observation(response, GEMINI35_MODEL)))
             if not complete:
                 raise ProviderInvocationError(ProviderFailureKind.MALFORMED,
-                                              request_sent=True)
+                    request_sent=True, boundary_evidence=_boundary("GENERATE_CONTENT", "RESPONSE_VALIDATION",
+                        response=response, model="MATCHED"))
+        observed = _boundary("GENERATE_CONTENT", "RESPONSE_VALIDATION", response=response,
+            model=_model_observation(response, self.capability.model))
         usage = getattr(response, "usage_metadata", None)
         input_count = getattr(usage, "prompt_token_count", None)
         output_count = getattr(usage, "candidates_token_count", None)
@@ -250,7 +331,7 @@ class GoogleGenerationAdapter:
                 input_count, output_count, total_count))
             or total_count < input_count + output_count):
             raise ProviderInvocationError(ProviderFailureKind.MALFORMED,
-                                          request_sent=True)
+                                          request_sent=True, boundary_evidence=observed)
         if self._gemini35:
             thoughts = getattr(usage, "thoughts_token_count", None)
             tools = getattr(usage, "tool_use_prompt_token_count", None)
@@ -258,24 +339,24 @@ class GoogleGenerationAdapter:
                     or total_count < input_count + output_count + thoughts))
                     or (tools is not None and (type(tools) is not int or tools != 0))):
                 raise ProviderInvocationError(ProviderFailureKind.MALFORMED,
-                                              request_sent=True)
+                                              request_sent=True, boundary_evidence=observed)
             # Account for ALL post-input tokens, including thinking, without
             # inventing a zero for an absent optional thoughts breakdown.
             output_count = total_count - input_count
             if output_count > request.maximum_output_tokens:
                 raise ProviderInvocationError(ProviderFailureKind.BOUNDS,
-                                              request_sent=True)
+                                              request_sent=True, boundary_evidence=observed)
         try:
             metadata = InvocationMetadata(1, input_count, output_count,
                                           total_count, duration_ms)
             output = response.text
         except Exception:
             raise ProviderInvocationError(ProviderFailureKind.MALFORMED,
-                                          request_sent=True) from None
+                                          request_sent=True, boundary_evidence=observed) from None
         if not isinstance(output, str):
             raise ProviderInvocationError(ProviderFailureKind.MALFORMED,
-                                          request_sent=True)
+                                          request_sent=True, boundary_evidence=observed)
         if len(output.encode("utf-8")) > request.maximum_output_bytes:
             raise ProviderInvocationError(ProviderFailureKind.BOUNDS,
-                                          request_sent=True)
-        return ProviderResponse(output, metadata)
+                                          request_sent=True, boundary_evidence=observed)
+        return ProviderResponse(output, metadata, observed)

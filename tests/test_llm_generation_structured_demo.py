@@ -148,7 +148,7 @@ def test_legacy_failure_codec_and_commitment_preserved(case):
     encoded=encode(failure)
     assert 'parser_evidence' not in encoded['fields']
     assert decode(encoded)==failure
-    old_plain={k:v for k,v in asdict(failure).items() if k!='parser_evidence'}
+    old_plain={k:v for k,v in asdict(failure).items() if k not in ('parser_evidence','boundary_evidence')}
     old_plain['failure_class']=failure.failure_class.value
     old_plain['retry_safety']=failure.retry_safety.value
     expected=sha256(('spec015-result-v1\n'+json.dumps(old_plain,sort_keys=True,
