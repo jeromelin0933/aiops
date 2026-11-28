@@ -167,7 +167,7 @@ def test_risk_native_c_d_a_e_composition_without_counting_proof(bounded,monkeypa
         account_reference=value['pricing_evidence']['account_reference'],acceptance_reference='OFFLINE-FAKE-ACCEPTANCE',
         accepted_by=record.spec_lead_identity,accepted_at=(now-timedelta(minutes=1)).isoformat(),acceptance_expires_at='2026-12-17T15:59:00+00:00',
         run_id='dec17-bounded-'+uuid.uuid4().hex[:10],generation_model='gemini-3.5-flash-lite',
-        generation_profile='demo-google-gemini35-flash-lite-generation-profile-v1',generation_profile_version='1',generation_api='v1beta',
+        generation_profile='demo-google-gemini35-flash-lite-generation-profile-v1',generation_profile_version='2',generation_api='v1beta',
         physical_call_allocation=[1,1,1],operation_scopes=list(c.DECEMBER_OPERATION_SCOPES),
         external_files=[dict(path=str(c.DECEMBER_EXTERNAL_ROOT/n),version='1',sha256=sha256((c.DECEMBER_EXTERNAL_ROOT/n).read_bytes()).hexdigest()) for n in sorted(c.DECEMBER_EXTERNAL_NAMES)])
     def load_safety():

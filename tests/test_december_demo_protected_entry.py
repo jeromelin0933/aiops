@@ -196,6 +196,11 @@ def test_real_port_branch_with_only_mock_transports_and_persistence(admitted,mon
     from test_llm_generation_phase2 import _structured
     admitted['scope'].update(mode='REAL_PROVIDER',grant_reference='PM-UNIT-EXECUTION',
         issuer_identity='SYNTHETIC UNIT FIXTURE NOT PM AUTHORITY')
+    # This legacy synthetic campaign is not a production/delegated target.
+    # Extend only this test's pinned legacy set to exercise the sealed mock ports.
+    if admitted['target'].december_debug_call_budget is None:
+        monkeypatch.setattr(c, 'DECEMBER_LEGACY_EXECUTION_CAMPAIGNS',
+            c.DECEMBER_LEGACY_EXECUTION_CAMPAIGNS | {admitted['target'].campaign_id})
     wires=[];resources=[]
     original=entry._compile_accepted
     def compile_fixture(name,data,path):

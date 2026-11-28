@@ -209,7 +209,7 @@ def test_optional_wire_and_exact_legacy_composite_digest(bounded,reviewed_unknow
     without=replace(f['target'],december_demo_fence_review=replace(f['target'].december_demo_fence_review,stage1_unknown_review=None))
     old=asdict(without);old['december_demo_fence_review'].pop('stage1_unknown_review')
     assert c.DiagnosticAuthorizationRecord.from_json(json.dumps(old).encode())==without
-    for key in ('project_identity','credential_profile_revision','p0_unknown_review','p0_two_unknown_reviews','p0_full54_history_scope','full54_bounded_risk','query_count_success_review','december_demo_fence_review'):
+    for key in ('project_identity','credential_profile_revision','p0_unknown_review','p0_two_unknown_reviews','p0_full54_history_scope','full54_bounded_risk','query_count_success_review','december_demo_fence_review','december_debug_call_budget'):
         if old.get(key) is None:old.pop(key,None)
     assert c.authorization_record_digest(without)==sha256(json.dumps(old,sort_keys=True,ensure_ascii=True,separators=(',',':')).encode()).hexdigest()
     assert c.authorization_record_digest(without)!=c.authorization_record_digest(f['target'])

@@ -1728,3 +1728,79 @@ Target03 ExternalDemoCommitment may explicitly use version `2` for the changed
 Demo source/config files; version `1` remains accepted for historical unchanged
 files. Every exact path/version/SHA tuple remains protected by new Human
 acceptance and the exact target scope. This adds no wildcard file authority.
+
+### December Target04/05 bounded atomic allocation (2026-11-28)
+
+Under PM Bounded Autonomous RCA Debugging and the SPEC Lead's minimal offline
+enforcement authorization, `demo-december-debug-call-budget-v1@1` is optional
+protected Authorization metadata, but mandatory for the exact new campaigns
+`dec17-rca-demo-20261128-04` and `dec17-rca-demo-20261128-05`. It binds the real
+PM delegation decision reference, delegated SPEC Lead issuer, immutable baseline
+Ledger commitment, conservative prior occupancy 8, ceiling 20 and whole-Target
+allocation 3. It is part of the Authorization Digest and therefore E4/Safety.
+The Parent scope must use the same target Run/Campaign, actual delegated Grant
+reference and issuer, and allocation [1,1,1]. A reference string or this offline
+amendment alone is not approval: genuine Human acceptance and the existing
+Protected Publication/source/host/credential/account/validity guards still apply.
+No PM-personally-issued Decision ID is invented for a delegated Target Grant.
+
+The existing embedding reservation row anchors the entire Target's three slots.
+Inside its existing BEGIN IMMEDIATE transaction, Admission verifies the protected
+baseline commitment and computes 8 + 3 * (already reserved Targets + this new
+Target) <= 20 before inserting the ordinary embedding reservation. There is no
+second ledger, row type, schema migration, refund or change to token/cost holds.
+All three slots remain conservatively occupied for every outcome, even if fewer
+requests were sent; these slots are not measured Provider Usage. With only two
+approved new targets, the tighter possible occupancy is 14; the other six slots
+are not authority to create more Targets or retry. Duplicate allocation is denied.
+
+The baseline is a canonical SHA-256 over all existing attempts' eight native
+columns, sorted by Campaign/Request, excluding only these exact two new Targets.
+It includes UNKNOWN, reservations/holds and Observation commitments through their
+original serialized values. Human obtains it using the existing guarded read-only
+bootstrap and accepts it in the new Grant. Any other new or changed row causes
+STOP; it does not disappear from accounting or become an automatically reviewed
+fence. Historical raw predicates, reviews and budget values remain unchanged.
+
+Read-only preflight and Final Revalidation repeat the same budget calculation.
+Later generation phases require this Target's committed SUCCESS embedding anchor
+and known observed embedding usage, as well as all existing remaining-fence and
+per-operation guards. Embedding usage is not Generation Counting proof. Target05
+cannot precede Target04 allocation and requires a separate actual delegated Grant
+after Target04 diagnosis/repair and only while no Validated RCA exists. There is
+no automatic Target05 dispatch; stop debugging after the first Validated RCA.
+
+Use the original three-operation route, no Snapshot reuse or Same-Try retry.
+Each operation has one attempt/30 seconds and no retry/fallback. Historical
+authorization records lacking this optional metadata retain their original
+canonical Digest and semantics. New Source changes require independent narrow
+audit, Human checkpoint and new-source Publication rebinding before Live use.
+
+#### Budget20 稽核窄幅修復：Target、Parent 與 Reservation 綁定
+
+本次委派的 Parent Reference 固定為
+`PM Decision — Bounded Autonomous RCA Debugging`，並綁定 SPEC Lead 提供的
+PM 文件 SHA-256：
+`f49e0e54ab2529eae11f53b442eece65ce664c24a2733e9ecabd521348aa2576`。
+受保護 Metadata 的 `pm_decision_reference`、`pm_decision_sha256` 必須完全符合。
+這是已接受決策的識別，不是新簽發的 PM Decision ID；不能取代真正的 Human
+Acceptance、ACL Provenance 或 Publication。任意非空字串不構成授權。
+
+委派 Grant Reference 使用封閉格式
+`SPECLEAD-DECEMBER-DEBUG/<exact-target-campaign>/<Human-issued-reference>`。
+最後一段必須由 Human 真正簽發，不能由程式產生批准。Target04／05 的完整
+Grant Reference 不可共用。Record、Parent Scope、Native Preflight、Atomic
+Reservation 與 Final Guard 必須一致核對 Target、Grant、Issuer、Source 及
+Parent Decision；移除 Budget 或改名 Campaign 不能避開檢查。
+真實 December Parent Scope 僅接受原 Target01／02／03 與新 Target04／05；
+歷史合法 Record 與缺省欄位 Digest 不變。Offline Fixture 不授權真實 Dispatch。
+新 Target04／05 必須維持 Generation Profile `@2`，不得回退至 `@1`。
+
+僅新 Target04／05 的 Reservation，使用既有 `observation_json` 保存封閉的
+Target／Request、Grant、Source、Authorization Digest、Parent Reference／SHA、
+Baseline Commitment 及 `[1,1,1]` Allocation 綁定。此資料與原 Reservation
+在同一交易寫入，完成時原樣保留，並由 Final Guard／Completion 再次核對。
+它不是 Provider Observation、Counting Result、Token Proof 或 Observed Usage。
+既有 Anchor 不可更換其 Grant／Source；另一個 Target 保留自己的精確綁定。
+不得新增 Schema、第二套 Ledger 或改寫歷史 Row；缺少綁定的既存 Anchor
+必須 Fail Closed，不得自動補資料或 Repair。

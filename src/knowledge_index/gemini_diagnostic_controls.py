@@ -1328,6 +1328,70 @@ class DecemberDemoFenceReview:
                 deny()
 
 
+DECEMBER_DEBUG_TARGETS = ("dec17-rca-demo-20261128-04", "dec17-rca-demo-20261128-05")
+DECEMBER_DEBUG_BUDGET = "demo-december-debug-call-budget-v1@1"
+DECEMBER_DEBUG_PM_REFERENCE = "PM Decision — Bounded Autonomous RCA Debugging"
+DECEMBER_DEBUG_PM_SHA256 = "f49e0e54ab2529eae11f53b442eece65ce664c24a2733e9ecabd521348aa2576"
+DECEMBER_DEBUG_GRANT_PREFIX = "SPECLEAD-DECEMBER-DEBUG/"
+DECEMBER_LEGACY_EXECUTION_CAMPAIGNS = frozenset({
+    "dec17-s2-rca-stage2-20261127-01", "dec17-rca-demo-20261127-02",
+    "dec17-rca-demo-20261128-03"})
+
+
+def _debug_grant_matches(campaign, reference):
+    return (type(reference) is str and campaign in DECEMBER_DEBUG_TARGETS
+            and re.fullmatch(re.escape(DECEMBER_DEBUG_GRANT_PREFIX + campaign + "/")
+                             + r"[A-Za-z0-9][A-Za-z0-9._-]{0,95}", reference) is not None)
+
+
+def _validate_debug_target(record):
+    delegated = (record.december_debug_call_budget is not None
+                 or record.pm_approval_reference.startswith(DECEMBER_DEBUG_GRANT_PREFIX)
+                 or record.campaign_id in DECEMBER_DEBUG_TARGETS)
+    if (record.campaign_id.startswith("dec17-")
+            and record.purpose == "CONTROLLED_PROVIDER_DIAGNOSTIC" and record.input_kind == "query"
+            and record.campaign_id not in DECEMBER_LEGACY_EXECUTION_CAMPAIGNS
+            and record.campaign_id not in DECEMBER_DEBUG_TARGETS):
+        raise DiagnosticDenied("December campaign is outside approved historical/debug targets")
+    if delegated and (record.campaign_id not in DECEMBER_DEBUG_TARGETS
+                      or record.december_debug_call_budget is None
+                      or not _debug_grant_matches(record.campaign_id, record.pm_approval_reference)):
+        raise DiagnosticDenied("December delegated campaign/grant/budget binding mismatch")
+
+
+@dataclass(frozen=True, slots=True)
+class DecemberDebugCallBudget:
+    """Protected two-target envelope; a whole allocation is never refunded."""
+    policy_identity: str
+    pm_decision_reference: str
+    delegated_issuer: str
+    baseline_ledger_sha256: str
+    prior_occupancy: int
+    cumulative_ceiling: int
+    target_allocation: int
+    pm_decision_sha256: str
+
+    def matches_record(self, record):
+        if (self.policy_identity != DECEMBER_DEBUG_BUDGET
+                or record.campaign_id not in DECEMBER_DEBUG_TARGETS
+                or self.delegated_issuer != record.spec_lead_identity
+                or self.pm_decision_reference != DECEMBER_DEBUG_PM_REFERENCE
+                or self.pm_decision_sha256 != DECEMBER_DEBUG_PM_SHA256
+                or not _debug_grant_matches(record.campaign_id, record.pm_approval_reference)
+                or type(self.baseline_ledger_sha256) is not str
+                or not re.fullmatch(r"[0-9a-f]{64}", self.baseline_ledger_sha256)
+                or any(type(v) is not int for v in (self.prior_occupancy, self.cumulative_ceiling, self.target_allocation))
+                or (self.prior_occupancy, self.cumulative_ceiling, self.target_allocation) != (8, 20, 3)
+                or record.purpose != "CONTROLLED_PROVIDER_DIAGNOSTIC"
+                or record.input_kind != "query" or record.bounds_basis != DEMO_QUERY_RISK_BASIS
+                or record.december_demo_fence_review is None
+                or record.maximum_invocations != 1 or record.maximum_items != 1
+                or record.input_commitment != QUERY_COUNTING_INPUT
+                or _timestamp(record.expires_at) > datetime(2026, 12, 17, 23, 59,
+                                                          tzinfo=timezone(timedelta(hours=8)))):
+            raise DiagnosticDenied("December debug budget/target/delegation mismatch")
+
+
 @dataclass(frozen=True, slots=True)
 class DiagnosticAuthorizationRecord:
     campaign_id: str
@@ -1370,6 +1434,7 @@ class DiagnosticAuthorizationRecord:
     full54_bounded_risk: Full54BoundedRisk | None = None
     query_count_success_review: QueryCountingSuccessReview | None = None
     december_demo_fence_review: DecemberDemoFenceReview | None = None
+    december_debug_call_budget: DecemberDebugCallBudget | None = None
 
     def __post_init__(self) -> None:
         for field in (
@@ -1443,6 +1508,7 @@ class DiagnosticAuthorizationRecord:
             raise DiagnosticDenied("normalization tolerance is invalid")
         if _timestamp(self.valid_from) >= _timestamp(self.expires_at):
             raise DiagnosticDenied("authorization validity interval is invalid")
+        _validate_debug_target(self)
         if self.p0_unknown_review is not None:
             if type(self.p0_unknown_review) is not P0UnknownAttemptReview:
                 raise DiagnosticDenied("P0 review must use the exact versioned authorization fields")
@@ -1482,6 +1548,12 @@ class DiagnosticAuthorizationRecord:
                            self.p0_full54_history_scope, self.full54_bounded_risk, self.query_count_success_review))):
                 raise DiagnosticDenied("December review cannot mix legacy exceptions", code="DECEMBER_REVIEW_MISMATCH")
             self.december_demo_fence_review.matches_record(self)
+        if self.december_debug_call_budget is not None:
+            if type(self.december_debug_call_budget) is not DecemberDebugCallBudget:
+                raise DiagnosticDenied("December debug budget must use the exact protected wire")
+            self.december_debug_call_budget.matches_record(self)
+        elif self.campaign_id in DECEMBER_DEBUG_TARGETS:
+            raise DiagnosticDenied("December debug target requires its cumulative budget binding")
 
     @classmethod
     def from_json(cls, data: bytes) -> "DiagnosticAuthorizationRecord":
@@ -1489,7 +1561,7 @@ class DiagnosticAuthorizationRecord:
             value = _unique_json(data)
             optional = {"project_identity", "credential_profile_revision", "p0_unknown_review",
                         "p0_two_unknown_reviews", "p0_full54_history_scope", "full54_bounded_risk",
-                        "query_count_success_review", "december_demo_fence_review"}
+                        "query_count_success_review", "december_demo_fence_review", "december_debug_call_budget"}
             if (type(value) is not dict or not set(cls.__dataclass_fields__) - optional <= set(value)
                     or not set(value) <= set(cls.__dataclass_fields__)):
                 raise DiagnosticDenied("authorization record fields are incomplete or extra")
@@ -1548,6 +1620,11 @@ class DiagnosticAuthorizationRecord:
                     **composite, "historical_reviews": (P0UnknownAttemptReview(**history[0]),
                                                         P0SecondUnknownAttemptReview(**history[1])),
                     "counting_success_review": success, "stage1_unknown_review": unknown})
+            budget = value.get("december_debug_call_budget")
+            if budget is not None:
+                if type(budget) is not dict or set(budget) != set(DecemberDebugCallBudget.__dataclass_fields__):
+                    raise DiagnosticDenied("December debug budget wire mismatch")
+                value["december_debug_call_budget"] = DecemberDebugCallBudget(**budget)
             return cls(**value)
         except (UnicodeError, TypeError, ValueError) as exc:
             if isinstance(exc, DiagnosticDenied):
@@ -1563,7 +1640,7 @@ def authorization_record_digest(record: DiagnosticAuthorizationRecord) -> str:
     # Historical embedding grants retain their exact pre-extension digest.
     for name in ("project_identity", "credential_profile_revision", "p0_unknown_review",
                  "p0_two_unknown_reviews", "p0_full54_history_scope", "full54_bounded_risk",
-                 "query_count_success_review", "december_demo_fence_review"):
+                 "query_count_success_review", "december_demo_fence_review", "december_debug_call_budget"):
         if fields[name] is None:
             fields.pop(name)
     composite = fields.get("december_demo_fence_review")
@@ -1863,6 +1940,7 @@ class DecemberDemoExecutionScope:
             "physical_call_allocation": tuple(raw["physical_call_allocation"])})
 
     def matches_record(self, record, safety) -> None:
+        record.__post_init__()
         for name in self.__dataclass_fields__:
             if name not in ("external_files", "physical_call_allocation", "operation_scopes"):
                 v = getattr(self, name)
@@ -1901,6 +1979,21 @@ class DecemberDemoExecutionScope:
                 or self.mode == "REAL_PROVIDER" and any(word in self.grant_reference.upper()
                                                        for word in ("OFFLINE", "SYNTHETIC", "FIXTURE"))):
             raise DiagnosticDenied("preparation/fixture metadata is not a PM Live Grant")
+        budget = record.december_debug_call_budget
+        if (self.mode == "REAL_PROVIDER" and record.campaign_id not in
+                DECEMBER_LEGACY_EXECUTION_CAMPAIGNS | frozenset(DECEMBER_DEBUG_TARGETS)):
+            raise DiagnosticDenied("December real execution requires an approved target identity")
+        if (self.run_id in DECEMBER_DEBUG_TARGETS
+                or self.run_id.startswith("dec17-rca-demo-20261128-")):
+            if self.run_id not in DECEMBER_LEGACY_EXECUTION_CAMPAIGNS and budget is None:
+                raise DiagnosticDenied("December debug run cannot inherit legacy scope")
+        if budget is not None:
+            budget.matches_record(record)
+            if (self.run_id != record.campaign_id or self.grant_reference != record.pm_approval_reference
+                    or self.issuer_identity != budget.delegated_issuer
+                    or self.generation_profile_version != "2"
+                    or self.physical_call_allocation != (1, 1, 1)):
+                raise DiagnosticDenied("December delegated target grant binding mismatch")
         expected = {str(DECEMBER_EXTERNAL_ROOT / name) for name in DECEMBER_EXTERNAL_NAMES}
         if (len(self.external_files) != len(expected)
                 or {v.path for v in self.external_files} != expected
@@ -2878,6 +2971,9 @@ def validate_authorization(
     item_bytes: tuple[int, ...], item_tokens: tuple[int, ...], payload_bytes: int,
     safety_basis: str, conservative_usage_units: int, conservative_cost_micro_units: int,
 ) -> None:
+    if type(record) is not DiagnosticAuthorizationRecord:
+        raise DiagnosticDenied("exact diagnostic authorization record required")
+    record.__post_init__()
     if record.purpose != "CONTROLLED_PROVIDER_DIAGNOSTIC":
         raise DiagnosticDenied("embedding authorization operation mismatch", code="OPERATION_MISMATCH")
     if live_opt_in is not True:
@@ -3166,6 +3262,7 @@ def inspect_local_counting_store(*, runner_sid: str, source_revision: str,
                 raise DiagnosticDenied("Counting schema is incompatible; no repair")
             count, usage, cost = db.execute("SELECT COUNT(*),COALESCE(SUM(usage_reserved),0),"
                                            "COALESCE(SUM(cost_reserved),0) FROM attempts").fetchone()
+            debug_baseline = _december_debug_baseline(db)
             fences = _blocking_fence_count(db)
             blocking = _blocking_fence_count(db, record) if record is not None else fences
             if fresh and (count, usage, cost) != (0, 0, 0):
@@ -3178,6 +3275,7 @@ def inspect_local_counting_store(*, runner_sid: str, source_revision: str,
             "reserved_cost": cost, "fences": fences, "schema_integrity": "PASS",
             "fresh_check": fresh, "live": "NOT AUTHORIZED",
             "live_authority": "NOT VERIFIED BY BOOTSTRAP"}
+    result["december_debug_baseline_sha256"] = debug_baseline
     if for_authorized_campaign:
         query_reviewed = int(record.query_count_success_review is not None or
                              (record.december_demo_fence_review is not None
@@ -3232,6 +3330,7 @@ class TemporaryDiagnosticUsage:
             with closing(self._connect()) as db:
                 db.execute("BEGIN IMMEDIATE")
                 self._check_reservation_state(db)
+                _check_december_debug_budget(db, record, pending=True)
                 if is_counting_operation(record.purpose):
                     record.__post_init__()
                     # Existing stores are never automatically migrated.
@@ -3258,6 +3357,10 @@ class TemporaryDiagnosticUsage:
                     "VALUES (?,?, 'IN_FLIGHT',?,?,?)",
                     (record.campaign_id, request_id, items, usage_units, cost_micro_units),
                 )
+                if record.december_debug_call_budget is not None:
+                    db.execute("UPDATE attempts SET observation_json=? WHERE campaign_id=? AND request_id=?",
+                        (json.dumps(_debug_reservation_binding(record, request_id), sort_keys=True,
+                                    separators=(",", ":")), record.campaign_id, request_id))
                 if is_counting_operation(record.purpose):
                     pending = dict(operation=record.purpose, authorization_sha256=authorization_record_digest(record),
                         input_commitment=record.input_commitment, body_sha256=_counting_body(record.purpose),
@@ -3279,6 +3382,7 @@ class TemporaryDiagnosticUsage:
 
     def revalidate_december_review(self, record, request_id, *, items, usage_units, cost_micro_units):
         """Only our exact reservation may remain blocking immediately before send."""
+        record.__post_init__()
         if record.december_demo_fence_review is None:
             return
         try:
@@ -3286,6 +3390,7 @@ class TemporaryDiagnosticUsage:
                 db.execute("PRAGMA query_only=ON")
                 db.execute("BEGIN")
                 self._check_reservation_state(db)
+                _check_december_debug_budget(db, record, pending=False)
                 own = db.execute("SELECT outcome,items,usage_reserved,cost_reserved,usage_observed,"
                                  "observation_json FROM attempts WHERE campaign_id=? AND request_id=?",
                                  (record.campaign_id, request_id)).fetchone()
@@ -3304,6 +3409,8 @@ class TemporaryDiagnosticUsage:
                             or not (_timestamp(record.valid_from) <= _timestamp(pending["reserved_at"])
                                     <= datetime.now(timezone.utc) < _timestamp(record.expires_at))):
                         raise DiagnosticDenied("December counting reservation changed", code="DECEMBER_REVIEW_MISMATCH")
+                elif record.december_debug_call_budget is not None:
+                    _check_debug_anchor(record, request_id, own[5])
                 elif own[5] is not None:
                     raise DiagnosticDenied("December embedding reservation changed", code="DECEMBER_REVIEW_MISMATCH")
         except (sqlite3.Error, OSError, ValueError, TypeError, KeyError):
@@ -3459,6 +3566,8 @@ class TemporaryDiagnosticUsage:
             db = self._connect()
             db.execute("BEGIN IMMEDIATE")
             self._check_reservation_state(db)
+            if record.december_debug_call_budget is not None:
+                _check_december_debug_budget(db, record, pending=False)
             row = db.execute(
                 "SELECT outcome,usage_reserved FROM attempts WHERE campaign_id=? AND request_id=?",
                 (record.campaign_id, request_id),
@@ -3574,7 +3683,89 @@ class LiveDiagnosticUsage(TemporaryDiagnosticUsage):
             raise DiagnosticDenied("formal usage database is unavailable") from exc
 
 
-def inspect_december_execution_ledger(record, *, before_query: bool, required_usage_units: int) -> None:
+def _december_debug_baseline(db):
+    """Commit existing rows without exporting observations or changing history."""
+    rows = db.execute("SELECT campaign_id,request_id,outcome,items,usage_reserved,cost_reserved,"
+                      "usage_observed,observation_json FROM attempts "
+                      "WHERE campaign_id NOT IN (?,?) ORDER BY campaign_id,request_id",
+                      DECEMBER_DEBUG_TARGETS).fetchall()
+    return hashlib.sha256(json.dumps(rows, ensure_ascii=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _debug_reservation_binding(record, request_id):
+    budget = record.december_debug_call_budget
+    return dict(policy_identity=DECEMBER_DEBUG_BUDGET, campaign_id=record.campaign_id,
+                request_id=request_id, grant_reference=record.pm_approval_reference,
+                source_revision=record.source_revision, authorization_sha256=authorization_record_digest(record),
+                pm_decision_reference=budget.pm_decision_reference, pm_decision_sha256=budget.pm_decision_sha256,
+                baseline_ledger_sha256=budget.baseline_ledger_sha256, physical_call_allocation=[1, 1, 1])
+
+
+def _check_debug_anchor(record, request_id, raw, *, campaign=None):
+    if type(raw) is not str:
+        raise DiagnosticDenied("December debug reservation binding is missing")
+    value = _unique_json(raw.encode("utf-8"))
+    expected = _debug_reservation_binding(record, request_id)
+    campaign = record.campaign_id if campaign is None else campaign
+    if type(value) is not dict or set(value) != set(expected):
+        raise DiagnosticDenied("December debug reservation binding fields mismatch")
+    if (value["campaign_id"] != campaign or value["request_id"] != request_id
+            or not _debug_grant_matches(value["campaign_id"], value["grant_reference"])
+            or value["pm_decision_reference"] != DECEMBER_DEBUG_PM_REFERENCE
+            or value["pm_decision_sha256"] != DECEMBER_DEBUG_PM_SHA256
+            or value["policy_identity"] != DECEMBER_DEBUG_BUDGET
+            or value["baseline_ledger_sha256"] != record.december_debug_call_budget.baseline_ledger_sha256
+            or value["physical_call_allocation"] != [1, 1, 1]
+            or any(type(v) is not int for v in value["physical_call_allocation"])
+            or type(value["source_revision"]) is not str
+            or not re.fullmatch(r"[0-9a-f]{40}", value["source_revision"])
+            or type(value["authorization_sha256"]) is not str
+            or not re.fullmatch(r"[0-9a-f]{64}", value["authorization_sha256"])):
+        raise DiagnosticDenied("December debug reservation identity or parent mismatch")
+    return value
+
+
+def _check_december_debug_budget(db, record, *, pending):
+    """Same-ledger whole-Try allocation, checked under the caller's transaction.
+
+    The existing embedding reservation anchors all THREE slots permanently.
+    These are conservative holds, never observed calls or token/cost usage.
+    No extra row, schema, counter or refund is introduced.
+    """
+    record.__post_init__()
+    budget = record.december_debug_call_budget
+    if budget is None:
+        if record.campaign_id in DECEMBER_DEBUG_TARGETS:
+            raise DiagnosticDenied("missing cumulative budget binding")
+        return None
+    if _december_debug_baseline(db) != budget.baseline_ledger_sha256:
+        raise DiagnosticDenied("December debug baseline changed; preserve all state")
+    anchors = db.execute("SELECT campaign_id,request_id,outcome,usage_observed,observation_json FROM attempts "
+                         "WHERE campaign_id IN (?,?)", DECEMBER_DEBUG_TARGETS).fetchall()
+    campaigns = [r[0] for r in anchors]
+    if record.campaign_id == DECEMBER_DEBUG_TARGETS[1] and DECEMBER_DEBUG_TARGETS[0] not in campaigns:
+        raise DiagnosticDenied("Target05 cannot precede a consumed Target04 allocation")
+    if len(campaigns) != len(set(campaigns)):
+        raise DiagnosticDenied("December debug duplicate allocation", code="DUPLICATE_ATTEMPT")
+    for campaign, request_id, _, _, raw in anchors:
+        if campaign == record.campaign_id:
+            value = _check_debug_anchor(record, request_id, raw)
+            if value != _debug_reservation_binding(record, request_id):
+                raise DiagnosticDenied("December current target grant/source reservation conflict")
+        else:
+            # Other Target keeps its own grant/source; only exact envelope/Target
+            # facts are shared. Never infer its identity from the current grant.
+            _check_debug_anchor(record, request_id, raw, campaign=campaign)
+    if pending and record.campaign_id in campaigns:
+        raise DiagnosticDenied("December debug allocation already consumed", code="DUPLICATE_ATTEMPT")
+    occupancy = budget.prior_occupancy + budget.target_allocation * (len(anchors) + int(pending))
+    if occupancy > budget.cumulative_ceiling:
+        raise DiagnosticDenied("December cumulative call budget exhausted", code="BUDGET_EXHAUSTED")
+    return dict(prior_occupancy=budget.prior_occupancy, reserved_target_allocations=len(anchors),
+                conservative_occupancy=occupancy, cumulative_ceiling=budget.cumulative_ceiling)
+
+
+def inspect_december_execution_ledger(record, *, before_query: bool, required_usage_units: int) -> dict | None:
     """Read-only parent-scope check; never a reservation or a fence exemption.
 
     Query dispatch still uses its original atomic reservation and final guard.
@@ -3585,8 +3776,14 @@ def inspect_december_execution_ledger(record, *, before_query: bool, required_us
         db.execute("PRAGMA query_only=ON")
         db.execute("BEGIN")
         usage._check_reservation_state(db)
+        budget_state = _check_december_debug_budget(db, record, pending=before_query)
         if _blocking_fence_count(db, record):
             raise DiagnosticDenied("unreviewed/UNKNOWN December execution fence")
+        if budget_state is not None and not before_query:
+            anchor = db.execute("SELECT outcome,usage_observed FROM attempts WHERE campaign_id=?",
+                                (record.campaign_id,)).fetchall()
+            if len(anchor) != 1 or anchor[0][0] != "SUCCESS" or anchor[0][1] == "UNKNOWN":
+                raise DiagnosticDenied("December generation requires its committed embedding allocation")
         if before_query:
             count, units, cost = db.execute(
                 "SELECT COUNT(*),COALESCE(SUM(usage_reserved),0),COALESCE(SUM(cost_reserved),0) "
@@ -3595,6 +3792,7 @@ def inspect_december_execution_ledger(record, *, before_query: bool, required_us
                     or count or units + required_usage_units > record.maximum_usage_units
                     or cost + 1 > record.maximum_cost_micro_units):
                 raise DiagnosticDenied("embedding allocation already consumed or unavailable")
+        return budget_state
 
 
 def reserve_eligible_attempt(
